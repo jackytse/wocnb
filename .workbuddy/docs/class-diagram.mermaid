@@ -1,0 +1,210 @@
+classDiagram
+    %% WOCNB 增量：数据/渲染层核心结构（归一化后前端类型 + 服务类）
+    %% 关系：页面/组件 → useCnbRepo/useCnbMembers → useCnbAuth → Rust cnb_http_request
+
+    class CnbApiError {
+        +CnbApiErrorKind kind
+        +number? status
+        +string? missingScope
+        +string message
+    }
+    class CnbApiErrorKind {
+        <<enumeration>>
+        unauthorized
+        forbidden
+        notFound
+        network
+    }
+    CnbApiError --> CnbApiErrorKind
+
+    class useCnbAuth {
+        <<service 模块>>
+        +cnbFetch~T~(path, options) Promise~T~
+        +cnbFetchText(path, options) Promise~TextResult~
+        +loginWithPat(pat) Promise~CnbUser~
+        +logout() void
+        +cnbToken Storage~string~
+        +cnbUser Storage~CnbUser?~
+        +selectedGroup Ref~CnbGroup?~
+    }
+
+    class useCnbRepo {
+        <<service 模块>>
+        +normalizeRepoPath(segments) string
+        +repoSiteUrl(repoPath, sub) string
+        +visibilityBadge(visibility) BadgeConfig
+        +fetchRepoDetail(repoPath) Promise~RepoDetail~
+        +fetchGitHead(repoPath) Promise~GitRefInfo~
+        +fetchRepoContents(repoPath, opts) Promise~ContentEntry~
+        +fetchRepoBranches(repoPath, page) Promise~BranchItem[]~
+        +fetchRepoTags(repoPath, page) Promise~TagItem[]~
+        +fetchRepoCommits(repoPath, opts) Promise~CommitItem[]~
+        +fetchRepoCommit(repoPath, refOrSha) Promise~CommitItem~
+        +fetchRawFileText(repoPath, ref, filePath) Promise~string~
+        +fetchRepoIssues(repoPath, opts) Promise~RepoIssue[]~
+        +fetchRepoIssue(repoPath, number) Promise~RepoIssue~
+        +createRepoIssue(repoPath, form) Promise~IssueCreated~
+        +updateIssueState(repoPath, number, state) Promise~void~
+        +fetchIssueComments(repoPath, number) Promise~RepoComment[]~
+        +createIssueComment(repoPath, number, body) Promise~void~
+        +fetchIssueActivities(repoPath, number) Promise~IssueActivity[]~
+        +fetchRepoPulls(repoPath, opts) Promise~RepoPull[]~
+        +fetchRepoPull(repoPath, number) Promise~RepoPull~
+        +fetchPullFiles(repoPath, number) Promise~PullFile[]~
+        +fetchPullCommits(repoPath, number) Promise~CommitItem[]~
+        +fetchPullComments(repoPath, number) Promise~RepoComment[]~
+        +createPullComment(repoPath, number, body) Promise~void~
+        +mergePull(repoPath, number, form) Promise~MergeResult~
+        +fetchBuildLogs(repoPath, opts) Promise~BuildLogPage~
+        +fetchBuildStatus(repoPath, sn) Promise~BuildStatus~
+        +fetchStageLog(repoPath, sn, pipelineId, stageId) Promise~StageLog~
+    }
+
+    class useCnbMembers {
+        <<service 模块>>
+        +fetchGroupMembers(group, opts) Promise~MemberItem[]~
+        +fetchOutsideCollaborators(slug, opts) Promise~MemberItem[]~
+    }
+
+    class useMarkdown {
+        <<service 模块>>
+        +renderMarkdown(markdown, ctx) string
+        -图片相对路径本地化(经 cnb_fetch_image)
+        -DOMPurify 消毒
+    }
+
+    class useHighlight {
+        <<service 模块>>
+        +SHIKI_LANGS string[15]$
+        +highlightCode(code, lang) Promise~string~
+        -shiki 单例懒加载
+    }
+
+    class useRepoRoute {
+        <<composable>>
+        +repoPath string
+        +tab TabKey
+        +ref string
+        +path string
+        +number string
+        +sn string
+        +state string
+        +page number
+        +keyword string
+        +sha string
+        +switchTab(tab) void
+        +openFile(p) void
+        +openDir(p) void
+        +switchRef(r) void
+        +openIssue(n) void
+        +openPull(n) void
+        +openBuild(sn) void
+        +backToList() void
+    }
+
+    class RepoDetail {
+        +string path
+        +string name
+        +string description
+        +string webUrl
+        +string visibility
+        +number starCount
+        +number forkCount
+        +number issueCount
+        +number prCount
+        +string language
+        +string languageColor
+        +string license
+        +string updatedAt
+    }
+    class ContentEntry {
+        +string name
+        +string path
+        +string type
+        +number size
+        +string sha
+        +string? contentBase64
+        +string? lfsDownloadUrl
+        +FileViewMode viewMode
+    }
+    class RepoIssue {
+        +string number
+        +string title
+        +string state
+        +string? body
+        +Label[] labels
+        +Assignee[] assignees
+        +string priority
+        +number commentCount
+    }
+    class RepoPull {
+        +string number
+        +string title
+        +string state
+        +boolean isWip
+        +boolean isMerged
+        +string mergeableState
+        +string baseRef
+        +string headRef
+        +Reviewer[] reviewers
+    }
+    class PullFile {
+        +string filename
+        +string status
+        +number additions
+        +number deletions
+        +string patch
+    }
+    class BuildStatus {
+        +string status
+        +Pipeline[] pipelines
+        +boolean parseOk
+    }
+    class Pipeline {
+        +string id
+        +string name
+        +string status
+        +Stage[] stages
+    }
+    class Stage {
+        +string id
+        +string name
+        +string status
+        +number durationMs
+    }
+    class StageLog {
+        +string name
+        +string status
+        +string[] lines
+        +string error
+    }
+    class RepoComment {
+        +string id
+        +string body
+        +string authorName
+        +string createdAt
+    }
+    class MemberItem {
+        +string username
+        +string nickname
+        +string avatar
+        +string accessLevel
+        +string joinTime
+    }
+
+    useCnbRepo --> useCnbAuth : cnbFetch / cnbFetchText（唯一网络通道）
+    useCnbMembers --> useCnbAuth : cnbFetch
+    useCnbRepo --> CnbApiError : 抛出（kind 归一化）
+    useMarkdown --> useCnbAuth : cnb_fetch_image 图片转 data URL
+    useCnbRepo ..> RepoDetail
+    useCnbRepo ..> ContentEntry
+    useCnbRepo ..> RepoIssue
+    useCnbRepo ..> RepoComment
+    useCnbRepo ..> RepoPull
+    useCnbRepo ..> PullFile
+    useCnbRepo ..> BuildStatus
+    useCnbRepo ..> StageLog
+    BuildStatus *-- Pipeline
+    Pipeline *-- Stage
+    useCnbMembers ..> MemberItem
+    useRepoRoute --> useCnbRepo : 调用数据函数

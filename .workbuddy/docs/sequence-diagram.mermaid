@@ -1,0 +1,39 @@
+sequenceDiagram
+    actor U as 用户
+    participant LR as 仓库列表<br/>repos/index.vue
+    participant RD as 详情容器<br/>repos/[...repoPath].vue
+    participant QR as useRepoRoute
+    participant RS as useCnbRepo
+    participant CH as useCnbAuth<br/>(cnbFetch/cnbFetchText)
+    participant RS2 as Rust<br/>cnb_http_request
+    participant HB as useHighlight
+    participant MD as useMarkdown
+
+    U->>LR: 点击仓库卡片
+    LR->>RD: router.push(`/repos/${path}?tab=code`)
+    RD->>QR: 解析 repoPath(join) + query
+    RD->>RS: fetchRepoDetail + fetchGitHead（并行）
+    RS->>CH: cnbFetch(`/${repoPath}`)
+    CH->>RS2: invoke(headers+Authorization)
+    RS2-->>CH: { status:200, body }
+    CH-->>RS: 归一化 RepoDetail / GitRefInfo
+    RD->>RS: fetchRepoContents({ ref: head.name })
+    RS->>CH: cnbFetch(`/${repoPath}/-/git/contents?ref=`)
+    CH-->>RS: api.Content(entries)
+    RS-->>RD: ContentEntry[]（目录优先+名称升序，viewMode 派生）
+    RD->>RD: RepoCodeBrowser 渲染列表
+    opt 根目录存在 README.md
+        RD->>MD: renderMarkdown(readme, ctx)
+        MD-->>RD: 消毒后 HTML（图片→data URL）
+    end
+    U->>RD: 点击文件条目
+    RD->>QR: openFile(path) → push(?tab=code&path=xx)
+    RD->>RS: fetchRepoContents({ ref, filePath })
+    RS-->>RD: ContentEntry(blob, contentBase64, viewMode)
+    alt viewMode = ok / no-highlight
+        RD->>HB: highlightCode(解码文本, resolveLang(filename))
+        HB-->>RD: 高亮 HTML（首次调用时懒加载 shiki）
+        RD->>RD: RepoFileViewer 渲染（行号）
+    else too-large / lfs / binary
+        RD->>RD: 降级文案 + 复制/在浏览器打开出口
+    end

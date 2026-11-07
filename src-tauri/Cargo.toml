@@ -1,0 +1,50 @@
+[package]
+name = "WOCNB"
+version = "0.1.0"
+description = "A CNB Client"
+authors = ["you"]
+license = ""
+repository = ""
+edition = "2024"
+rust-version = "1.90"
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[lib]
+name = "app_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[build-dependencies]
+tauri-build = { version = "2.7.4", features = [] }
+
+[dependencies]
+serde_json = "1.0"
+serde = { version = "1.0", features = ["derive"] }
+log = "0.4"
+# tray-icon：启用系统托盘支持；image-png：解码托盘 PNG 图标
+tauri = { version = "2.12.5", features = ["tray-icon", "image-png"] }
+tauri-plugin-log = "2"
+# CNB API 请求通道：前端经 IPC 调用 cnb_http_request 命令，由 Rust 侧执行。
+# 背景：CNB API 无 CORS 头（Webview fetch 被拦）且 tauri-plugin-http 的
+# rustls TLS 指纹被 CNB 网关风控 403，故用 native-tls reqwest 自建通道
+reqwest = "0.12"
+# base64：cnb_fetch_image 命令把头像/组织图标二进制编码后经 IPC 传给前端
+# （0.22 与依赖树中已有版本一致，不引入额外编译开销）
+base64 = "0.22"
+# dirs：定位用户主目录（~/.cnb/token 令牌文件），与 cnb-cli 的 getTokenPath
+# 语义一致（跨平台 home 目录解析），避免手拼 HOME 环境变量
+dirs = "6"
+# opener：调用系统默认浏览器/应用打开外部链接
+tauri-plugin-opener = "2"
+# notification：构建成功/失败时向 macOS 通知中心投递系统通知。
+# 背景：CNB 无推送通道（无 Webhook 接收/SSE），构建状态只能轮询，
+# 因此由前端轮询到结果后调用本插件发系统通知（窗口隐藏/驻留托盘时也能触达）
+tauri-plugin-notification = "2"
+
+# macOS 专用：托盘右键菜单按光标位置弹出（修复多显示器弹错屏）。
+# muda 与 tauri 内部使用的版本一致（0.20），objc2/objc2-core-foundation 也
+# 与依赖树中已有版本统一，不引入额外编译开销
+[target.'cfg(target_os = "macos")'.dependencies]
+muda = "0.20"
+objc2 = "0.6"
+objc2-core-foundation = { version = "0.3", features = ["objc2"] }

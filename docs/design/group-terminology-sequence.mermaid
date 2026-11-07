@@ -1,0 +1,26 @@
+%% /org → /group 永久重定向 + 登录守卫 交互时序
+%% 对应设计文档：docs/design/group-terminology-design.md §8.1
+sequenceDiagram
+  autonumber
+  participant U as 用户 / 浏览器
+  participant R as router（main.ts 创建）
+  participant G as 全局守卫 beforeEach
+  participant L as pages/login.vue
+  participant P as pages/group.vue
+
+  Note over R: routes = setupLayouts(auto-routes) + { name:'legacy-org', path:'/org', redirect:'/group' }
+
+  U->>R: 打开 /org（旧链接 / 深链接 / 登录后 redirect 回跳）
+  R->>R: pushWithRedirect → handleRedirectRecord 命中 legacy-org → target = /group
+  R->>G: navigate(to = /group)
+  alt 本地无有效令牌
+    G-->>R: { path:'/login', query:{ redirect:'/group' } }
+    R->>L: 渲染登录页
+    L->>R: 登录成功 → router.replace('/group')
+    R->>G: navigate(to = /group)
+    G-->>R: true
+  else 已登录
+    G-->>R: true
+  end
+  R->>P: 渲染 group.vue（UDashboardPanel id="org" 保持旧值 → 复用已保存布局）
+  Note over P: 标题 t('layout.group') → Group / 组织 / 組織
