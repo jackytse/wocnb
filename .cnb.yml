@@ -54,6 +54,9 @@
 #        · 确实需要 pipefail / bash 特性的逻辑，放进独立 .sh 文件（有 bash
 #          shebang），如 scripts/ci/check-version.sh，再由 stage 调用 `bash xxx.sh`；
 #        · 本文件脚本里没有任何依赖 pipefail 语义的管道，删掉它不改变行为。
+#        · 附带坑（2026-11-10 实测）：node:22 里 corepack enable 建好 pnpm shim
+#          后仍可能非零退出（其它 shim 失败），触发 `npm i -g` 兜底时报
+#          EEXIST（/usr/local/bin/pnpm 已存在）→ 必须用 --force 覆盖。
 #
 #   1) 【串行】所有质量门禁 step 写成 stages 数组（数组=串行，对象=并行）。
 #      绝不起 `pnpm dev` / `pnpm tauri dev`：auto-imports.d.ts / components.d.ts /
@@ -102,8 +105,8 @@ main:
             set -eu
             # 使用 package.json 的 packageManager 指定的 pnpm 版本（当前 12.14.0）。
             # corepack 不可用（镜像裁剪/签名校验失败）时兜底全局安装，避免门禁因环境问题变红。
-            corepack enable || npm i -g pnpm@12.14.0
-            pnpm -v >/dev/null 2>&1 || npm i -g pnpm@12.14.0
+            corepack enable || npm i -g pnpm@12.14.0 --force
+            pnpm -v >/dev/null 2>&1 || npm i -g pnpm@12.14.0 --force
             pnpm install --frozen-lockfile
         # ⚠️ build 必须排在 typecheck 之前：它负责生成 auto-imports.d.ts / components.d.ts
         #    （这两个被 .gitignore 忽略、干净克隆里没有），缺了它们 typecheck 必红
@@ -169,8 +172,8 @@ main:
             set -eu
             # 使用 package.json 的 packageManager 指定的 pnpm 版本（当前 12.14.0）。
             # corepack 不可用（镜像裁剪/签名校验失败）时兜底全局安装，避免门禁因环境问题变红。
-            corepack enable || npm i -g pnpm@12.14.0
-            pnpm -v >/dev/null 2>&1 || npm i -g pnpm@12.14.0
+            corepack enable || npm i -g pnpm@12.14.0 --force
+            pnpm -v >/dev/null 2>&1 || npm i -g pnpm@12.14.0 --force
             pnpm install --frozen-lockfile
         - name: build-generate
           script: |
@@ -217,8 +220,8 @@ $:
             set -eu
             # 使用 package.json 的 packageManager 指定的 pnpm 版本（当前 12.14.0）。
             # corepack 不可用（镜像裁剪/签名校验失败）时兜底全局安装，避免门禁因环境问题变红。
-            corepack enable || npm i -g pnpm@12.14.0
-            pnpm -v >/dev/null 2>&1 || npm i -g pnpm@12.14.0
+            corepack enable || npm i -g pnpm@12.14.0 --force
+            pnpm -v >/dev/null 2>&1 || npm i -g pnpm@12.14.0 --force
             pnpm install --frozen-lockfile
         - name: build-generate
           script: |
@@ -275,8 +278,8 @@ v*:
             set -eu
             # 使用 package.json 的 packageManager 指定的 pnpm 版本（当前 12.14.0）。
             # corepack 不可用（镜像裁剪/签名校验失败）时兜底全局安装，避免门禁因环境问题变红。
-            corepack enable || npm i -g pnpm@12.14.0
-            pnpm -v >/dev/null 2>&1 || npm i -g pnpm@12.14.0
+            corepack enable || npm i -g pnpm@12.14.0 --force
+            pnpm -v >/dev/null 2>&1 || npm i -g pnpm@12.14.0 --force
             pnpm install --frozen-lockfile
 
         # 生成 d.ts（typecheck 前置）并产出 dist/（后面打 Web 包要用）
@@ -481,8 +484,8 @@ v*:
     #         export PATH="/opt/homebrew/bin:/usr/local/bin:${HOME}/.cargo/bin:${PATH}"
     #         node -v && pnpm -v && rustc -V
     #         # 与 P0 保持一致：corepack 不可用时兜底全局安装，避免排错时误判成平台问题
-    #         corepack enable || npm i -g pnpm@12.14.0
-    #         pnpm -v >/dev/null 2>&1 || npm i -g pnpm@12.14.0
+    #         corepack enable || npm i -g pnpm@12.14.0 --force
+    #         pnpm -v >/dev/null 2>&1 || npm i -g pnpm@12.14.0 --force
     #         pnpm install --frozen-lockfile
     #
     #     # 冷启动（target 未缓存）本 stage 约 15~25 min
@@ -541,7 +544,7 @@ v*:
     #         # 抛异常，必须逐个显式查 $LASTEXITCODE；否则失败会一路冒到后面的 cargo 才炸，
     #         # 错误现场和真实原因完全对不上（P3 未实测，这一条尤其容易踩）。
     #         corepack enable
-    #         if ($LASTEXITCODE) { npm i -g pnpm@12.14.0; if ($LASTEXITCODE) { exit $LASTEXITCODE } }
+    #         if ($LASTEXITCODE) { npm i -g pnpm@12.14.0 --force; if ($LASTEXITCODE) { exit $LASTEXITCODE } }
     #         pnpm -v
     #         if ($LASTEXITCODE) { exit $LASTEXITCODE }
     #         node -v
