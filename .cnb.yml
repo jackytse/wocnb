@@ -23,17 +23,9 @@
 # -----------------------------------------------------------------------------
 # 二、【开关】自托管 Runner 是否已接入
 #
-#   现状：Mac / Windows 自托管构建节点尚未接入（官方节点只有 Linux 容器，
-#         打 .dmg 需要 Xcode、打 .exe 需要 MSVC，官方节点两者都没有）。
-#   ⚠️ 因此 P2 / P3（以及它们调用的宿主机脚本）**从未在真实节点上执行过**，
-#      只做过 YAML / bash / PowerShell 语法级验证 —— 启用前必须空跑一次（见文件末尾声明）。
-#
-#   未接入（当前状态）→ P2 / P3 在文件末尾以注释块形式存在，不参与 YAML 解析，推 v* tag 必定绿。
-#   已接入           → 三步：① 接入 Runner（下方 a~d） ② 核对节点 tags 与配置是超集关系
-#                      ③ 打开文件末尾的 P2 注释块，从其中的「取消注释」标记行一直到文件末尾，
-#                      把所有行行首的一个「# 」去掉（整段一次性替换即可，不要删行）。
-#                      说明性文字写成「# # …」的双重注释，取消一层后变普通 YAML 注释，不会破坏解析。
-#                      不需要改动文件其它任何位置。
+#   现状（2026-11-10 更新）：
+#     · Mac arm64 自托管节点【已接入】→ P2 release-macos 已启用并参与 v* tag_push；
+#     · Windows 节点【未接入】→ P3 release-windows 仍为注释块，不参与 YAML 解析。
 #
 #   接入节点的人工步骤（详见 docs/BRANCHING.md 第 6 节）：
 #       a) 根组织 → 组织设置 → 构建节点 → 新增 Runner；
@@ -465,61 +457,61 @@ v*:
     # # 宿主机直跑，无 Docker（docker.image / docker.volumes / cpus / services 均无效）；
     # # 两个架构分别出包（dmg 体积约为 universal 的一半，与 Windows 命名矩阵对齐）。
     # # 下面这行是分隔标记：取消注释后它会变成 YAML 注释，不影响解析，可以保留。
-    # # ↓↓↓ 取消注释从这里开始 ↓↓↓
-    # - name: release-macos
-    #   allowFailure: true          # 节点临时离线时不把整体构建打红（接入后才有意义）
-    #   runner:
-    #     namespace: group          # 必需：使用根组织下配置的自托管节点
-    #     tags:                     # 与节点标签是「与」关系，节点标签须为超集
-    #       - mac
-    #       - arm64
-    #   env:
-    #     CI: "true"
-    #     COREPACK_ENABLE_DOWNLOAD_PROMPT: "0"
-    #   stages:
-    #     - name: install
-    #       script: |
-    #         set -eu
-    #         # 自托管 Runner 的 PATH 可能不含 Homebrew / rustup 目录，显式补齐
-    #         export PATH="/opt/homebrew/bin:/usr/local/bin:${HOME}/.cargo/bin:${PATH}"
-    #         node -v && pnpm -v && rustc -V
-    #         # 与 P0 保持一致：corepack 不可用时兜底全局安装，避免排错时误判成平台问题
-    #         corepack enable || npm i -g pnpm@12.14.0 --force
-    #         pnpm -v >/dev/null 2>&1 || npm i -g pnpm@12.14.0 --force
-    #         pnpm install --frozen-lockfile
+    # ↓↓↓ 取消注释从这里开始 ↓↓↓
+    - name: release-macos
+      allowFailure: true          # 节点临时离线时不把整体构建打红（接入后才有意义）
+      runner:
+        namespace: group          # 必需：使用根组织下配置的自托管节点
+        tags:                     # 与节点标签是「与」关系，节点标签须为超集
+          - mac
+          - arm64
+      env:
+        CI: "true"
+        COREPACK_ENABLE_DOWNLOAD_PROMPT: "0"
+      stages:
+        - name: install
+          script: |
+            set -eu
+            # 自托管 Runner 的 PATH 可能不含 Homebrew / rustup 目录，显式补齐
+            export PATH="/opt/homebrew/bin:/usr/local/bin:${HOME}/.cargo/bin:${PATH}"
+            node -v && pnpm -v && rustc -V
+            # 与 P0 保持一致：corepack 不可用时兜底全局安装，避免排错时误判成平台问题
+            corepack enable || npm i -g pnpm@12.14.0 --force
+            pnpm -v >/dev/null 2>&1 || npm i -g pnpm@12.14.0 --force
+            pnpm install --frozen-lockfile
     #
-    #     # 冷启动（target 未缓存）本 stage 约 15~25 min
-    #     - name: build-x64
-    #       script: |
-    #         set -eu
-    #         export PATH="/opt/homebrew/bin:/usr/local/bin:${HOME}/.cargo/bin:${PATH}"
-    #         # 把 target 软链到宿主机缓存目录：workspace 每次都是新克隆，不软链就等于每次冷编译
-    #         mkdir -p "${HOME}/.cnb-cache/macos-target"
-    #         [ -L src-tauri/target ] || { rm -rf src-tauri/target; ln -s "${HOME}/.cnb-cache/macos-target" src-tauri/target; }
-    #         rustup target add aarch64-apple-darwin x86_64-apple-darwin
-    #         pnpm exec tauri build --target x86_64-apple-darwin --bundles dmg
-    #         bash scripts/ci/collect-macos.sh x86_64-apple-darwin x64
+        # 冷启动（target 未缓存）本 stage 约 15~25 min
+        - name: build-x64
+          script: |
+            set -eu
+            export PATH="/opt/homebrew/bin:/usr/local/bin:${HOME}/.cargo/bin:${PATH}"
+            # 把 target 软链到宿主机缓存目录：workspace 每次都是新克隆，不软链就等于每次冷编译
+            mkdir -p "${HOME}/.cnb-cache/macos-target"
+            [ -L src-tauri/target ] || { rm -rf src-tauri/target; ln -s "${HOME}/.cnb-cache/macos-target" src-tauri/target; }
+            rustup target add aarch64-apple-darwin x86_64-apple-darwin
+            pnpm exec tauri build --target x86_64-apple-darwin --bundles dmg
+            bash scripts/ci/collect-macos.sh x86_64-apple-darwin x64
     #
-    #     - name: build-arm64
-    #       script: |
-    #         set -eu
-    #         export PATH="/opt/homebrew/bin:/usr/local/bin:${HOME}/.cargo/bin:${PATH}"
-    #         pnpm exec tauri build --target aarch64-apple-darwin --bundles dmg
-    #         bash scripts/ci/collect-macos.sh aarch64-apple-darwin arm64
+        - name: build-arm64
+          script: |
+            set -eu
+            export PATH="/opt/homebrew/bin:/usr/local/bin:${HOME}/.cargo/bin:${PATH}"
+            pnpm exec tauri build --target aarch64-apple-darwin --bundles dmg
+            bash scripts/ci/collect-macos.sh aarch64-apple-darwin arm64
     #
-    #     - name: checksums
-    #       script: |
-    #         set -eu
-    #         cd release && shasum -a 256 *.dmg > SHA256SUMS-macos.txt && cat SHA256SUMS-macos.txt
+        - name: checksums
+          script: |
+            set -eu
+            cd release && shasum -a 256 *.dmg > SHA256SUMS-macos.txt && cat SHA256SUMS-macos.txt
     #
-    #     # 【未实测】等 P1 建好 Release（纯 HTTP 轮询，20 min 上限），随后直传附件
-    #     # 不用插件任务：自托管节点默认无 Docker，image: 任务大概率不可用（设计 §7.4）
-    #     # 不创建/更新 Release（§7.3：git:release 全仓只有 P1 一个调用点）
-    #     - name: upload
-    #       script: |
-    #         set -eu
-    #         export PATH="/opt/homebrew/bin:/usr/local/bin:${PATH}"
-    #         bash scripts/ci/release-upload.sh ./release
+        # 【未实测】等 P1 建好 Release（纯 HTTP 轮询，20 min 上限），随后直传附件
+        # 不用插件任务：自托管节点默认无 Docker，image: 任务大概率不可用（设计 §7.4）
+        # 不创建/更新 Release（§7.3：git:release 全仓只有 P1 一个调用点）
+        - name: upload
+          script: |
+            set -eu
+            export PATH="/opt/homebrew/bin:/usr/local/bin:${PATH}"
+            bash scripts/ci/release-upload.sh ./release
     #
     # # ---- P3 release-windows：需已接入自托管 Windows 节点【未实测，启用前须空跑验证】----
     # # ⚠️ 自托管 Windows 的 stage 脚本默认走 PowerShell，不是 bash。
