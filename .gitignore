@@ -34,3 +34,8 @@ tsconfig.node.tsbuildinfo
 
 # 本地开发环境文件（含测试令牌，禁止提交）
 .env.development
+
+# CI 脚本本地执行产生的产物目录
+# （scripts/ci/pack-meta.sh 默认 --out release，package-source.sh 示例里常用 --out out）
+release/
+out/

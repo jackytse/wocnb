@@ -1,0 +1,583 @@
+# =============================================================================
+# WOCNB · CNB 云原生构建流水线
+#
+# 仓库：https://cnb.cool/jackytse/wocnb      默认分支：main
+# 设计文档：docs/design/cnb-pipeline-design.md
+# 分支与发布规范：docs/BRANCHING.md
+#
+# -----------------------------------------------------------------------------
+# 一、本文件包含哪些流水线
+#
+#   P0（校验线，现在就可用，官方 Linux 节点）
+#     $: push          → ci-branch     任意非 main 分支 push，只做质量门禁
+#     $: pull_request  → ci-pr         任意 PR（含指向 main 的 PR），只做质量门禁
+#     main: push       → ci-main       合并进主干后，只做质量门禁
+#
+#   P1（发布元数据，现在就可用，官方 Linux 节点）
+#     v*: tag_push     → release-meta  门禁 → 版本一致性 → 源码包/Web 包 → 【唯一】创建 Release → 上传附件
+#
+#   P2 / P3（原生安装包，需自托管节点，当前【整段注释】，见文件末尾）
+#     v*: tag_push     → release-macos  dmg x64 + dmg arm64
+#     v*: tag_push     → release-windows nsis x64 + nsis arm64
+#
+# -----------------------------------------------------------------------------
+# 二、【开关】自托管 Runner 是否已接入
+#
+#   现状：Mac / Windows 自托管构建节点尚未接入（官方节点只有 Linux 容器，
+#         打 .dmg 需要 Xcode、打 .exe 需要 MSVC，官方节点两者都没有）。
+#   ⚠️ 因此 P2 / P3（以及它们调用的宿主机脚本）**从未在真实节点上执行过**，
+#      只做过 YAML / bash / PowerShell 语法级验证 —— 启用前必须空跑一次（见文件末尾声明）。
+#
+#   未接入（当前状态）→ P2 / P3 在文件末尾以注释块形式存在，不参与 YAML 解析，推 v* tag 必定绿。
+#   已接入           → 三步：① 接入 Runner（下方 a~d） ② 核对节点 tags 与配置是超集关系
+#                      ③ 打开文件末尾的 P2 注释块，从其中的「取消注释」标记行一直到文件末尾，
+#                      把所有行行首的一个「# 」去掉（整段一次性替换即可，不要删行）。
+#                      说明性文字写成「# # …」的双重注释，取消一层后变普通 YAML 注释，不会破坏解析。
+#                      不需要改动文件其它任何位置。
+#
+#   接入节点的人工步骤（详见 docs/BRANCHING.md 第 6 节）：
+#       a) 根组织 → 组织设置 → 构建节点 → 新增 Runner；
+#       b) 填标签：Mac 机器填 mac + arm64（Intel Mac 填 mac + x64）；Windows 机器填 windows + x64；
+#       c) 点「连接指引」，在目标机器上执行一键接入脚本，状态由「离线」变「在线」；
+#       d) 机器需预装：Xcode CLT（Mac）/ VS 2022 Build Tools + MSVC v143 ARM64（Windows）、
+#          rustup、Node 22、pnpm 12.14、git、python3（Mac，上传脚本解析 JSON 用）。
+#
+# -----------------------------------------------------------------------------
+# 三、三条硬约束（改动本文件前务必先读，否则门禁会莫名变红）
+#
+#   1) 【串行】所有质量门禁 step 写成 stages 数组（数组=串行，对象=并行）。
+#      绝不起 `pnpm dev` / `pnpm tauri dev`：auto-imports.d.ts / components.d.ts /
+#      src/route-map.d.ts 是构建期生成物，dev 与 build 并发写会产出语法损坏的文件（TS1128）。
+#
+#   2) 【build 必须在 typecheck 之前】三个 .d.ts 的版本控制状态不一样：
+#        · auto-imports.d.ts、components.d.ts：被 .gitignore 忽略（.gitignore:27-28），
+#          **干净克隆里不存在** → 直接 typecheck 必报 TS2304/TS2552（本仓库实测 11 处）；
+#        · src/route-map.d.ts：虽也是生成物，但**已提交跟踪**，干净克隆里是有它的。
+#      所以顺序必须是：install → build（生成前两个 + 产出 dist）→ typecheck → lint → test。
+#      这与直觉顺序相反，但直觉顺序在干净克隆上根本跑不绿。
+#
+#   3) 【Release 只能由 P1 创建】git:release 的 overlying 默认 false = 先删后建，
+#      会把该 Release 已有附件全部清空。因此：
+#        · 全仓只允许 release-meta 里出现 git:release；
+#        · 用内置变量 CNB_TAG_IS_RELEASE 二选一：不存在→overlying:false（首次创建，此时还没有附件）；
+#          已存在→overlying:true（只更新字段，绝不删附件）；
+#        · P2/P3 只上传附件（文件名全局唯一 + overwrite:true），永不创建/删除 Release。
+# =============================================================================
+
+# -----------------------------------------------------------------------------
+# 主干 push：只做校验，不发版
+# -----------------------------------------------------------------------------
+main:
+  push:
+    - name: ci-main
+      runner:
+        tags: cnb:arch:amd64
+      docker:
+        image: node:22
+        volumes:
+          # pnpm store 落在这里（pnpm 默认 store 为 ~/.local/share/pnpm/store），
+          # 挂父目录可一并缓存 store 与 pnpm 全局 bin。
+          # 主干用 read-write：允许写入，让缓存真正“热”起来。
+          - wocnb-pnpm:/root/.local/share/pnpm:read-write
+          # corepack 下载的 pnpm 版本缓存（COREPACK_HOME 指向此处），避免每次重新下载。
+          - wocnb-cache:/root/.cache:read-write
+      env:
+        CI: "true"
+        # corepack 首次解析 packageManager 时会尝试交互式确认，CI 里必须关掉，否则卡住直到超时
+        COREPACK_ENABLE_DOWNLOAD_PROMPT: "0"
+        COREPACK_HOME: /root/.cache/corepack
+      stages:
+        - name: install
+          script: |
+            set -euo pipefail
+            # 使用 package.json 的 packageManager 指定的 pnpm 版本（当前 12.14.0）。
+            # corepack 不可用（镜像裁剪/签名校验失败）时兜底全局安装，避免门禁因环境问题变红。
+            corepack enable || npm i -g pnpm@12.14.0
+            pnpm -v >/dev/null 2>&1 || npm i -g pnpm@12.14.0
+            pnpm install --frozen-lockfile
+        # ⚠️ build 必须排在 typecheck 之前：它负责生成 auto-imports.d.ts / components.d.ts
+        #    （这两个被 .gitignore 忽略、干净克隆里没有），缺了它们 typecheck 必红
+        #    （本仓库实测 11 处 TS2304/TS2552）。src/route-map.d.ts 是已跟踪文件，不需要它生成。
+        - name: build-generate
+          script: |
+            set -euo pipefail
+            pnpm build
+        - name: typecheck
+          script: |
+            set -euo pipefail
+            pnpm typecheck
+        - name: lint
+          script: |
+            set -euo pipefail
+            pnpm lint
+        - name: test
+          script: |
+            set -euo pipefail
+            pnpm test
+
+  # ---------------------------------------------------------------------------
+  # PR 校验：流水线名 ci-pr 就是分支保护里要勾选的「状态检查」名称
+  #
+  # 【同一个 PR 流水线为什么写两个 key（main + $），却只会跑一次】
+  #   官方《触发规则》：分支匹配分两阶段，glob 优先，只有 glob 阶段未匹配才走 `$` 兜底。
+  #   而 `main` 这个 key 本身是存在的（供 push 用），所以「PR 指向 main」时，
+  #   到底算不算「被 glob 命中」，取决于平台是按「分支 key + 事件 key」匹配，还是只看分支 key——
+  #   官方文档没有把这一点写死。两种语义都必须能跑通，所以两个 key 都提供：
+  #     · PR 指向 main（无论按哪种语义匹配，main 都命中，`$` 不参与）→ 跑 main 这份；
+  #     · PR 指向非 main 分支（main 不命中，`$` 兜底）→ 跑 `$` 里那份（别名，内容完全相同）。
+  #   即：任意语义下都恰好跑一次，流水线名统一为 ci-pr。
+  #
+  #   ⚠️ 踩坑记录：如果只写 `$: pull_request`，一旦平台按「只看分支 key」匹配，
+  #   PR 到 main 会一条流水线都没有 → 状态检查永不上报 → 勾了「需要通过状态检查」的
+  #   保护分支把这个 PR 永久卡住（最坏的失败形态，而且只有上线后才会暴露）。
+  #
+  # 【为什么用 YAML 锚点而不是复制两份】
+  #   官方只声明「锚点不能跨文件使用」，反推同文件内可用；别名让两份内容天然不会漂移。
+  #   万一平台解析器不认别名（可能性很低），退化为复制粘贴即可：
+  #   把 `- &ci-pr` 改成 `- name: ci-pr`，把 `$: pull_request` 下的 `- *ci-pr` 换成同一份内容。
+  # ---------------------------------------------------------------------------
+  pull_request:
+    - &ci-pr
+      name: ci-pr
+      runner:
+        tags: cnb:arch:amd64
+      docker:
+        image: node:22
+        volumes:
+          # 分支 / PR 场景只读缓存：能读热缓存加速，写入在流水线结束后丢弃（官方卷类型说明）
+          - wocnb-pnpm:/root/.local/share/pnpm:copy-on-write-read-only
+          - wocnb-cache:/root/.cache:copy-on-write-read-only
+      env:
+        CI: "true"
+        COREPACK_ENABLE_DOWNLOAD_PROMPT: "0"
+        COREPACK_HOME: /root/.cache/corepack
+      stages:
+        # 刻意不加 ifModify 跳过规则：文档类 PR 一旦被整条跳过，
+        # 「需要通过状态检查」就永远等不到上报，PR 会永久卡在保护分支上。
+        - name: install
+          script: |
+            set -euo pipefail
+            # 使用 package.json 的 packageManager 指定的 pnpm 版本（当前 12.14.0）。
+            # corepack 不可用（镜像裁剪/签名校验失败）时兜底全局安装，避免门禁因环境问题变红。
+            corepack enable || npm i -g pnpm@12.14.0
+            pnpm -v >/dev/null 2>&1 || npm i -g pnpm@12.14.0
+            pnpm install --frozen-lockfile
+        - name: build-generate
+          script: |
+            set -euo pipefail
+            pnpm build
+        - name: typecheck
+          script: |
+            set -euo pipefail
+            pnpm typecheck
+        - name: lint
+          script: |
+            set -euo pipefail
+            pnpm lint
+        - name: test
+          script: |
+            set -euo pipefail
+            pnpm test
+
+# -----------------------------------------------------------------------------
+# 兜底 key `$`：所有未被 glob 规则匹配的引用
+#   · `push`：任意非 main 分支的 push（main 由上面的 glob key 命中，不会走这里）
+#   · `pull_request`：PR 目标分支不是 main 时走这里，内容是 main.pull_request 的别名
+#   为什么不把 PR 只挂在这里 → 见上方 main.pull_request 的「踩坑记录」。
+# -----------------------------------------------------------------------------
+$:
+  push:
+    - name: ci-branch
+      runner:
+        tags: cnb:arch:amd64
+      docker:
+        image: node:22
+        volumes:
+          # 分支 / PR 场景只读主干缓存：能读热缓存加速，但本次写入在流水线结束后丢弃，
+          # 不污染主干缓存（官方《语法手册》数据卷类型说明）。
+          - wocnb-pnpm:/root/.local/share/pnpm:copy-on-write-read-only
+          - wocnb-cache:/root/.cache:copy-on-write-read-only
+      env:
+        CI: "true"
+        COREPACK_ENABLE_DOWNLOAD_PROMPT: "0"
+        COREPACK_HOME: /root/.cache/corepack
+      stages:
+        - name: install
+          script: |
+            set -euo pipefail
+            # 使用 package.json 的 packageManager 指定的 pnpm 版本（当前 12.14.0）。
+            # corepack 不可用（镜像裁剪/签名校验失败）时兜底全局安装，避免门禁因环境问题变红。
+            corepack enable || npm i -g pnpm@12.14.0
+            pnpm -v >/dev/null 2>&1 || npm i -g pnpm@12.14.0
+            pnpm install --frozen-lockfile
+        - name: build-generate
+          script: |
+            set -euo pipefail
+            pnpm build
+        - name: typecheck
+          script: |
+            set -euo pipefail
+            pnpm typecheck
+        - name: lint
+          script: |
+            set -euo pipefail
+            pnpm lint
+        - name: test
+          script: |
+            set -euo pipefail
+            pnpm test
+
+  # PR 校验：内容与 main.pull_request 完全相同，用 YAML 别名 *ci-pr 复用（锚点在 main 中定义，
+  # main 在上、定义先于引用）。两条 key 在任意匹配语义下都只会命中一条，不会双跑。
+  pull_request:
+    - *ci-pr
+
+# =============================================================================
+# 发布线：只有推 v* tag 才触发
+#   故意不配 `$: tag_push` —— 非 v* tag（如 nightly-20260101）不应触发任何流水线。
+#   为什么用 `v*` 而不是 `**`：`$` 与其它 glob 同时命中会并行跑多条流水线（官方《触发规则》），
+#   这里只用精确/单一 glob，避免同一事件被跑两遍。
+#   ⚠ 副作用：`v*` 对**分支名**同样生效 —— 分支名以 v 开头（如 version-bump）会命中本键，而这里只有 tag_push，
+#   于是该分支 push 一条流水线都不跑、`$: push` 也不兜底。故：**分支名禁止以 v 开头**（见 docs/BRANCHING.md §1.1）。
+# =============================================================================
+v*:
+  tag_push:
+    # =========================================================================
+    # P1 release-meta
+    #   官方 Linux amd64 节点 / 有 Docker → 可用 cnbcool/* 插件
+    #   职责：门禁 → 版本一致性 → 源码包 + Web 包 → 【唯一】创建/更新 Release → 上传 Linux 侧附件
+    # =========================================================================
+    - name: release-meta
+      runner:
+        tags: cnb:arch:amd64
+      docker:
+        image: node:22
+        volumes:
+          - wocnb-pnpm:/root/.local/share/pnpm:read-write
+          - wocnb-cache:/root/.cache:read-write
+      env:
+        CI: "true"
+        COREPACK_ENABLE_DOWNLOAD_PROMPT: "0"
+        COREPACK_HOME: /root/.cache/corepack
+      stages:
+        - name: install
+          script: |
+            set -euo pipefail
+            # 使用 package.json 的 packageManager 指定的 pnpm 版本（当前 12.14.0）。
+            # corepack 不可用（镜像裁剪/签名校验失败）时兜底全局安装，避免门禁因环境问题变红。
+            corepack enable || npm i -g pnpm@12.14.0
+            pnpm -v >/dev/null 2>&1 || npm i -g pnpm@12.14.0
+            pnpm install --frozen-lockfile
+
+        # 生成 d.ts（typecheck 前置）并产出 dist/（后面打 Web 包要用）
+        - name: build-generate
+          script: |
+            set -euo pipefail
+            pnpm build
+
+        - name: typecheck
+          script: |
+            set -euo pipefail
+            pnpm typecheck
+
+        - name: lint
+          script: |
+            set -euo pipefail
+            pnpm lint
+
+        - name: test
+          script: |
+            set -euo pipefail
+            pnpm test
+
+        # tag 名去掉 v 必须等于 src-tauri/tauri.conf.json 的 version，否则静默错版
+        # 不一致直接 exit 1 → 后续 stage 不执行 → Release 不会被创建（坏提交不发布）
+        # exports 生命周期 = 当前 Pipeline，后续 stage 可用 $APP_VERSION
+        - name: version-check
+          script: |
+            set -euo pipefail
+            bash scripts/ci/check-version.sh "${CNB_BRANCH}"
+          exports:
+            stdout: APP_VERSION
+
+        # 源码包（git archive，只含受版本控制的文件）+ Web 包（dist/）+ SHA256SUMS-meta.txt
+        # 产物统一落到 release/，供最后 upload-meta 上传
+        - name: pack
+          script: |
+            set -euo pipefail
+            bash scripts/ci/pack-meta.sh --out release
+
+        # changelog 插件：基于 tag 之间的提交生成 LATEST_CHANGELOG.md，作为 Release 描述。
+        # 首个 tag（v0.1.0）之前没有可比历史，插件可能产出空内容甚至直接失败 —— 属预期（设计 §13 R11）。
+        # 【P1 可靠性加固】这里加 allowFailure: true + 下一个 stage 兜底生成文件：
+        #   git:release 的 descriptionFromFile 指向的文件不存在时整个发布都会失败，
+        #   而「首次发版」恰恰是最需要一次成功的场景，不能让它卡在生成变更日志这种非关键环节上。
+        - name: changelog
+          image: cnbcool/changelog
+          allowFailure: true
+          settings:
+            latestChangeLogTarget: LATEST_CHANGELOG.md
+
+        # 兜底：确保 LATEST_CHANGELOG.md 一定存在且非空，供后面 descriptionFromFile 使用
+        - name: ensure-changelog
+          script: |
+            set -euo pipefail
+            if [ ! -s LATEST_CHANGELOG.md ]; then
+              echo "提示：changelog 未产出内容，写入兜底描述"
+              printf '# %s\n\n- 本版本暂无自动生成的变更日志（可能是首个 tag 或历史不可比）\n' "${CNB_BRANCH}" > LATEST_CHANGELOG.md
+            fi
+            head -5 LATEST_CHANGELOG.md
+
+        # ---------------------------------------------------------------------
+        # 【唯一】创建 Release（该 tag 还没有 Release）
+        #   CNB_TAG_IS_RELEASE == "true" 表示 tag 已有对应 Release（官方默认环境变量）
+        #   首次创建用 overlying: false：先删后建。此处安全，因为此刻还没有任何附件；
+        #   一旦存在附件就绝不能走这条分支 —— 那会把其它平台已上传的安装包一起清空。
+        #   tag 不写：tag_push 事件下自动取触发 tag。
+        #   title 不写：默认取 tag 名（最干净）。
+        #
+        # 【if 为什么写成单行条件表达式】
+        #   官方文档里 if 的示例一律是「单个 test 表达式」，多行 + exit 的写法没有先例；
+        #   而这里一旦猜错（比如被当成 YAML 块标量丢给别的解释器），4 个 job 会一起跳过、
+        #   Release 永远不创建 —— 这是全仓唯一「猜错就静默不发版」的地方，不值得赌。
+        #   判定方式：`${CNB_BRANCH##*-}` 去掉最长前缀 `*-`，
+        #     · tag 不含 `-`（v0.1.0）      → 结果就是 tag 本身 → 两个串相等
+        #     · tag 含 `-`（v0.2.0-rc.1）  → 结果是 `rc.1`     → 两个串不相等
+        #   4 个 job 用「CNB_TAG_IS_RELEASE × 是否含 `-`」组成 2×2 互斥矩阵，恰好命中 1 个。
+        # ---------------------------------------------------------------------
+        - name: release-create
+          type: git:release
+          if: '[ "${CNB_TAG_IS_RELEASE}" != "true" ] && [ "${CNB_BRANCH##*-}" = "${CNB_BRANCH}" ]'
+          options:
+            descriptionFromFile: LATEST_CHANGELOG.md
+            preRelease: false
+            latest: "true"
+            overlying: false
+
+        # 【唯一】创建 Release —— 预发布版本（tag 形如 v1.2.3-rc.1）
+        # 预发布不标记 latest，避免把 rc 当成「最新正式版」推给用户
+        - name: release-create-prerelease
+          type: git:release
+          # 尚未有 Release + tag 含 `-`（预发布）
+          if: '[ "${CNB_TAG_IS_RELEASE}" != "true" ] && [ "${CNB_BRANCH##*-}" != "${CNB_BRANCH}" ]'
+          options:
+            descriptionFromFile: LATEST_CHANGELOG.md
+            preRelease: true
+            latest: "false"
+            overlying: false
+
+        # ---------------------------------------------------------------------
+        # 【唯一】更新 Release（重试 / 重发同一 tag 的场景）
+        #   overlying: true = 只更新字段，【绝不删附件】—— 这是防止多平台互相清空附件的关键
+        # ---------------------------------------------------------------------
+        - name: release-update
+          type: git:release
+          # 已有 Release + tag 不含 `-`（正式版）
+          if: '[ "${CNB_TAG_IS_RELEASE}" = "true" ] && [ "${CNB_BRANCH##*-}" = "${CNB_BRANCH}" ]'
+          options:
+            descriptionFromFile: LATEST_CHANGELOG.md
+            preRelease: false
+            latest: "true"
+            overlying: true
+
+        - name: release-update-prerelease
+          type: git:release
+          # 已有 Release + tag 含 `-`（预发布）
+          if: '[ "${CNB_TAG_IS_RELEASE}" = "true" ] && [ "${CNB_BRANCH##*-}" != "${CNB_BRANCH}" ]'
+          options:
+            descriptionFromFile: LATEST_CHANGELOG.md
+            preRelease: true
+            latest: "false"
+            overlying: true
+
+        # Linux 侧附件上传（官方节点有 Docker，插件可用）
+        # git:release 内置任务不支持上传附件，官方提示改用 cnbcool/attachments
+        # tag_push 事件下插件会自动取 $CNB_BRANCH 作为 tag，这里显式写出更直观
+        - name: upload-meta
+          image: cnbcool/attachments:latest
+          settings:
+            type: UPLOAD
+            tag: $CNB_BRANCH
+            attachments:
+              - "./release/*.tar.gz"
+              - "./release/SHA256SUMS-meta.txt"
+
+    # =========================================================================
+    # ↓↓↓ 以下 P2 / P3 为【整段注释】状态，不参与 YAML 解析 ↓↓↓
+    #
+    # ⚠️⚠️ 未实测声明（务必先读）
+    #   这两段配置与它们调用的宿主机脚本（scripts/ci/collect-*.sh|ps1、
+    #   scripts/ci/release-upload.sh|ps1）**从未在真实的 macOS / Windows 自托管节点上执行过**。
+    #   本仓库当前没有可用的自托管 Runner（见文件头「二、【开关】」），因此：
+    #     · 只做过 YAML 解析验证与 PowerShell/bash 语法解析；
+    #     · 工具链版本差异（Xcode / MSVC / rustup target / 签名公证）引发的失败**未被覆盖**；
+    #     · 启用前必须先做一次「空跑验证」：推一个 `v0.0.0-test` 之类的 tag，
+    #       确认两个节点能被调度、`tauri build` 能出包、上传能拿到 Release id，
+    #       验证通过后再正式发版。
+    #
+    # 启用步骤（三步，缺一步就会出问题）：
+    #   1) 接入 Runner：根组织 → 组织设置 → 构建节点 → 新增 Runner，
+    #      Mac 填 tags `mac`+`arm64`，Windows 填 `windows`+`x64`，按「连接指引」在目标机执行接入脚本，
+    #      状态由「离线」变「在线」；
+    #   2) 核对 tags：节点标签必须是配置的**超集**（`runner.tags` 之间是「与」关系），
+    #      标签对不上 → 永远等不到节点 → 流水线超时；
+    #   3) 取消注释：从下方 P2 区块的注释标记行开始一直到文件末尾，
+    #      统一去掉行首一个「# 」即可。无需移动位置、无需改缩进（这些行本来就是
+    #      `v*: tag_push:` 的列表项）。
+    #
+    # 与设计 §7 的对应关系（实现已遵守，勿改）：
+    #   §7.1/§7.3 `git:release` 全仓**只有一个调用点**（P1 的 release-meta）。
+    #     P2/P3 只上传附件，**不创建/更新 Release**，因此不会争抢 latest / 描述字段，
+    #     也不会触发 overlying:false 的「先删后建」把别的平台的包清空。
+    #   §7.4  P2/P3 **不用 cnbcool/attachments 插件**：自托管节点默认不开 Docker，
+    #     `docker.image` 不生效，插件任务大概率跑不起来。改为宿主机 curl / PowerShell
+    #     直调 OPENAPI 三段式：asset-upload-url → PUT → verify。
+    #   时序   上传前用 `GET /{repo}/-/releases/tags/{tag}` 轮询拿 Release id
+    #     （最长 20 min、间隔 10 s），**不用** cnb:await —— P1 失败时 Release 永不存在，
+    #     轮询超时即失败，是最干净的失败语义。
+    #   附件名 wocnb-<版本>-<平台>-<架构>[-setup].<ext> 全局唯一 + 上传 overwrite: true，
+    #     同名只覆盖自己，不会碰其它平台的产物。
+    #
+    # 为什么用「整段注释」而不是只加 allowFailure: true 硬开：
+    #   allowFailure 的语义是「失败状态不上报」，但「分配不到节点」发生在任务真正执行之前，
+    #   是否同样被吞掉文档未说明（设计 §5.7 第 2 行【未验证】）。整段注释是 100% 确定性的降级，
+    #   保证接入节点之前推 `v*` tag 的整体发布永远绿。
+    #
+    # 为什么不用 include 拆到 .cnb/mac.yml：
+    #   include 会引入数组追加 / 对象合并 / 本地覆盖的合并语义（一个额外的理解与排错成本），
+    #   而单文件注释零风险、一眼能看出当前是否启用。
+    # =========================================================================
+    #
+    # # ---- P2 release-macos：需已接入自托管 Mac 节点【未实测，启用前须空跑验证】-----
+    # # 宿主机直跑，无 Docker（docker.image / docker.volumes / cpus / services 均无效）；
+    # # 两个架构分别出包（dmg 体积约为 universal 的一半，与 Windows 命名矩阵对齐）。
+    # # 下面这行是分隔标记：取消注释后它会变成 YAML 注释，不影响解析，可以保留。
+    # # ↓↓↓ 取消注释从这里开始 ↓↓↓
+    # - name: release-macos
+    #   allowFailure: true          # 节点临时离线时不把整体构建打红（接入后才有意义）
+    #   runner:
+    #     namespace: group          # 必需：使用根组织下配置的自托管节点
+    #     tags:                     # 与节点标签是「与」关系，节点标签须为超集
+    #       - mac
+    #       - arm64
+    #   env:
+    #     CI: "true"
+    #     COREPACK_ENABLE_DOWNLOAD_PROMPT: "0"
+    #   stages:
+    #     - name: install
+    #       script: |
+    #         set -euo pipefail
+    #         # 自托管 Runner 的 PATH 可能不含 Homebrew / rustup 目录，显式补齐
+    #         export PATH="/opt/homebrew/bin:/usr/local/bin:${HOME}/.cargo/bin:${PATH}"
+    #         node -v && pnpm -v && rustc -V
+    #         # 与 P0 保持一致：corepack 不可用时兜底全局安装，避免排错时误判成平台问题
+    #         corepack enable || npm i -g pnpm@12.14.0
+    #         pnpm -v >/dev/null 2>&1 || npm i -g pnpm@12.14.0
+    #         pnpm install --frozen-lockfile
+    #
+    #     # 冷启动（target 未缓存）本 stage 约 15~25 min
+    #     - name: build-x64
+    #       script: |
+    #         set -euo pipefail
+    #         export PATH="/opt/homebrew/bin:/usr/local/bin:${HOME}/.cargo/bin:${PATH}"
+    #         # 把 target 软链到宿主机缓存目录：workspace 每次都是新克隆，不软链就等于每次冷编译
+    #         mkdir -p "${HOME}/.cnb-cache/macos-target"
+    #         [ -L src-tauri/target ] || { rm -rf src-tauri/target; ln -s "${HOME}/.cnb-cache/macos-target" src-tauri/target; }
+    #         rustup target add aarch64-apple-darwin x86_64-apple-darwin
+    #         pnpm exec tauri build --target x86_64-apple-darwin --bundles dmg
+    #         bash scripts/ci/collect-macos.sh x86_64-apple-darwin x64
+    #
+    #     - name: build-arm64
+    #       script: |
+    #         set -euo pipefail
+    #         export PATH="/opt/homebrew/bin:/usr/local/bin:${HOME}/.cargo/bin:${PATH}"
+    #         pnpm exec tauri build --target aarch64-apple-darwin --bundles dmg
+    #         bash scripts/ci/collect-macos.sh aarch64-apple-darwin arm64
+    #
+    #     - name: checksums
+    #       script: |
+    #         set -euo pipefail
+    #         cd release && shasum -a 256 *.dmg > SHA256SUMS-macos.txt && cat SHA256SUMS-macos.txt
+    #
+    #     # 【未实测】等 P1 建好 Release（纯 HTTP 轮询，20 min 上限），随后直传附件
+    #     # 不用插件任务：自托管节点默认无 Docker，image: 任务大概率不可用（设计 §7.4）
+    #     # 不创建/更新 Release（§7.3：git:release 全仓只有 P1 一个调用点）
+    #     - name: upload
+    #       script: |
+    #         set -euo pipefail
+    #         export PATH="/opt/homebrew/bin:/usr/local/bin:${PATH}"
+    #         bash scripts/ci/release-upload.sh ./release
+    #
+    # # ---- P3 release-windows：需已接入自托管 Windows 节点【未实测，启用前须空跑验证】----
+    # # ⚠️ 自托管 Windows 的 stage 脚本默认走 PowerShell，不是 bash。
+    # # arm64 交叉编译前提：VS 2022 安装「MSVC v143 C++ ARM64 生成工具」。
+    # # 同样只上传附件，不创建/更新 Release（§7.3），不用 attachments 插件（§7.4）。
+    # # ↓↓↓ 取消注释从这里开始 ↓↓↓
+    # - name: release-windows
+    #   allowFailure: true
+    #   runner:
+    #     namespace: group
+    #     tags:
+    #       - windows
+    #       - x64
+    #   env:
+    #     CI: "true"
+    #     COREPACK_ENABLE_DOWNLOAD_PROMPT: "0"
+    #   stages:
+    #     - name: install
+    #       script: |
+    #         $ErrorActionPreference = 'Stop'
+    #         # 原生命令（corepack / npm / pnpm / node / rustc）**不会**因 $ErrorActionPreference
+    #         # 抛异常，必须逐个显式查 $LASTEXITCODE；否则失败会一路冒到后面的 cargo 才炸，
+    #         # 错误现场和真实原因完全对不上（P3 未实测，这一条尤其容易踩）。
+    #         corepack enable
+    #         if ($LASTEXITCODE) { npm i -g pnpm@12.14.0; if ($LASTEXITCODE) { exit $LASTEXITCODE } }
+    #         pnpm -v
+    #         if ($LASTEXITCODE) { exit $LASTEXITCODE }
+    #         node -v
+    #         if ($LASTEXITCODE) { exit $LASTEXITCODE }
+    #         rustc -V
+    #         if ($LASTEXITCODE) { exit $LASTEXITCODE }
+    #         pnpm install --frozen-lockfile
+    #         if ($LASTEXITCODE) { exit $LASTEXITCODE }
+    #
+    #     - name: build-x64
+    #       script: |
+    #         $ErrorActionPreference = 'Stop'
+    #         # target 用 junction 指向宿主机缓存目录，避免每次冷编译
+    #         $cache = Join-Path $env:USERPROFILE '.cnb-cache\win-target'
+    #         New-Item -ItemType Directory -Force -Path $cache | Out-Null
+    #         if (-not (Test-Path 'src-tauri\target')) {
+    #           New-Item -ItemType Junction -Path 'src-tauri\target' -Target $cache | Out-Null
+    #         }
+    #         rustup target add x86_64-pc-windows-msvc aarch64-pc-windows-msvc
+    #         if ($LASTEXITCODE) { exit $LASTEXITCODE }
+    #         pnpm exec tauri build --target x86_64-pc-windows-msvc --bundles nsis
+    #         if ($LASTEXITCODE) { exit $LASTEXITCODE }
+    #         powershell -NoProfile -File scripts/ci/collect-windows.ps1 -Triple x86_64-pc-windows-msvc -Arch x64
+    #         if ($LASTEXITCODE) { exit $LASTEXITCODE }
+    #
+    #     - name: build-arm64
+    #       script: |
+    #         $ErrorActionPreference = 'Stop'
+    #         pnpm exec tauri build --target aarch64-pc-windows-msvc --bundles nsis
+    #         if ($LASTEXITCODE) { exit $LASTEXITCODE }
+    #         powershell -NoProfile -File scripts/ci/collect-windows.ps1 -Triple aarch64-pc-windows-msvc -Arch arm64
+    #         if ($LASTEXITCODE) { exit $LASTEXITCODE }
+    #
+    #     - name: checksums
+    #       script: |
+    #         $ErrorActionPreference = 'Stop'
+    #         Push-Location release
+    #         Get-ChildItem *.exe | ForEach-Object {
+    #           $h = (Get-FileHash $_.Name -Algorithm SHA256).Hash.ToLower()
+    #           "$h  $($_.Name)"
+    #         } | Set-Content -Encoding ascii SHA256SUMS-windows.txt
+    #         Get-Content SHA256SUMS-windows.txt
+    #         Pop-Location
+    #
+    #     - name: upload
+    #       script: |
+    #         $ErrorActionPreference = 'Stop'
+    #         powershell -NoProfile -File scripts/ci/release-upload.ps1 -Dir ./release
+    #         if ($LASTEXITCODE) { exit $LASTEXITCODE }

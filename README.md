@@ -74,6 +74,14 @@ pnpm build       # vite build
 
 提交前建议四项全绿。注意 `components.d.ts` / `auto-imports.d.ts` / `src/route-map.d.ts` 为构建期自动生成物，`dev` 与 `build` 不要并发运行。
 
+## 分支与发布
+
+主干为 `main`，日常开发一律从 `main` 切短生命周期分支（`feat/*`、`fix/*`、`chore/*`、`hotfix/*` …）后提 PR，主干只接受 Squash 合并；合并前必须通过 `ci-pr` 状态检查（`install → build → typecheck → lint → test`，`build` 前置是因为它负责生成构建期的 `*.d.ts`，缺了它们 `typecheck` 在干净克隆上会红）。
+
+推送分支或 PR 只做校验、不发版；**只有推送 `v*` tag 才会发版**：`.cnb.yml` 先跑完整门禁，再校验 tag 与 `src-tauri/tauri.conf.json` 的 `version` 严格一致，然后打源码包 / Web 包、创建 Release 并上传附件（macOS / Windows 安装包需接入自托管构建节点后启用，该链路尚未在真机验证）。
+
+详见 [`docs/BRANCHING.md`](docs/BRANCHING.md)（分支规范、tag 与发布操作手册、需要人工在平台侧完成的设置）与 [`docs/design/cnb-pipeline-design.md`](docs/design/cnb-pipeline-design.md)（流水线设计与取舍依据）。
+
 ## 目录结构
 
 ```
@@ -115,6 +123,8 @@ wocnb/
 
 | 文档 | 内容 |
 | --- | --- |
+| [`docs/BRANCHING.md`](docs/BRANCHING.md) | 分支规范、版本与 tag 规范、发布操作手册、需在平台侧手动完成的设置 |
+| [`docs/design/cnb-pipeline-design.md`](docs/design/cnb-pipeline-design.md) | `.cnb.yml` 流水线设计与取舍依据（含差异裁决与风险表） |
 | [`docs/prd/group-terminology-prd.md`](docs/prd/group-terminology-prd.md) | 组织（Group）术语与相关页面需求 |
 | [`docs/design/group-terminology-design.md`](docs/design/group-terminology-design.md) | 对应的技术设计与时序 |
 | [`docs/prd/P2-menu-i18n-backlog.md`](docs/prd/P2-menu-i18n-backlog.md) | P2 菜单与国际化待办 |
