@@ -478,8 +478,21 @@ v*:
         - name: install
           script: |
             set -eu
-            # 自托管 Runner 的 PATH 可能不含 Homebrew / rustup 目录，显式补齐
+            # 自托管 Runner 的 PATH 可能不含 Homebrew / rustup 目录，显式补齐。
+            # ⚠️ 不能只信 ${HOME}/.cargo/bin：runner 若以 launchd 守护方式接入，
+            # HOME 可能不是登录用户目录（如 /var/root），rc.4 实测 rustc 因此
+            # command not found（rustc 明明装在登录用户的 ~/.cargo/bin 里）。
             export PATH="/opt/homebrew/bin:/usr/local/bin:${HOME}/.cargo/bin:${PATH}"
+            if ! command -v rustc >/dev/null 2>&1; then
+              # 兜底探测：遍历本机所有用户家目录的 cargo bin + brew 常见位置，
+              # 命中即把该目录插到 PATH 最前（cargo 与 rustc 同目录，一并解决）
+              for d in /Users/*/.cargo/bin /opt/homebrew/bin /usr/local/bin; do
+                if [ -x "$d/rustc" ]; then
+                  export PATH="$d:${PATH}"
+                  break
+                fi
+              done
+            fi
             node -v && pnpm -v && rustc -V
             # 与 P0 保持一致：corepack 不可用时兜底全局安装，避免排错时误判成平台问题
             corepack enable || npm i -g pnpm@12.14.0 --force
@@ -497,15 +510,24 @@ v*:
         - name: build-arm64
           script: |
             set -eu
+            # 与 install 同源的问题：HOME 可能不是登录用户目录，rustc/cargo
+            # 需要同样的兜底探测（tauri build 内部会调 cargo，缺它必炸）
             export PATH="/opt/homebrew/bin:/usr/local/bin:${HOME}/.cargo/bin:${PATH}"
+            if ! command -v cargo >/dev/null 2>&1; then
+              for d in /Users/*/.cargo/bin /opt/homebrew/bin /usr/local/bin; do
+                if [ -x "$d/cargo" ]; then
+                  export PATH="$d:${PATH}"
+                  break
+                fi
+              done
+            fi
             # 把 target 软链到宿主机缓存目录：workspace 每次都是新克隆，不软链
             # 就等于每次冷编译（该逻辑原在 build-x64 里，裁剪时搬到这里保住缓存）
             mkdir -p "${HOME}/.cnb-cache/macos-target"
             [ -L src-tauri/target ] || { rm -rf src-tauri/target; ln -s "${HOME}/.cnb-cache/macos-target" src-tauri/target; }
             # 说明：本架构（aarch64-apple-darwin = 编译机本机架构）编译**不需要**
             # rustup/rustc target 管理——rustc 默认 target 就是本机架构。
-            # 节点上哪怕装的是 brew 版 rust（无 rustup 命令，2026-11-10 rc.3 实测），
-            # 只要 rustc -V（install 阶段已验证）能跑通，这里就能直接构建。
+            # 节点上哪怕装的是 brew 版 rust（无 rustup 命令），只要 rustc 可用即可。
             pnpm exec tauri build --target aarch64-apple-darwin --bundles dmg
             bash scripts/ci/collect-macos.sh aarch64-apple-darwin arm64
     #
