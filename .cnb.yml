@@ -25,7 +25,7 @@
 #
 #   现状（2026-11-10 更新）：
 #     · Mac arm64 自托管节点【已接入】→ P2 release-macos 已启用并参与 v* tag_push；
-#     · Windows 节点【未接入】→ P3 release-windows 仍为注释块，不参与 YAML 解析。
+#     · Windows amd64 自托管节点【已接入】（2026-11-10）→ P3 release-windows 已启用；
 #
 #   接入节点的人工步骤（详见 docs/BRANCHING.md 第 6 节）：
 #       a) 根组织 → 组织设置 → 构建节点 → 新增 Runner；
@@ -518,71 +518,71 @@ v*:
     # # arm64 交叉编译前提：VS 2022 安装「MSVC v143 C++ ARM64 生成工具」。
     # # 同样只上传附件，不创建/更新 Release（§7.3），不用 attachments 插件（§7.4）。
     # # ↓↓↓ 取消注释从这里开始 ↓↓↓
-    # - name: release-windows
-    #   allowFailure: true
-    #   runner:
-    #     namespace: group
-    #     tags:
-    #       - windows
-    #       - x64
-    #   env:
-    #     CI: "true"
-    #     COREPACK_ENABLE_DOWNLOAD_PROMPT: "0"
-    #   stages:
-    #     - name: install
-    #       script: |
-    #         $ErrorActionPreference = 'Stop'
-    #         # 原生命令（corepack / npm / pnpm / node / rustc）**不会**因 $ErrorActionPreference
-    #         # 抛异常，必须逐个显式查 $LASTEXITCODE；否则失败会一路冒到后面的 cargo 才炸，
-    #         # 错误现场和真实原因完全对不上（P3 未实测，这一条尤其容易踩）。
-    #         corepack enable
-    #         if ($LASTEXITCODE) { npm i -g pnpm@12.14.0 --force; if ($LASTEXITCODE) { exit $LASTEXITCODE } }
-    #         pnpm -v
-    #         if ($LASTEXITCODE) { exit $LASTEXITCODE }
-    #         node -v
-    #         if ($LASTEXITCODE) { exit $LASTEXITCODE }
-    #         rustc -V
-    #         if ($LASTEXITCODE) { exit $LASTEXITCODE }
-    #         pnpm install --frozen-lockfile
-    #         if ($LASTEXITCODE) { exit $LASTEXITCODE }
+    - name: release-windows
+      allowFailure: true
+      runner:
+        namespace: group
+        tags:
+          - windows
+          - x64
+      env:
+        CI: "true"
+        COREPACK_ENABLE_DOWNLOAD_PROMPT: "0"
+      stages:
+        - name: install
+          script: |
+            $ErrorActionPreference = 'Stop'
+            # 原生命令（corepack / npm / pnpm / node / rustc）**不会**因 $ErrorActionPreference
+            # 抛异常，必须逐个显式查 $LASTEXITCODE；否则失败会一路冒到后面的 cargo 才炸，
+            # 错误现场和真实原因完全对不上（P3 未实测，这一条尤其容易踩）。
+            corepack enable
+            if ($LASTEXITCODE) { npm i -g pnpm@12.14.0 --force; if ($LASTEXITCODE) { exit $LASTEXITCODE } }
+            pnpm -v
+            if ($LASTEXITCODE) { exit $LASTEXITCODE }
+            node -v
+            if ($LASTEXITCODE) { exit $LASTEXITCODE }
+            rustc -V
+            if ($LASTEXITCODE) { exit $LASTEXITCODE }
+            pnpm install --frozen-lockfile
+            if ($LASTEXITCODE) { exit $LASTEXITCODE }
     #
-    #     - name: build-x64
-    #       script: |
-    #         $ErrorActionPreference = 'Stop'
-    #         # target 用 junction 指向宿主机缓存目录，避免每次冷编译
-    #         $cache = Join-Path $env:USERPROFILE '.cnb-cache\win-target'
-    #         New-Item -ItemType Directory -Force -Path $cache | Out-Null
-    #         if (-not (Test-Path 'src-tauri\target')) {
-    #           New-Item -ItemType Junction -Path 'src-tauri\target' -Target $cache | Out-Null
-    #         }
-    #         rustup target add x86_64-pc-windows-msvc aarch64-pc-windows-msvc
-    #         if ($LASTEXITCODE) { exit $LASTEXITCODE }
-    #         pnpm exec tauri build --target x86_64-pc-windows-msvc --bundles nsis
-    #         if ($LASTEXITCODE) { exit $LASTEXITCODE }
-    #         powershell -NoProfile -File scripts/ci/collect-windows.ps1 -Triple x86_64-pc-windows-msvc -Arch x64
-    #         if ($LASTEXITCODE) { exit $LASTEXITCODE }
+        - name: build-x64
+          script: |
+            $ErrorActionPreference = 'Stop'
+            # target 用 junction 指向宿主机缓存目录，避免每次冷编译
+            $cache = Join-Path $env:USERPROFILE '.cnb-cache\win-target'
+            New-Item -ItemType Directory -Force -Path $cache | Out-Null
+            if (-not (Test-Path 'src-tauri\target')) {
+              New-Item -ItemType Junction -Path 'src-tauri\target' -Target $cache | Out-Null
+            }
+            rustup target add x86_64-pc-windows-msvc aarch64-pc-windows-msvc
+            if ($LASTEXITCODE) { exit $LASTEXITCODE }
+            pnpm exec tauri build --target x86_64-pc-windows-msvc --bundles nsis
+            if ($LASTEXITCODE) { exit $LASTEXITCODE }
+            powershell -NoProfile -File scripts/ci/collect-windows.ps1 -Triple x86_64-pc-windows-msvc -Arch x64
+            if ($LASTEXITCODE) { exit $LASTEXITCODE }
     #
-    #     - name: build-arm64
-    #       script: |
-    #         $ErrorActionPreference = 'Stop'
-    #         pnpm exec tauri build --target aarch64-pc-windows-msvc --bundles nsis
-    #         if ($LASTEXITCODE) { exit $LASTEXITCODE }
-    #         powershell -NoProfile -File scripts/ci/collect-windows.ps1 -Triple aarch64-pc-windows-msvc -Arch arm64
-    #         if ($LASTEXITCODE) { exit $LASTEXITCODE }
+        - name: build-arm64
+          script: |
+            $ErrorActionPreference = 'Stop'
+            pnpm exec tauri build --target aarch64-pc-windows-msvc --bundles nsis
+            if ($LASTEXITCODE) { exit $LASTEXITCODE }
+            powershell -NoProfile -File scripts/ci/collect-windows.ps1 -Triple aarch64-pc-windows-msvc -Arch arm64
+            if ($LASTEXITCODE) { exit $LASTEXITCODE }
     #
-    #     - name: checksums
-    #       script: |
-    #         $ErrorActionPreference = 'Stop'
-    #         Push-Location release
-    #         Get-ChildItem *.exe | ForEach-Object {
-    #           $h = (Get-FileHash $_.Name -Algorithm SHA256).Hash.ToLower()
-    #           "$h  $($_.Name)"
-    #         } | Set-Content -Encoding ascii SHA256SUMS-windows.txt
-    #         Get-Content SHA256SUMS-windows.txt
-    #         Pop-Location
+        - name: checksums
+          script: |
+            $ErrorActionPreference = 'Stop'
+            Push-Location release
+            Get-ChildItem *.exe | ForEach-Object {
+              $h = (Get-FileHash $_.Name -Algorithm SHA256).Hash.ToLower()
+              "$h  $($_.Name)"
+            } | Set-Content -Encoding ascii SHA256SUMS-windows.txt
+            Get-Content SHA256SUMS-windows.txt
+            Pop-Location
     #
-    #     - name: upload
-    #       script: |
-    #         $ErrorActionPreference = 'Stop'
-    #         powershell -NoProfile -File scripts/ci/release-upload.ps1 -Dir ./release
-    #         if ($LASTEXITCODE) { exit $LASTEXITCODE }
+        - name: upload
+          script: |
+            $ErrorActionPreference = 'Stop'
+            powershell -NoProfile -File scripts/ci/release-upload.ps1 -Dir ./release
+            if ($LASTEXITCODE) { exit $LASTEXITCODE }
