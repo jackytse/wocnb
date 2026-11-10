@@ -17,8 +17,8 @@
 #     v*: tag_push     → release-meta  门禁 → 版本一致性 → 源码包/Web 包 → 【唯一】创建 Release → 上传附件
 #
 #   P2 / P3（原生安装包，需自托管节点，当前【整段注释】，见文件末尾）
-#     v*: tag_push     → release-macos  dmg x64 + dmg arm64
-#     v*: tag_push     → release-windows nsis x64 + nsis arm64
+#     v*: tag_push     → release-macos  dmg arm64（Mac x64 节点未接入，见下）
+#     v*: tag_push     → release-windows nsis x64（Win arm64 节点未接入，见下）
 #
 # -----------------------------------------------------------------------------
 # 二、【开关】自托管 Runner 是否已接入
@@ -26,13 +26,19 @@
 #   现状（2026-11-10 更新）：
 #     · Mac arm64 自托管节点【已接入】→ P2 release-macos 已启用并参与 v* tag_push；
 #     · Windows amd64 自托管节点【已接入】（2026-11-10）→ P3 release-windows 已启用；
+#     · 【节点缺口】暂时没有 Mac x64 节点和 Windows arm64 节点 → 两条流水线
+#       各只保留**本架构**构建（Mac 只出 arm64 dmg、Windows 只出 x64 nsis），
+#       缺失架构的 build stage 已移除；后续接入对应节点时按本文件 git 历史把
+#       build-x64（macos）/ build-arm64（windows）两个 stage 恢复回来即可。
 #
 #   接入节点的人工步骤（详见 docs/BRANCHING.md 第 6 节）：
 #       a) 根组织 → 组织设置 → 构建节点 → 新增 Runner；
 #       b) 填标签：Mac 机器填 mac + arm64（Intel Mac 填 mac + x64）；Windows 机器填 windows + x64；
 #       c) 点「连接指引」，在目标机器上执行一键接入脚本，状态由「离线」变「在线」；
-#       d) 机器需预装：Xcode CLT（Mac）/ VS 2022 Build Tools + MSVC v143 ARM64（Windows）、
-#          rustup、Node 22、pnpm 12.14、git、python3（Mac，上传脚本解析 JSON 用）。
+#       d) 机器需预装：Xcode CLT（Mac）/ VS 2022 Build Tools（Windows，当前只出
+#          x64，暂不需 MSVC ARM64 组件）、rustc（rustup 可选——只编本机架构，
+#          brew/MSI 直装 rustc 即可）、Node 22、pnpm 12.14、git、python3（Mac，
+#          上传脚本解析 JSON 用）。
 #
 # -----------------------------------------------------------------------------
 # 三、四条硬约束（改动本文件前务必先读，否则门禁会莫名变红）
@@ -480,22 +486,26 @@ v*:
             pnpm -v >/dev/null 2>&1 || npm i -g pnpm@12.14.0 --force
             pnpm install --frozen-lockfile
     #
+        # 【架构裁剪 2026-11-10】Mac x64 节点未接入，build-x64 stage 已移除。
+        # 后续接入 Intel Mac（标签 mac + x64）后，从 git 历史恢复该 stage：
+        #   rustup target add x86_64-apple-darwin（x64 节点如装的是 brew 版 rust 无
+        #   rustup，可直接跳过——本架构编译不需要 rustup，见 build-arm64 的说明）；
+        #   pnpm exec tauri build --target x86_64-apple-darwin --bundles dmg
+        #   bash scripts/ci/collect-macos.sh x86_64-apple-darwin x64
+        #
         # 冷启动（target 未缓存）本 stage 约 15~25 min
-        - name: build-x64
-          script: |
-            set -eu
-            export PATH="/opt/homebrew/bin:/usr/local/bin:${HOME}/.cargo/bin:${PATH}"
-            # 把 target 软链到宿主机缓存目录：workspace 每次都是新克隆，不软链就等于每次冷编译
-            mkdir -p "${HOME}/.cnb-cache/macos-target"
-            [ -L src-tauri/target ] || { rm -rf src-tauri/target; ln -s "${HOME}/.cnb-cache/macos-target" src-tauri/target; }
-            rustup target add aarch64-apple-darwin x86_64-apple-darwin
-            pnpm exec tauri build --target x86_64-apple-darwin --bundles dmg
-            bash scripts/ci/collect-macos.sh x86_64-apple-darwin x64
-    #
         - name: build-arm64
           script: |
             set -eu
             export PATH="/opt/homebrew/bin:/usr/local/bin:${HOME}/.cargo/bin:${PATH}"
+            # 把 target 软链到宿主机缓存目录：workspace 每次都是新克隆，不软链
+            # 就等于每次冷编译（该逻辑原在 build-x64 里，裁剪时搬到这里保住缓存）
+            mkdir -p "${HOME}/.cnb-cache/macos-target"
+            [ -L src-tauri/target ] || { rm -rf src-tauri/target; ln -s "${HOME}/.cnb-cache/macos-target" src-tauri/target; }
+            # 说明：本架构（aarch64-apple-darwin = 编译机本机架构）编译**不需要**
+            # rustup/rustc target 管理——rustc 默认 target 就是本机架构。
+            # 节点上哪怕装的是 brew 版 rust（无 rustup 命令，2026-11-10 rc.3 实测），
+            # 只要 rustc -V（install 阶段已验证）能跑通，这里就能直接构建。
             pnpm exec tauri build --target aarch64-apple-darwin --bundles dmg
             bash scripts/ci/collect-macos.sh aarch64-apple-darwin arm64
     #
@@ -515,7 +525,7 @@ v*:
     #
     # # ---- P3 release-windows：需已接入自托管 Windows 节点【未实测，启用前须空跑验证】----
     # # ⚠️ 自托管 Windows 的 stage 脚本默认走 PowerShell，不是 bash。
-    # # arm64 交叉编译前提：VS 2022 安装「MSVC v143 C++ ARM64 生成工具」。
+    # # 【架构裁剪 2026-11-10】Win arm64 节点未接入 → 只构建 x64；恢复 arm64 见 build-x64 后注释。
     # # 同样只上传附件，不创建/更新 Release（§7.3），不用 attachments 插件（§7.4）。
     # # ↓↓↓ 取消注释从这里开始 ↓↓↓
     - name: release-windows
@@ -555,20 +565,22 @@ v*:
             if (-not (Test-Path 'src-tauri\target')) {
               New-Item -ItemType Junction -Path 'src-tauri\target' -Target $cache | Out-Null
             }
-            rustup target add x86_64-pc-windows-msvc aarch64-pc-windows-msvc
-            if ($LASTEXITCODE) { exit $LASTEXITCODE }
+            # rustup 可选：x64 是编译机本机架构，rustc 默认 target 就是它；
+            # 装了 rustup 就顺手注册 target，没装（如 MSI/scoop 直装 rustc）也能构建
+            if (Get-Command rustup -ErrorAction SilentlyContinue) {
+              rustup target add x86_64-pc-windows-msvc
+              if ($LASTEXITCODE) { exit $LASTEXITCODE }
+            }
             pnpm exec tauri build --target x86_64-pc-windows-msvc --bundles nsis
             if ($LASTEXITCODE) { exit $LASTEXITCODE }
             powershell -NoProfile -File scripts/ci/collect-windows.ps1 -Triple x86_64-pc-windows-msvc -Arch x64
             if ($LASTEXITCODE) { exit $LASTEXITCODE }
     #
-        - name: build-arm64
-          script: |
-            $ErrorActionPreference = 'Stop'
-            pnpm exec tauri build --target aarch64-pc-windows-msvc --bundles nsis
-            if ($LASTEXITCODE) { exit $LASTEXITCODE }
-            powershell -NoProfile -File scripts/ci/collect-windows.ps1 -Triple aarch64-pc-windows-msvc -Arch arm64
-            if ($LASTEXITCODE) { exit $LASTEXITCODE }
+        # 【架构裁剪 2026-11-10】Windows arm64 节点未接入（x64 节点交叉编译 arm64
+        # 还需 VS 2022 的「MSVC v143 C++ ARM64 生成工具」），build-arm64 已移除。
+        # 后续接入 arm64 节点（标签 windows + arm64）后，从 git 历史恢复该 stage：
+        #   pnpm exec tauri build --target aarch64-pc-windows-msvc --bundles nsis
+        #   powershell -NoProfile -File scripts/ci/collect-windows.ps1 -Triple aarch64-pc-windows-msvc -Arch arm64
     #
         - name: checksums
           script: |
