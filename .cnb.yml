@@ -489,6 +489,16 @@ v*:
               for d in /Users/*/.cargo/bin /opt/homebrew/bin /usr/local/bin; do
                 if [ -x "$d/rustc" ]; then
                   export PATH="$d:${PATH}"
+                  # rustc 多半是 rustup 的 shim：shim 靠 RUSTUP_HOME（默认
+                  # $HOME/.rustup）定位工具链。rc.5 实测 shim 找到了但报
+                  # "no default is configured"——runner HOME 不对导致 shim
+                  # 看不到用户的 toolchain。命中用户目录时把两个 HOME 显式指过去。
+                  if [ -z "${RUSTUP_HOME:-}" ] && [ -d "${d%/.cargo/bin}/.rustup" ]; then
+                    export RUSTUP_HOME="${d%/.cargo/bin}/.rustup"
+                  fi
+                  if [ -z "${CARGO_HOME:-}" ] && [ -d "${d%/.cargo/bin}/.cargo" ]; then
+                    export CARGO_HOME="${d%/.cargo/bin}/.cargo"
+                  fi
                   break
                 fi
               done
@@ -517,6 +527,14 @@ v*:
               for d in /Users/*/.cargo/bin /opt/homebrew/bin /usr/local/bin; do
                 if [ -x "$d/cargo" ]; then
                   export PATH="$d:${PATH}"
+                  # 同 install：cargo 是 rustup shim 时需显式指定 RUSTUP_HOME /
+                  # CARGO_HOME，否则 shim 找不到默认 toolchain（rc.5 实测）
+                  if [ -z "${RUSTUP_HOME:-}" ] && [ -d "${d%/.cargo/bin}/.rustup" ]; then
+                    export RUSTUP_HOME="${d%/.cargo/bin}/.rustup"
+                  fi
+                  if [ -z "${CARGO_HOME:-}" ] && [ -d "${d%/.cargo/bin}/.cargo" ]; then
+                    export CARGO_HOME="${d%/.cargo/bin}/.cargo"
+                  fi
                   break
                 fi
               done
