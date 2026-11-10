@@ -43,7 +43,17 @@
 #          rustup、Node 22、pnpm 12.14、git、python3（Mac，上传脚本解析 JSON 用）。
 #
 # -----------------------------------------------------------------------------
-# 三、三条硬约束（改动本文件前务必先读，否则门禁会莫名变红）
+# 三、四条硬约束（改动本文件前务必先读，否则门禁会莫名变红）
+#
+#   0) 【脚本禁止 set -o pipefail / 只用 POSIX sh 语法】CNB runner 用 `sh` 执行
+#      stage 脚本（官方《语法手册》Job.script 一节明说"流水线默认使用 sh 作为
+#      命令行解释器"），而 node:22 镜像里 /bin/sh 是 dash —— 实测 dash 不支持
+#      `set -o pipefail`，第一条命令就报 `Illegal option -o pipefail`，整个
+#      stage 直接变红（2026-11-10 真实事故）。因此：
+#        · 所有内联脚本只写 `set -eu`（POSIX）；
+#        · 确实需要 pipefail / bash 特性的逻辑，放进独立 .sh 文件（有 bash
+#          shebang），如 scripts/ci/check-version.sh，再由 stage 调用 `bash xxx.sh`；
+#        · 本文件脚本里没有任何依赖 pipefail 语义的管道，删掉它不改变行为。
 #
 #   1) 【串行】所有质量门禁 step 写成 stages 数组（数组=串行，对象=并行）。
 #      绝不起 `pnpm dev` / `pnpm tauri dev`：auto-imports.d.ts / components.d.ts /
@@ -89,7 +99,7 @@ main:
       stages:
         - name: install
           script: |
-            set -euo pipefail
+            set -eu
             # 使用 package.json 的 packageManager 指定的 pnpm 版本（当前 12.14.0）。
             # corepack 不可用（镜像裁剪/签名校验失败）时兜底全局安装，避免门禁因环境问题变红。
             corepack enable || npm i -g pnpm@12.14.0
@@ -100,19 +110,19 @@ main:
         #    （本仓库实测 11 处 TS2304/TS2552）。src/route-map.d.ts 是已跟踪文件，不需要它生成。
         - name: build-generate
           script: |
-            set -euo pipefail
+            set -eu
             pnpm build
         - name: typecheck
           script: |
-            set -euo pipefail
+            set -eu
             pnpm typecheck
         - name: lint
           script: |
-            set -euo pipefail
+            set -eu
             pnpm lint
         - name: test
           script: |
-            set -euo pipefail
+            set -eu
             pnpm test
 
   # ---------------------------------------------------------------------------
@@ -156,7 +166,7 @@ main:
         # 「需要通过状态检查」就永远等不到上报，PR 会永久卡在保护分支上。
         - name: install
           script: |
-            set -euo pipefail
+            set -eu
             # 使用 package.json 的 packageManager 指定的 pnpm 版本（当前 12.14.0）。
             # corepack 不可用（镜像裁剪/签名校验失败）时兜底全局安装，避免门禁因环境问题变红。
             corepack enable || npm i -g pnpm@12.14.0
@@ -164,19 +174,19 @@ main:
             pnpm install --frozen-lockfile
         - name: build-generate
           script: |
-            set -euo pipefail
+            set -eu
             pnpm build
         - name: typecheck
           script: |
-            set -euo pipefail
+            set -eu
             pnpm typecheck
         - name: lint
           script: |
-            set -euo pipefail
+            set -eu
             pnpm lint
         - name: test
           script: |
-            set -euo pipefail
+            set -eu
             pnpm test
 
 # -----------------------------------------------------------------------------
@@ -204,7 +214,7 @@ $:
       stages:
         - name: install
           script: |
-            set -euo pipefail
+            set -eu
             # 使用 package.json 的 packageManager 指定的 pnpm 版本（当前 12.14.0）。
             # corepack 不可用（镜像裁剪/签名校验失败）时兜底全局安装，避免门禁因环境问题变红。
             corepack enable || npm i -g pnpm@12.14.0
@@ -212,19 +222,19 @@ $:
             pnpm install --frozen-lockfile
         - name: build-generate
           script: |
-            set -euo pipefail
+            set -eu
             pnpm build
         - name: typecheck
           script: |
-            set -euo pipefail
+            set -eu
             pnpm typecheck
         - name: lint
           script: |
-            set -euo pipefail
+            set -eu
             pnpm lint
         - name: test
           script: |
-            set -euo pipefail
+            set -eu
             pnpm test
 
   # PR 校验：内容与 main.pull_request 完全相同，用 YAML 别名 *ci-pr 复用（锚点在 main 中定义，
@@ -262,7 +272,7 @@ v*:
       stages:
         - name: install
           script: |
-            set -euo pipefail
+            set -eu
             # 使用 package.json 的 packageManager 指定的 pnpm 版本（当前 12.14.0）。
             # corepack 不可用（镜像裁剪/签名校验失败）时兜底全局安装，避免门禁因环境问题变红。
             corepack enable || npm i -g pnpm@12.14.0
@@ -272,22 +282,22 @@ v*:
         # 生成 d.ts（typecheck 前置）并产出 dist/（后面打 Web 包要用）
         - name: build-generate
           script: |
-            set -euo pipefail
+            set -eu
             pnpm build
 
         - name: typecheck
           script: |
-            set -euo pipefail
+            set -eu
             pnpm typecheck
 
         - name: lint
           script: |
-            set -euo pipefail
+            set -eu
             pnpm lint
 
         - name: test
           script: |
-            set -euo pipefail
+            set -eu
             pnpm test
 
         # tag 名去掉 v 必须等于 src-tauri/tauri.conf.json 的 version，否则静默错版
@@ -295,7 +305,7 @@ v*:
         # exports 生命周期 = 当前 Pipeline，后续 stage 可用 $APP_VERSION
         - name: version-check
           script: |
-            set -euo pipefail
+            set -eu
             bash scripts/ci/check-version.sh "${CNB_BRANCH}"
           exports:
             stdout: APP_VERSION
@@ -304,7 +314,7 @@ v*:
         # 产物统一落到 release/，供最后 upload-meta 上传
         - name: pack
           script: |
-            set -euo pipefail
+            set -eu
             bash scripts/ci/pack-meta.sh --out release
 
         # changelog 插件：基于 tag 之间的提交生成 LATEST_CHANGELOG.md，作为 Release 描述。
@@ -321,7 +331,7 @@ v*:
         # 兜底：确保 LATEST_CHANGELOG.md 一定存在且非空，供后面 descriptionFromFile 使用
         - name: ensure-changelog
           script: |
-            set -euo pipefail
+            set -eu
             if [ ! -s LATEST_CHANGELOG.md ]; then
               echo "提示：changelog 未产出内容，写入兜底描述"
               printf '# %s\n\n- 本版本暂无自动生成的变更日志（可能是首个 tag 或历史不可比）\n' "${CNB_BRANCH}" > LATEST_CHANGELOG.md
@@ -466,7 +476,7 @@ v*:
     #   stages:
     #     - name: install
     #       script: |
-    #         set -euo pipefail
+    #         set -eu
     #         # 自托管 Runner 的 PATH 可能不含 Homebrew / rustup 目录，显式补齐
     #         export PATH="/opt/homebrew/bin:/usr/local/bin:${HOME}/.cargo/bin:${PATH}"
     #         node -v && pnpm -v && rustc -V
@@ -478,7 +488,7 @@ v*:
     #     # 冷启动（target 未缓存）本 stage 约 15~25 min
     #     - name: build-x64
     #       script: |
-    #         set -euo pipefail
+    #         set -eu
     #         export PATH="/opt/homebrew/bin:/usr/local/bin:${HOME}/.cargo/bin:${PATH}"
     #         # 把 target 软链到宿主机缓存目录：workspace 每次都是新克隆，不软链就等于每次冷编译
     #         mkdir -p "${HOME}/.cnb-cache/macos-target"
@@ -489,14 +499,14 @@ v*:
     #
     #     - name: build-arm64
     #       script: |
-    #         set -euo pipefail
+    #         set -eu
     #         export PATH="/opt/homebrew/bin:/usr/local/bin:${HOME}/.cargo/bin:${PATH}"
     #         pnpm exec tauri build --target aarch64-apple-darwin --bundles dmg
     #         bash scripts/ci/collect-macos.sh aarch64-apple-darwin arm64
     #
     #     - name: checksums
     #       script: |
-    #         set -euo pipefail
+    #         set -eu
     #         cd release && shasum -a 256 *.dmg > SHA256SUMS-macos.txt && cat SHA256SUMS-macos.txt
     #
     #     # 【未实测】等 P1 建好 Release（纯 HTTP 轮询，20 min 上限），随后直传附件
@@ -504,7 +514,7 @@ v*:
     #     # 不创建/更新 Release（§7.3：git:release 全仓只有 P1 一个调用点）
     #     - name: upload
     #       script: |
-    #         set -euo pipefail
+    #         set -eu
     #         export PATH="/opt/homebrew/bin:/usr/local/bin:${PATH}"
     #         bash scripts/ci/release-upload.sh ./release
     #
