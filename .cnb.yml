@@ -503,6 +503,24 @@ v*:
                 fi
               done
             fi
+            # Node 版本兜底：rolldown（vite 构建链）要求 Node ^20.19 || >=22.12，
+            # 版本不满足时 pnpm 会**静默跳过**其平台原生可选依赖（如
+            # @rolldown/binding-darwin-arm64），直到 tauri build 才报
+            # "Cannot find native binding"（rc.6 实测）。/usr/local/bin 若残留
+            # 旧版 node（v20.18），就从 nvm 目录里选一个 >=22 的顶上。
+            if command -v node >/dev/null 2>&1; then
+              major=$(node -v | sed 's/^v//' | cut -d. -f1)
+              if [ "${major:-0}" -lt 22 ]; then
+                for d in /Users/*/.nvm/versions/node/v2*; do
+                  [ -x "$d/bin/node" ] || continue
+                  m=$("$d/bin/node" -v | sed 's/^v//' | cut -d. -f1)
+                  if [ "$m" -ge 22 ]; then
+                    export PATH="$d/bin:${PATH}"
+                    break
+                  fi
+                done
+              fi
+            fi
             node -v && pnpm -v && rustc -V
             # 与 P0 保持一致：corepack 不可用时兜底全局安装，避免排错时误判成平台问题
             corepack enable || npm i -g pnpm@12.14.0 --force
@@ -538,6 +556,22 @@ v*:
                   break
                 fi
               done
+            fi
+            # Node 版本兜底（与 install 同源，stage 是独立 shell 必须各放一份）：
+            # tauri 的 beforeBuildCommand 会跑 `pnpm build`（vite/rolldown），
+            # 旧 node 会让 rolldown 缺平台原生绑定而失败（rc.6 实测）
+            if command -v node >/dev/null 2>&1; then
+              major=$(node -v | sed 's/^v//' | cut -d. -f1)
+              if [ "${major:-0}" -lt 22 ]; then
+                for d in /Users/*/.nvm/versions/node/v2*; do
+                  [ -x "$d/bin/node" ] || continue
+                  m=$("$d/bin/node" -v | sed 's/^v//' | cut -d. -f1)
+                  if [ "$m" -ge 22 ]; then
+                    export PATH="$d/bin:${PATH}"
+                    break
+                  fi
+                done
+              fi
             fi
             # 把 target 软链到宿主机缓存目录：workspace 每次都是新克隆，不软链
             # 就等于每次冷编译（该逻辑原在 build-x64 里，裁剪时搬到这里保住缓存）
