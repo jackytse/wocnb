@@ -619,11 +619,34 @@ v*:
         - name: install
           script: |
             $ErrorActionPreference = 'Stop'
-            # 原生命令（corepack / npm / pnpm / node / rustc）**不会**因 $ErrorActionPreference
-            # 抛异常，必须逐个显式查 $LASTEXITCODE；否则失败会一路冒到后面的 cargo 才炸，
-            # 错误现场和真实原因完全对不上（P3 未实测，这一条尤其容易踩）。
-            corepack enable
-            if ($LASTEXITCODE) { npm i -g pnpm@12.14.0 --force; if ($LASTEXITCODE) { exit $LASTEXITCODE } }
+            # 环境预检：一次性列出缺失工具。rc.8 实测节点缺 corepack（node 可能
+            # 整个没装），逐个试探会一关一关撞、来回发版浪费版本号，先报全。
+            $missing = @()
+            foreach ($t in 'git', 'node', 'npm', 'rustc') {
+              if (-not (Get-Command $t -ErrorAction SilentlyContinue)) { $missing += $t }
+            }
+            if ($missing.Count -gt 0) {
+              Write-Output "[wocnb-ci] 节点缺少工具: $($missing -join ', ')"
+              Write-Output '[wocnb-ci] 安装指引: git https://git-scm.com ; Node.js LTS(含 npm+corepack) https://nodejs.org ; rustc https://rustup.rs (默认选项即可)'
+              Write-Output '[wocnb-ci] 装完请重启 runner 进程（或重启机器），确保新 PATH 对 runner 生效'
+              exit 1
+            }
+            # Node 版本检查：rolldown（vite 构建链）要求 ^20.19 || >=22.12，
+            # 版本不满足时 pnpm 会静默跳过其平台原生可选依赖，到 build 才炸
+            # （Mac 节点 rc.6 实测过同样的坑）。统一要求 >=22.12。
+            $nodeVer = [version]((node -v) -replace '^v', '')
+            if ($nodeVer -lt [version]'22.12') {
+              Write-Output "[wocnb-ci] Node 版本过低: $(node -v)，需要 >= 22.12（rolldown engines 要求），请升级 Node LTS"
+              exit 1
+            }
+            # corepack 可选：新 Node 自带；没有（精简版/被裁剪）就直接 npm 全局装 pnpm
+            if (Get-Command corepack -ErrorAction SilentlyContinue) {
+              corepack enable
+              if ($LASTEXITCODE) { npm i -g pnpm@12.14.0 --force; if ($LASTEXITCODE) { exit $LASTEXITCODE } }
+            } else {
+              npm i -g pnpm@12.14.0 --force
+              if ($LASTEXITCODE) { exit $LASTEXITCODE }
+            }
             pnpm -v
             if ($LASTEXITCODE) { exit $LASTEXITCODE }
             node -v
