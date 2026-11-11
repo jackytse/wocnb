@@ -838,11 +838,24 @@ v*:
               }
             }
             Write-Output "[wocnb-ci] NSIS 路径: $nsisPath"
+            # makensis.exe 是 32 位老程序，导入表里有 MSVCP60.dll（VC6 运行库）
+            # 等 10 个系统 DLL；精简/容器化 Windows 镜像可能缺 32 位版本，
+            # 表现为启动即 0xC0000135（STATUS_DLL_NOT_FOUND，rc.17/rc.18 实测）。
+            # 这里逐个探测并把缺失项打进日志，便于判定到底是环境缺件还是别的问题。
+            $nsisOk = $false
             if (Test-Path $rootExe) {
-              Write-Output ("[wocnb-ci] makensis.exe 大小: " + (Get-Item $rootExe).Length)
-              # 直接试跑：能出版本号说明 exe 可执行（排除被杀软隔离/损坏）
+              $probeDirs = @($nsisPath, (Join-Path $nsisPath 'Bin'), 'C:\Windows\System32', 'C:\Windows\SysWOW64')
+              foreach ($n in 'KERNEL32.dll', 'USER32.dll', 'GDI32.dll', 'SHELL32.dll', 'SHLWAPI.dll', 'OLEAUT32.dll', 'VERSION.dll', 'MSVCRT.dll', 'MSVCP60.dll', 'zlib1.dll') {
+                $hit = @()
+                foreach ($dir in $probeDirs) { if (Test-Path (Join-Path $dir $n)) { $hit += $dir } }
+                $state = '缺失'
+                if ($hit.Count -gt 0) { $state = 'OK(' + $hit[0] + ')' }
+                Write-Output ("[wocnb-ci] 依赖 $n : $state")
+              }
+              # 试跑：能出版本号说明 makensis 可用（排除缺 DLL / 被杀软隔离）
               $verOut = & $rootExe /VERSION 2>&1
               Write-Output ("[wocnb-ci] makensis /VERSION -> exit=$LASTEXITCODE out=" + ($verOut -join ' '))
+              if ($LASTEXITCODE -eq 0) { $nsisOk = $true }
             } else {
               Write-Output '[wocnb-ci] 警告: 根目录缺少 makensis.exe（可能被杀毒软件隔离）'
             }
@@ -858,7 +871,17 @@ v*:
               rustup target add x86_64-pc-windows-msvc
               if ($LASTEXITCODE) { exit $LASTEXITCODE }
             }
-            pnpm exec tauri build --target x86_64-pc-windows-msvc --bundles nsis
+            # 打包器选择：makensis 可用 → nsis（体积小、启动快、updater 首选）；
+            # 不可用（缺 MSVCP60 等 32 位运行库的精简镜像）→ 自动降级 msi（WiX，
+            # .NET Framework 实现，不依赖 VC6 运行库）。两条线产物都由
+            # collect-windows.ps1 统一收集，下游 checksums/upload 无需区分。
+            if ($nsisOk) {
+              Write-Output '[wocnb-ci] 使用 NSIS 打包'
+              pnpm exec tauri build --target x86_64-pc-windows-msvc --bundles nsis
+            } else {
+              Write-Output '[wocnb-ci] 警告: makensis 不可用，降级用 MSI(WiX) 打包'
+              pnpm exec tauri build --target x86_64-pc-windows-msvc --bundles msi
+            }
             if ($LASTEXITCODE) { exit $LASTEXITCODE }
             powershell -NoProfile -File scripts/ci/collect-windows.ps1 -Triple x86_64-pc-windows-msvc -Arch x64
             if ($LASTEXITCODE) { exit $LASTEXITCODE }
@@ -873,7 +896,8 @@ v*:
           script: |
             $ErrorActionPreference = 'Stop'
             Push-Location release
-            Get-ChildItem *.exe | ForEach-Object {
+            # 同时覆盖 nsis（.exe）与降级 msi（.msi）两种产物
+            Get-ChildItem -File | Where-Object { $_.Extension -in '.exe', '.msi' } | ForEach-Object {
               $h = (Get-FileHash $_.Name -Algorithm SHA256).Hash.ToLower()
               "$h  $($_.Name)"
             } | Set-Content -Encoding ascii SHA256SUMS-windows.txt

@@ -51,25 +51,46 @@ try {
 
     # ------------------------------------------------------------------
     # 2) 匹配构建产物
+    #    支持两种打包器（.cnb.yml 会在 makensis 不可用时自动降级 msi）：
+    #      NSIS → src-tauri\target\<triple>\release\bundle\nsis\*-setup.exe
+    #      MSI  → src-tauri\target\<triple>\release\bundle\msi\*.msi
     # ------------------------------------------------------------------
-    $srcDir = Join-Path $RepoRoot "src-tauri\target\$Triple\release\bundle\nsis"
-    if (-not (Test-Path $srcDir)) {
-        throw "构建产物目录不存在：$srcDir（请确认已执行 tauri build --target $Triple --bundles nsis）"
+    $bundleRoot = Join-Path $RepoRoot "src-tauri\target\$Triple\release\bundle"
+    $srcFile = $null
+    $ext = $null
+
+    $nsisDir = Join-Path $bundleRoot 'nsis'
+    if (Test-Path $nsisDir) {
+        $candidates = @(Get-ChildItem -Path $nsisDir -Filter '*-setup.exe' -File)
+        if ($candidates.Count -gt 1) {
+            Write-Host "警告：$nsisDir 下匹配到 $($candidates.Count) 个安装包，取最新修改的那个" -ForegroundColor Yellow
+        }
+        if ($candidates.Count -ge 1) {
+            $srcFile = $candidates | Sort-Object LastWriteTime -Descending | Select-Object -First 1
+            $ext = '.exe'
+        }
     }
 
-    $candidates = @(Get-ChildItem -Path $srcDir -Filter '*-setup.exe' -File)
-    if ($candidates.Count -eq 0) {
-        throw "$srcDir 下没有匹配 '*-setup.exe' 的文件"
+    # NSIS 产物缺失时回退 MSI（降级打包路径）
+    if (-not $srcFile) {
+        $msiDir = Join-Path $bundleRoot 'msi'
+        if (Test-Path $msiDir) {
+            $msiCandidates = @(Get-ChildItem -Path $msiDir -Filter '*.msi' -File)
+            if ($msiCandidates.Count -ge 1) {
+                $srcFile = $msiCandidates | Sort-Object LastWriteTime -Descending | Select-Object -First 1
+                $ext = '.msi'
+            }
+        }
     }
-    if ($candidates.Count -gt 1) {
-        Write-Host "警告：$srcDir 下匹配到 $($candidates.Count) 个安装包，取最新修改的那个" -ForegroundColor Yellow
+
+    if (-not $srcFile) {
+        throw "在 $bundleRoot 下既没找到 nsis\*-setup.exe 也没找到 msi\*.msi，请确认 tauri build 的 --bundles 参数"
     }
-    $srcFile = $candidates | Sort-Object LastWriteTime -Descending | Select-Object -First 1
 
     # ------------------------------------------------------------------
     # 3) 复制并按统一命名规范重命名
     # ------------------------------------------------------------------
-    $destName = "wocnb-$Version-windows-$Arch-setup.exe"
+    $destName = "wocnb-$Version-windows-$Arch-setup$ext"
     $outPath = Join-Path $RepoRoot $OutDir
     New-Item -ItemType Directory -Force -Path $outPath | Out-Null
     $destPath = Join-Path $outPath $destName

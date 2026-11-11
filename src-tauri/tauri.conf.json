@@ -1,7 +1,7 @@
 {
   "$schema": "../node_modules/@tauri-apps/cli/config.schema.json",
   "productName": "WOCNB",
-  "version": "0.1.0-rc.18",
+  "version": "0.1.0-rc.19",
   "identifier": "me.jackytse.wocnb",
   "build": {
     "frontendDist": "../dist",
