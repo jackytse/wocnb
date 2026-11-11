@@ -813,21 +813,32 @@ v*:
               }
             }
             # 诊断（rc.15 报 makensis 启动失败 0x2 = 找不到文件，但目录检查通过）：
-            # 打印 NSIS 根目录内容并直接试跑 makensis，把真实错误留在日志里。
-            Write-Output "[wocnb-ci] NSIS 路径: $nsisPath"
-            if (Test-Path $nsisPath) {
-              $rootExe = Join-Path $nsisPath 'makensis.exe'
-              Write-Output ("[wocnb-ci] 根目录条目数: " + (Get-ChildItem $nsisPath -Force | Measure-Object).Count)
-              if (Test-Path $rootExe) {
-                Write-Output ("[wocnb-ci] makensis.exe 大小: " + (Get-Item $rootExe).Length)
-                # 直接试跑：能出版本号说明 exe 可执行（排除被杀软隔离/损坏）
-                $verOut = & $rootExe /VERSION 2>&1
-                Write-Output ("[wocnb-ci] makensis /VERSION -> exit=$LASTEXITCODE out=" + ($verOut -join ' '))
-              } else {
-                Write-Output '[wocnb-ci] 警告: 根目录缺少 makensis.exe（可能被杀毒软件隔离）'
+            # rc.16 定位到根目录那个 2560 字节的 makensis.exe 其实是「启动器桩」，
+            # 内部字符串就是 "Unable to start child process, error %#x"，它负责
+            # 转发到同目录 Bin\makensis.exe；转发失败说明 Bin 里的真编译器不可用
+            # （自托管 SYSTEM 账户下常见于杀软隔离）。对策：直接把真编译器
+            # 复制到根目录覆盖桩程序，绕开转发环节。
+            $rootExe = Join-Path $nsisPath 'makensis.exe'
+            $binExe = Join-Path $nsisPath 'Bin\makensis.exe'
+            if ((Test-Path $binExe) -and (Get-Item $binExe).Length -gt 100KB) {
+              if (-not (Test-Path $rootExe) -or (Get-Item $rootExe).Length -lt 100KB) {
+                Copy-Item $binExe $rootExe -Force
+                Write-Output '[wocnb-ci] 已用 Bin\makensis.exe 覆盖根目录启动器桩'
               }
             } else {
-              Write-Output '[wocnb-ci] 警告: NSIS 缓存目录不存在'
+              Write-Output "[wocnb-ci] 警告: Bin\makensis.exe 缺失或过小（可能被杀软隔离），Bin 目录内容："
+              if (Test-Path (Join-Path $nsisPath 'Bin')) {
+                Get-ChildItem (Join-Path $nsisPath 'Bin') -Name | ForEach-Object { Write-Output "  $_" }
+              }
+            }
+            Write-Output "[wocnb-ci] NSIS 路径: $nsisPath"
+            if (Test-Path $rootExe) {
+              Write-Output ("[wocnb-ci] makensis.exe 大小: " + (Get-Item $rootExe).Length)
+              # 直接试跑：能出版本号说明 exe 可执行（排除被杀软隔离/损坏）
+              $verOut = & $rootExe /VERSION 2>&1
+              Write-Output ("[wocnb-ci] makensis /VERSION -> exit=$LASTEXITCODE out=" + ($verOut -join ' '))
+            } else {
+              Write-Output '[wocnb-ci] 警告: 根目录缺少 makensis.exe（可能被杀毒软件隔离）'
             }
             # target 用 junction 指向宿主机缓存目录，避免每次冷编译
             $cache = Join-Path $env:USERPROFILE '.cnb-cache\win-target'
