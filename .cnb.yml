@@ -340,6 +340,28 @@ v*:
               echo "提示：changelog 未产出内容，写入兜底描述"
               printf '# %s\n\n- 本版本暂无自动生成的变更日志（可能是首个 tag 或历史不可比）\n' "${CNB_BRANCH}" > LATEST_CHANGELOG.md
             fi
+            # 追加固定安装指引：macOS 版未做开发者签名+公证，从浏览器/网络下载
+            # 后首次打开会报「"WOCNB.app" is damaged and can't be opened」（Gatekeeper
+            # 对隔离属性 + 无有效签名的固定表现），需手动移除隔离属性；Windows 版同理。
+            # 该段与版本内容无关，故放兜底阶段统一追加（changelog 插件每次会重写文件）。
+            cat >> LATEST_CHANGELOG.md << 'INSTALL_GUIDE'
+
+            ---
+
+            ## 📦 安装与首次运行
+
+            **macOS（Apple Silicon）**
+            1. 下载 `*-macos-arm64.dmg`，打开后将 WOCNB.app 拖入「应用程序」
+            2. 首次打开若提示「"WOCNB.app" is damaged and can't be opened」，在终端执行：
+               ```bash
+               xattr -cr /Applications/WOCNB.app
+               ```
+               （应用未做开发者签名与公证，Gatekeeper 会拦截，属正常现象）
+            3. 再次打开即可；以后不会再提示
+
+            **Windows（x64）**
+            - 下载 `*-windows-x64-*.exe` 直接运行；浏览器可能提示「未常见下载」选「保留」即可
+            INSTALL_GUIDE
             head -5 LATEST_CHANGELOG.md
 
         # ---------------------------------------------------------------------
