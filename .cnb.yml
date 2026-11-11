@@ -825,6 +825,12 @@ v*:
                 Copy-Item $binExe $rootExe -Force
                 Write-Output '[wocnb-ci] 已用 Bin\makensis.exe 覆盖根目录启动器桩'
               }
+              # 真编译器依赖 Bin 下的 zlib1.dll 等，必须一并放到根目录，
+              # 否则直接执行会报 0xC0000135（STATUS_DLL_NOT_FOUND，rc.17 实测）
+              Get-ChildItem (Join-Path $nsisPath 'Bin') -Filter *.dll -ErrorAction SilentlyContinue |
+                ForEach-Object { Copy-Item $_.FullName (Join-Path $nsisPath $_.Name) -Force }
+              # 双保险：把 Bin 加进 PATH，让 DLL 加载器的 PATH 搜索也能兜住
+              if ($env:PATH -notlike "*$nsisPath\Bin*") { $env:PATH = "$nsisPath\Bin;$env:PATH" }
             } else {
               Write-Output "[wocnb-ci] 警告: Bin\makensis.exe 缺失或过小（可能被杀软隔离），Bin 目录内容："
               if (Test-Path (Join-Path $nsisPath 'Bin')) {
