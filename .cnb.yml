@@ -747,7 +747,17 @@ v*:
             $toolsPath = Join-Path $env:LOCALAPPDATA 'tauri'
             $nsisPath = Join-Path $toolsPath 'NSIS'
             $dllPath = Join-Path $nsisPath 'Plugins\x86-unicode\additional\nsis_tauri_utils.dll'
-            if (-not (Test-Path (Join-Path $nsisPath 'makensis.exe')) -or -not (Test-Path $dllPath)) {
+            $dllSha1 = '75197FEE3C6A814FE035788D1C34EAD39349B860'   # 官方值（bundler 2.10.4 源码）
+            # 判定「是否需要重建」：makensis 不存在 / dll 缺失 / dll 哈希不符。
+            # rc.15 教训：只判存在性会让一次坏文件占位永久通过检查，预置逻辑
+            # 被整段跳过（日志里没有任何 [wocnb-ci] 预置输出），必须按哈希校验。
+            $needRebuild = $true
+            if ((Test-Path (Join-Path $nsisPath 'makensis.exe')) -and (Test-Path $dllPath)) {
+              $cur = (Get-FileHash $dllPath -Algorithm SHA1).Hash
+              if ($cur -eq $dllSha1) { $needRebuild = $false }
+              else { Write-Output "[wocnb-ci] dll SHA1 不符（$cur），重建 NSIS 缓存" }
+            }
+            if ($needRebuild) {
               New-Item -ItemType Directory -Force -Path $toolsPath | Out-Null
               $zip = Join-Path $env:TEMP 'nsis-3.13.zip'
               if (-not (Test-Path (Join-Path $nsisPath 'makensis.exe'))) {
@@ -776,13 +786,13 @@ v*:
                   Write-Output '[wocnb-ci] NSIS 3.13 预置完成'
                 }
               }
-              if (-not (Test-Path $dllPath)) {
-                # tauri 插件 dll 缺失：同样按镜像优先顺序下载。
-                # 注意 dll 只有约 34KB（rc.14 实测因阈值设成 100KB 而误判失败），
-                # 所以用「体积 >10KB + SHA1 与官方值一致」双重校验（官方值取自
-                # tauri-bundler 2.10.4 源码 NSIS_TAURI_UTILS_SHA1）
-                $dllSha1 = '75197FEE3C6A814FE035788D1C34EAD39349B860'
-                $dllOk = $false
+              # dll 校验：SHA1 不符即重下（34KB，官方哈希见上）
+              $dllOk = $false
+              if (Test-Path $dllPath) {
+                if ((Get-FileHash $dllPath -Algorithm SHA1).Hash -eq $dllSha1) { $dllOk = $true }
+                else { Remove-Item -Force $dllPath }
+              }
+              if (-not $dllOk) {
                 New-Item -ItemType Directory -Force -Path (Split-Path $dllPath) | Out-Null
                 foreach ($u in @(
                   'https://ghfast.top/https://github.com/tauri-apps/nsis-tauri-utils/releases/download/nsis_tauri_utils-v0.5.3/nsis_tauri_utils.dll',
@@ -792,9 +802,8 @@ v*:
                   Write-Output "[wocnb-ci] 下载 nsis_tauri_utils.dll: $u"
                   curl.exe -sSL --retry 2 --connect-timeout 15 -o $dllPath $u
                   if ($LASTEXITCODE -ne 0 -or -not (Test-Path $dllPath) -or (Get-Item $dllPath).Length -lt 10KB) { continue }
-                  $got = (Get-FileHash $dllPath -Algorithm SHA1).Hash
-                  if ($got -eq $dllSha1) { $dllOk = $true; break }
-                  Write-Output "[wocnb-ci] dll SHA1 不匹配（$got），换下一个下载源"
+                  if ((Get-FileHash $dllPath -Algorithm SHA1).Hash -eq $dllSha1) { $dllOk = $true; break }
+                  Write-Output '[wocnb-ci] dll SHA1 不匹配，换下一个下载源'
                 }
                 if (-not $dllOk) {
                   # 软失败：删掉残留坏文件，交给 bundler 走镜像变量自行下载
@@ -802,6 +811,23 @@ v*:
                   Write-Output '[wocnb-ci] 警告: dll 预置失败，交由 bundler 走镜像下载'
                 }
               }
+            }
+            # 诊断（rc.15 报 makensis 启动失败 0x2 = 找不到文件，但目录检查通过）：
+            # 打印 NSIS 根目录内容并直接试跑 makensis，把真实错误留在日志里。
+            Write-Output "[wocnb-ci] NSIS 路径: $nsisPath"
+            if (Test-Path $nsisPath) {
+              $rootExe = Join-Path $nsisPath 'makensis.exe'
+              Write-Output ("[wocnb-ci] 根目录条目数: " + (Get-ChildItem $nsisPath -Force | Measure-Object).Count)
+              if (Test-Path $rootExe) {
+                Write-Output ("[wocnb-ci] makensis.exe 大小: " + (Get-Item $rootExe).Length)
+                # 直接试跑：能出版本号说明 exe 可执行（排除被杀软隔离/损坏）
+                $verOut = & $rootExe /VERSION 2>&1
+                Write-Output ("[wocnb-ci] makensis /VERSION -> exit=$LASTEXITCODE out=" + ($verOut -join ' '))
+              } else {
+                Write-Output '[wocnb-ci] 警告: 根目录缺少 makensis.exe（可能被杀毒软件隔离）'
+              }
+            } else {
+              Write-Output '[wocnb-ci] 警告: NSIS 缓存目录不存在'
             }
             # target 用 junction 指向宿主机缓存目录，避免每次冷编译
             $cache = Join-Path $env:USERPROFILE '.cnb-cache\win-target'
