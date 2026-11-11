@@ -731,6 +731,63 @@ v*:
             if ($npmPrefix2 -and (Test-Path $npmPrefix2) -and ($env:PATH -notlike "*$npmPrefix2*")) {
               $env:PATH = "$npmPrefix2;$env:PATH"
             }
+            # NSIS 工具链预置（rc.13 实测）：Rust 编译成功后，tauri bundler 打
+            # NSIS 安装包时要从 GitHub 下载 nsis-3.13.zip + nsis_tauri_utils.dll，
+            # 国内自托管节点直连 GitHub 超时（failed to bundle project:
+            # `timeout: global`）。双保险：
+            #   1) 设 bundler 镜像变量——其内置下载逻辑把 GitHub URL 拼到镜像
+            #      后面（<mirror>/https://github.com/...，ghfast.top 即此格式）；
+            #   2) 预置 bundler 缓存目录（多镜像 curl 轮询下载），第一次成功后
+            #      后续构建直接复用，完全离线。
+            # 版本对应（tauri-bundler 2.10.3/2.10.4 源码，与 cli 2.12.4 内嵌版
+            # 本一致，且与 rc.13 日志中 nsis-3.13.zip 的 URL 吻合）：
+            #   NSIS 3.13 + nsis_tauri_utils v0.5.3。dll 哈希不匹配时 bundler
+            #   只会重下 dll（小文件，走镜像变量），不会清掉整个 NSIS 目录。
+            $env:TAURI_BUNDLER_TOOLS_GITHUB_MIRROR = 'https://ghfast.top/'
+            $toolsPath = Join-Path $env:LOCALAPPDATA 'tauri'
+            $nsisPath = Join-Path $toolsPath 'NSIS'
+            $dllPath = Join-Path $nsisPath 'Plugins\x86-unicode\additional\nsis_tauri_utils.dll'
+            if (-not (Test-Path (Join-Path $nsisPath 'makensis.exe')) -or -not (Test-Path $dllPath)) {
+              New-Item -ItemType Directory -Force -Path $toolsPath | Out-Null
+              $zip = Join-Path $env:TEMP 'nsis-3.13.zip'
+              if (-not (Test-Path (Join-Path $nsisPath 'makensis.exe'))) {
+                # NSIS 主体缺失：按「镜像 1 → 镜像 2 → 直连」顺序尝试下载 zip
+                $nsisOk = $false
+                foreach ($u in @(
+                  'https://ghfast.top/https://github.com/tauri-apps/binary-releases/releases/download/nsis-3.13/nsis-3.13.zip',
+                  'https://gh-proxy.com/https://github.com/tauri-apps/binary-releases/releases/download/nsis-3.13/nsis-3.13.zip',
+                  'https://github.com/tauri-apps/binary-releases/releases/download/nsis-3.13/nsis-3.13.zip'
+                )) {
+                  Write-Output "[wocnb-ci] 下载 NSIS: $u"
+                  curl.exe -sSL --retry 2 --connect-timeout 15 -o $zip $u
+                  if ($LASTEXITCODE -eq 0 -and (Test-Path $zip) -and (Get-Item $zip).Length -gt 1MB) { $nsisOk = $true; break }
+                }
+                if (-not $nsisOk) { Write-Output '[wocnb-ci] 错误: NSIS 工具包多镜像均下载失败'; exit 1 }
+                # zip 顶层目录是 nsis-3.13，解压后改名 NSIS（与 bundler 缓存结构一致）
+                if (Test-Path $nsisPath) { Remove-Item -Recurse -Force $nsisPath }
+                $extractDir = Join-Path $toolsPath 'nsis-3.13'
+                if (Test-Path $extractDir) { Remove-Item -Recurse -Force $extractDir }
+                Expand-Archive -Path $zip -DestinationPath $toolsPath -Force
+                Rename-Item $extractDir 'NSIS'
+                Remove-Item $zip -Force
+                Write-Output '[wocnb-ci] NSIS 3.13 预置完成'
+              }
+              if (-not (Test-Path $dllPath)) {
+                # tauri 插件 dll 缺失：同样按镜像优先顺序下载
+                $dllOk = $false
+                New-Item -ItemType Directory -Force -Path (Split-Path $dllPath) | Out-Null
+                foreach ($u in @(
+                  'https://ghfast.top/https://github.com/tauri-apps/nsis-tauri-utils/releases/download/nsis_tauri_utils-v0.5.3/nsis_tauri_utils.dll',
+                  'https://gh-proxy.com/https://github.com/tauri-apps/nsis-tauri-utils/releases/download/nsis_tauri_utils-v0.5.3/nsis_tauri_utils.dll',
+                  'https://github.com/tauri-apps/nsis-tauri-utils/releases/download/nsis_tauri_utils-v0.5.3/nsis_tauri_utils.dll'
+                )) {
+                  Write-Output "[wocnb-ci] 下载 nsis_tauri_utils.dll: $u"
+                  curl.exe -sSL --retry 2 --connect-timeout 15 -o $dllPath $u
+                  if ($LASTEXITCODE -eq 0 -and (Test-Path $dllPath) -and (Get-Item $dllPath).Length -gt 100KB) { $dllOk = $true; break }
+                }
+                if (-not $dllOk) { Write-Output '[wocnb-ci] 错误: nsis_tauri_utils.dll 多镜像均下载失败'; exit 1 }
+              }
+            }
             # target 用 junction 指向宿主机缓存目录，避免每次冷编译
             $cache = Join-Path $env:USERPROFILE '.cnb-cache\win-target'
             New-Item -ItemType Directory -Force -Path $cache | Out-Null
