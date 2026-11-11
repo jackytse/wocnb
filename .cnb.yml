@@ -844,13 +844,28 @@ v*:
             # 这里逐个探测并把缺失项打进日志，便于判定到底是环境缺件还是别的问题。
             $nsisOk = $false
             if (Test-Path $rootExe) {
-              $probeDirs = @($nsisPath, (Join-Path $nsisPath 'Bin'), 'C:\Windows\System32', 'C:\Windows\SysWOW64')
+              # makensis 是 32 位进程，DLL 加载器只认 SysWOW64（不是 System32）；
+              # rc.19 实测探测时先命中 System32 把「缺 32 位版本」掩盖了，这里
+              # 明确区分两个目录分别报告
+              $sysW = 'C:\Windows\SysWOW64'
+              Write-Output ("[wocnb-ci] SysWOW64 存在: " + (Test-Path $sysW))
+              $binDllDir = Join-Path $nsisPath 'Bin'
+              $missing32 = @()
               foreach ($n in 'KERNEL32.dll', 'USER32.dll', 'GDI32.dll', 'SHELL32.dll', 'SHLWAPI.dll', 'OLEAUT32.dll', 'VERSION.dll', 'MSVCRT.dll', 'MSVCP60.dll', 'zlib1.dll') {
-                $hit = @()
-                foreach ($dir in $probeDirs) { if (Test-Path (Join-Path $dir $n)) { $hit += $dir } }
-                $state = '缺失'
-                if ($hit.Count -gt 0) { $state = 'OK(' + $hit[0] + ')' }
+                $inNsis = (Test-Path (Join-Path $nsisPath $n)) -or (Test-Path (Join-Path $binDllDir $n))
+                $inWow = Test-Path (Join-Path $sysW $n)
+                $state = if ($inNsis) { 'NSIS目录' } elseif ($inWow) { 'SysWOW64' } else { '缺失(32位)' }
                 Write-Output ("[wocnb-ci] 依赖 $n : $state")
+                if ($state -eq '缺失(32位)') { $missing32 += $n }
+              }
+              # 能从 SysWOW64 补的（只补非系统核心 DLL，避免动系统文件）就先补
+              foreach ($n in $missing32) {
+                if ($n -eq 'MSVCP60.dll' -and (Test-Path (Join-Path $sysW $n))) {
+                  Copy-Item (Join-Path $sysW $n) (Join-Path $nsisPath $n) -Force
+                }
+              }
+              if ($missing32.Count -gt 0) {
+                Write-Output ("[wocnb-ci] 32 位依赖缺失: " + ($missing32 -join ', '))
               }
               # 试跑：能出版本号说明 makensis 可用（排除缺 DLL / 被杀软隔离）
               $verOut = & $rootExe /VERSION 2>&1
@@ -871,16 +886,23 @@ v*:
               rustup target add x86_64-pc-windows-msvc
               if ($LASTEXITCODE) { exit $LASTEXITCODE }
             }
-            # 打包器选择：makensis 可用 → nsis（体积小、启动快、updater 首选）；
-            # 不可用（缺 MSVCP60 等 32 位运行库的精简镜像）→ 自动降级 msi（WiX，
-            # .NET Framework 实现，不依赖 VC6 运行库）。两条线产物都由
-            # collect-windows.ps1 统一收集，下游 checksums/upload 无需区分。
+            # 打包器选择（三级降级）：
+            #   1) makensis 可用 → nsis（体积小、updater 首选）
+            #   2) 正式版（版本号无预发布后缀）→ msi（WiX 实现，不依赖 VC6 运行库）
+            #   3) 预发布版且 makensis 不可用 → --no-bundle 只出裸 exe：
+            #      WiX 拒绝非纯数字的预发布标识（0.1.0-rc.N 里的 rc 会被拒），
+            #      所以 rc 阶段先用绿色链路 + 可执行产物保证链路验证完整。
+            $appVer = (Get-Content 'src-tauri\tauri.conf.json' -Raw | ConvertFrom-Json).version
+            $isPreRelease = ("$appVer" -match '-')
             if ($nsisOk) {
               Write-Output '[wocnb-ci] 使用 NSIS 打包'
               pnpm exec tauri build --target x86_64-pc-windows-msvc --bundles nsis
-            } else {
-              Write-Output '[wocnb-ci] 警告: makensis 不可用，降级用 MSI(WiX) 打包'
+            } elseif (-not $isPreRelease) {
+              Write-Output '[wocnb-ci] 警告: makensis 不可用，正式版改用 MSI(WiX) 打包'
               pnpm exec tauri build --target x86_64-pc-windows-msvc --bundles msi
+            } else {
+              Write-Output '[wocnb-ci] 警告: makensis 不可用且当前为预发布版（WiX 不支持非数字预发布标识），只产出裸 exe'
+              pnpm exec tauri build --target x86_64-pc-windows-msvc --no-bundle
             }
             if ($LASTEXITCODE) { exit $LASTEXITCODE }
             powershell -NoProfile -File scripts/ci/collect-windows.ps1 -Triple x86_64-pc-windows-msvc -Arch x64

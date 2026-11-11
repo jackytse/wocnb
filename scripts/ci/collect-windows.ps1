@@ -56,6 +56,7 @@ try {
     #      MSI  → src-tauri\target\<triple>\release\bundle\msi\*.msi
     # ------------------------------------------------------------------
     $bundleRoot = Join-Path $RepoRoot "src-tauri\target\$Triple\release\bundle"
+    $relDir = Join-Path $RepoRoot "src-tauri\target\$Triple\release"
     $srcFile = $null
     $ext = $null
 
@@ -71,7 +72,7 @@ try {
         }
     }
 
-    # NSIS 产物缺失时回退 MSI（降级打包路径）
+    # NSIS 产物缺失时回退 MSI（正式版降级打包路径）
     if (-not $srcFile) {
         $msiDir = Join-Path $bundleRoot 'msi'
         if (Test-Path $msiDir) {
@@ -83,14 +84,35 @@ try {
         }
     }
 
+    # 最后回退裸 exe（--no-bundle 产出，预发布版在 makensis 不可用时的产物）：
+    # 优先取主程序 exe，排除带构建脚本后缀的辅助 exe
     if (-not $srcFile) {
-        throw "在 $bundleRoot 下既没找到 nsis\*-setup.exe 也没找到 msi\*.msi，请确认 tauri build 的 --bundles 参数"
+        $exeCandidates = @()
+        if (Test-Path $relDir) {
+            $exeCandidates = @(Get-ChildItem -Path $relDir -Filter '*.exe' -File |
+                Where-Object { $_.Name -notmatch '(?i)(setup|installer|bundle)' })
+        }
+        if ($exeCandidates.Count -ge 1) {
+            $srcFile = $exeCandidates | Sort-Object Length -Descending | Select-Object -First 1
+            $ext = '.exe'
+            Write-Host "警告：未找到安装包，收集裸可执行文件（构建节点缺 NSIS 运行库）" -ForegroundColor Yellow
+        }
+    }
+
+    if (-not $srcFile) {
+        throw "在 $bundleRoot 与 $relDir 下都没找到可收集的产物（nsis 的 *-setup.exe / msi 的 *.msi / 裸 exe），请确认 tauri build 的参数"
     }
 
     # ------------------------------------------------------------------
     # 3) 复制并按统一命名规范重命名
+    #    裸 exe（--no-bundle）不加 -setup 后缀，避免用户误以为是安装程序
     # ------------------------------------------------------------------
-    $destName = "wocnb-$Version-windows-$Arch-setup$ext"
+    $isBareExe = ($ext -eq '.exe' -and $srcFile.Directory.Name -eq 'release')
+    if ($isBareExe) {
+        $destName = "wocnb-$Version-windows-$Arch-portable.exe"
+    } else {
+        $destName = "wocnb-$Version-windows-$Arch-setup$ext"
+    }
     $outPath = Join-Path $RepoRoot $OutDir
     New-Item -ItemType Directory -Force -Path $outPath | Out-Null
     $destPath = Join-Path $outPath $destName
