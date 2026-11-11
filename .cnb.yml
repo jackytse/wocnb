@@ -685,6 +685,14 @@ v*:
               npm i -g pnpm@12.14.0 --force
               if ($LASTEXITCODE) { exit $LASTEXITCODE }
             }
+            # npm 全局 bin 兜底（rc.12 实测）：npm -g 装的 pnpm.cmd 在
+            # %APPDATA%\npm（即 npm prefix），服务账户的 PATH 往往没有这个
+            # 目录（npm.cmd 本身在 nodejs 安装目录、能找到不代表全局 bin 可见）
+            $npmPrefix = & npm config get prefix
+            if ($npmPrefix -and (Test-Path $npmPrefix)) {
+              if ($env:PATH -notlike "*$npmPrefix*") { $env:PATH = "$npmPrefix;$env:PATH" }
+              Write-Output "[wocnb-ci] npm 全局 bin 已补进 PATH: $npmPrefix"
+            }
             pnpm -v
             if ($LASTEXITCODE) { exit $LASTEXITCODE }
             node -v
@@ -716,6 +724,12 @@ v*:
                 Write-Output "[wocnb-ci] 从兜底路径启用 cargo: $d"
                 break
               }
+            }
+            # pnpm 兜底：npm 全局 bin（%APPDATA%\npm）可能不在服务账户 PATH
+            # 里（rc.12 实测 install 阶段同坑）；pnpm exec tauri 依赖它
+            $npmPrefix2 = & npm config get prefix
+            if ($npmPrefix2 -and (Test-Path $npmPrefix2) -and ($env:PATH -notlike "*$npmPrefix2*")) {
+              $env:PATH = "$npmPrefix2;$env:PATH"
             }
             # target 用 junction 指向宿主机缓存目录，避免每次冷编译
             $cache = Join-Path $env:USERPROFILE '.cnb-cache\win-target'
