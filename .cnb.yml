@@ -762,18 +762,26 @@ v*:
                   curl.exe -sSL --retry 2 --connect-timeout 15 -o $zip $u
                   if ($LASTEXITCODE -eq 0 -and (Test-Path $zip) -and (Get-Item $zip).Length -gt 1MB) { $nsisOk = $true; break }
                 }
-                if (-not $nsisOk) { Write-Output '[wocnb-ci] 错误: NSIS 工具包多镜像均下载失败'; exit 1 }
-                # zip 顶层目录是 nsis-3.13，解压后改名 NSIS（与 bundler 缓存结构一致）
-                if (Test-Path $nsisPath) { Remove-Item -Recurse -Force $nsisPath }
-                $extractDir = Join-Path $toolsPath 'nsis-3.13'
-                if (Test-Path $extractDir) { Remove-Item -Recurse -Force $extractDir }
-                Expand-Archive -Path $zip -DestinationPath $toolsPath -Force
-                Rename-Item $extractDir 'NSIS'
-                Remove-Item $zip -Force
-                Write-Output '[wocnb-ci] NSIS 3.13 预置完成'
+                if (-not $nsisOk) {
+                  # 软失败：镜像变量已设，bundler 自己会走镜像下载，不阻断构建
+                  Write-Output '[wocnb-ci] 警告: NSIS 预置下载失败，交由 bundler 走镜像下载'
+                } else {
+                  # zip 顶层目录是 nsis-3.13，解压后改名 NSIS（与 bundler 缓存结构一致）
+                  if (Test-Path $nsisPath) { Remove-Item -Recurse -Force $nsisPath }
+                  $extractDir = Join-Path $toolsPath 'nsis-3.13'
+                  if (Test-Path $extractDir) { Remove-Item -Recurse -Force $extractDir }
+                  Expand-Archive -Path $zip -DestinationPath $toolsPath -Force
+                  Rename-Item $extractDir 'NSIS'
+                  Remove-Item $zip -Force
+                  Write-Output '[wocnb-ci] NSIS 3.13 预置完成'
+                }
               }
               if (-not (Test-Path $dllPath)) {
-                # tauri 插件 dll 缺失：同样按镜像优先顺序下载
+                # tauri 插件 dll 缺失：同样按镜像优先顺序下载。
+                # 注意 dll 只有约 34KB（rc.14 实测因阈值设成 100KB 而误判失败），
+                # 所以用「体积 >10KB + SHA1 与官方值一致」双重校验（官方值取自
+                # tauri-bundler 2.10.4 源码 NSIS_TAURI_UTILS_SHA1）
+                $dllSha1 = '75197FEE3C6A814FE035788D1C34EAD39349B860'
                 $dllOk = $false
                 New-Item -ItemType Directory -Force -Path (Split-Path $dllPath) | Out-Null
                 foreach ($u in @(
@@ -783,9 +791,16 @@ v*:
                 )) {
                   Write-Output "[wocnb-ci] 下载 nsis_tauri_utils.dll: $u"
                   curl.exe -sSL --retry 2 --connect-timeout 15 -o $dllPath $u
-                  if ($LASTEXITCODE -eq 0 -and (Test-Path $dllPath) -and (Get-Item $dllPath).Length -gt 100KB) { $dllOk = $true; break }
+                  if ($LASTEXITCODE -ne 0 -or -not (Test-Path $dllPath) -or (Get-Item $dllPath).Length -lt 10KB) { continue }
+                  $got = (Get-FileHash $dllPath -Algorithm SHA1).Hash
+                  if ($got -eq $dllSha1) { $dllOk = $true; break }
+                  Write-Output "[wocnb-ci] dll SHA1 不匹配（$got），换下一个下载源"
                 }
-                if (-not $dllOk) { Write-Output '[wocnb-ci] 错误: nsis_tauri_utils.dll 多镜像均下载失败'; exit 1 }
+                if (-not $dllOk) {
+                  # 软失败：删掉残留坏文件，交给 bundler 走镜像变量自行下载
+                  if (Test-Path $dllPath) { Remove-Item -Force $dllPath }
+                  Write-Output '[wocnb-ci] 警告: dll 预置失败，交由 bundler 走镜像下载'
+                }
               }
             }
             # target 用 junction 指向宿主机缓存目录，避免每次冷编译
