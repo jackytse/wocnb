@@ -631,6 +631,19 @@ v*:
               Write-Output '[wocnb-ci] 装完请重启 runner 进程（或重启机器），确保新 PATH 对 runner 生效'
               exit 1
             }
+            # MSVC 提醒（只警告不阻断）：Tauri 在 Windows 链接时依赖 VS Build Tools
+            # 的 link.exe，缺失会在 cargo 链接阶段才报错、且错误信息很难指向根因。
+            # 这里用 vswhere 提前探测，缺了就打印明确指引（不 exit，避免误伤
+            # 使用 GNU toolchain 的环境）。
+            $vswhere = Join-Path ${env:ProgramFiles(x86)} 'Microsoft Visual Studio\Installer\vswhere.exe'
+            $vcOk = $false
+            if (Test-Path $vswhere) {
+              $vcPath = & $vswhere -latest -products * -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath
+              if ($vcPath) { $vcOk = $true }
+            }
+            if (-not $vcOk) {
+              Write-Output '[wocnb-ci] 警告: 未检测到 VS Build Tools 的 MSVC C++ 生成工具，tauri 链接阶段会失败。请安装 VS 2022 Build Tools 并勾选「使用 C++ 的桌面开发」'
+            }
             # Node 版本检查：rolldown（vite 构建链）要求 ^20.19 || >=22.12，
             # 版本不满足时 pnpm 会静默跳过其平台原生可选依赖，到 build 才炸
             # （Mac 节点 rc.6 实测过同样的坑）。统一要求 >=22.12。
