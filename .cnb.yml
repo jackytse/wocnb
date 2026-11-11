@@ -619,6 +619,30 @@ v*:
         - name: install
           script: |
             $ErrorActionPreference = 'Stop'
+            # rust PATH 兜底（rc.11 实测）：runner 重启后仍报 rustc 缺失，推测
+            # runner 以服务账户运行，读不到登录用户的 PATH（rustup 默认装在
+            # %USERPROFILE%\.cargo\bin）。与 Mac 线同思路：主动探测常见安装位
+            # 置，命中即插入 PATH；rustup shim 依赖 RUSTUP_HOME / CARGO_HOME，
+            # 服务账户的 USERPROFILE 不对时需一并显式指定。
+            $rustCandidates = @("$env:USERPROFILE\.cargo\bin", 'C:\cargo\bin')
+            $rustCandidates += @(Get-ChildItem 'C:\Users' -Directory -ErrorAction SilentlyContinue |
+              ForEach-Object { Join-Path $_.FullName '.cargo\bin' })
+            foreach ($d in $rustCandidates) {
+              if ($d -and (Test-Path (Join-Path $d 'rustc.exe'))) {
+                if ($env:PATH -notlike "*$d*") { $env:PATH = "$d;$env:PATH" }
+                # rustc 多半是 rustup 的 shim，需要 RUSTUP_HOME（默认在用户家
+                # 目录 .rustup）；服务账户下默认推断会指错，显式指定
+                $rustHome2 = Split-Path (Split-Path $d)      # ...\ .cargo\bin → 用户家目录
+                if (-not $env:RUSTUP_HOME -and (Test-Path (Join-Path $rustHome2 '.rustup'))) {
+                  $env:RUSTUP_HOME = Join-Path $rustHome2 '.rustup'
+                }
+                if (-not $env:CARGO_HOME -and (Test-Path (Join-Path $rustHome2 '.cargo'))) {
+                  $env:CARGO_HOME = Join-Path $rustHome2 '.cargo'
+                }
+                Write-Output "[wocnb-ci] 从兜底路径启用 rust: $d"
+                break
+              }
+            }
             # 环境预检：一次性列出缺失工具。rc.8 实测节点缺 corepack（node 可能
             # 整个没装），逐个试探会一关一关撞、来回发版浪费版本号，先报全。
             $missing = @()
@@ -629,6 +653,7 @@ v*:
               Write-Output "[wocnb-ci] 节点缺少工具: $($missing -join ', ')"
               Write-Output '[wocnb-ci] 安装指引: git https://git-scm.com ; Node.js LTS(含 npm+corepack) https://nodejs.org ; rustc https://rustup.rs (默认选项即可)'
               Write-Output '[wocnb-ci] 装完请重启 runner 进程（或重启机器），确保新 PATH 对 runner 生效'
+              Write-Output "[wocnb-ci] 当前 PATH=$env:PATH"
               exit 1
             }
             # MSVC 提醒（只警告不阻断）：Tauri 在 Windows 链接时依赖 VS Build Tools
@@ -672,6 +697,26 @@ v*:
         - name: build-x64
           script: |
             $ErrorActionPreference = 'Stop'
+            # rust PATH 兜底：与 install 同源的问题（runner 服务账户读不到
+            # 登录用户 PATH），本阶段是独立脚本进程，需重新探测一遍；
+            # tauri build 内部会调 cargo，缺它必炸
+            $rustCandidates = @("$env:USERPROFILE\.cargo\bin", 'C:\cargo\bin')
+            $rustCandidates += @(Get-ChildItem 'C:\Users' -Directory -ErrorAction SilentlyContinue |
+              ForEach-Object { Join-Path $_.FullName '.cargo\bin' })
+            foreach ($d in $rustCandidates) {
+              if ($d -and (Test-Path (Join-Path $d 'cargo.exe'))) {
+                if ($env:PATH -notlike "*$d*") { $env:PATH = "$d;$env:PATH" }
+                $rustHome2 = Split-Path (Split-Path $d)
+                if (-not $env:RUSTUP_HOME -and (Test-Path (Join-Path $rustHome2 '.rustup'))) {
+                  $env:RUSTUP_HOME = Join-Path $rustHome2 '.rustup'
+                }
+                if (-not $env:CARGO_HOME -and (Test-Path (Join-Path $rustHome2 '.cargo'))) {
+                  $env:CARGO_HOME = Join-Path $rustHome2 '.cargo'
+                }
+                Write-Output "[wocnb-ci] 从兜底路径启用 cargo: $d"
+                break
+              }
+            }
             # target 用 junction 指向宿主机缓存目录，避免每次冷编译
             $cache = Join-Path $env:USERPROFILE '.cnb-cache\win-target'
             New-Item -ItemType Directory -Force -Path $cache | Out-Null

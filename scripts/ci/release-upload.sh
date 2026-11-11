@@ -135,54 +135,70 @@ fi
 
 # ---------------------------------------------------------------------------
 # 3) 逐个文件上传：取上传地址 → PUT 字节 → 确认
+#
+# rc.11 实测：自托管节点上传大文件时偶发 TLS 断链（curl 56, sslv3 alert
+# bad record mac）。所以每个文件整体最多重试 3 次，且每次重试都重新申请
+# 上传地址——上传地址只该用一次，断链后复用旧地址行为不可预期。
 # ---------------------------------------------------------------------------
+MAX_ATTEMPTS=3
 FAILED=0
 for f in "${FILES[@]}"; do
   NAME="$(basename "$f")"
   SIZE="$(wc -c < "$f" | tr -d ' ')"
-  echo "==> 上传 ${NAME}（${SIZE} 字节）"
 
-  BODY="{\"asset_name\":\"${NAME}\",\"size\":${SIZE},\"overwrite\":true}"
-  CODE="$(curl -sS -o "$RESP_FILE" -w '%{http_code}' -X POST "${H[@]}" \
-    -H "Content-Type: application/json" -d "$BODY" \
-    "${API}/-/releases/${REL_ID}/asset-upload-url" || true)"
+  OK=0
+  for attempt in $(seq 1 "$MAX_ATTEMPTS"); do
+    [ "$attempt" -gt 1 ] && echo "    第 ${attempt}/${MAX_ATTEMPTS} 次重试上传 ${NAME}…"
+    echo "==> 上传 ${NAME}（${SIZE} 字节）"
 
-  if [ "$CODE" != "200" ] && [ "$CODE" != "201" ]; then
-    echo "    错误：申请上传地址失败（HTTP ${CODE}）" >&2
-    head -c 2000 "$RESP_FILE" >&2 || true
-    echo >&2
-    FAILED=$((FAILED + 1))
-    continue
-  fi
+    BODY="{\"asset_name\":\"${NAME}\",\"size\":${SIZE},\"overwrite\":true}"
+    CODE="$(curl -sS -o "$RESP_FILE" -w '%{http_code}' -X POST "${H[@]}" \
+      -H "Content-Type: application/json" -d "$BODY" \
+      "${API}/-/releases/${REL_ID}/asset-upload-url" || true)"
 
-  UPLOAD_URL="$(json_field upload_url < "$RESP_FILE" || true)"
-  VERIFY_URL="$(json_field verify_url < "$RESP_FILE" || true)"
-  if [ -z "$UPLOAD_URL" ] || [ -z "$VERIFY_URL" ]; then
-    echo "    错误：响应中缺少 upload_url / verify_url" >&2
-    head -c 2000 "$RESP_FILE" >&2 || true
-    echo >&2
-    FAILED=$((FAILED + 1))
-    continue
-  fi
+    if [ "$CODE" != "200" ] && [ "$CODE" != "201" ]; then
+      echo "    错误：申请上传地址失败（HTTP ${CODE}）" >&2
+      head -c 2000 "$RESP_FILE" >&2 || true
+      echo >&2
+      continue    # 申请地址失败 → 直接进入下一次重试
+    fi
 
-  PUT_CODE="$(curl -sS -o /dev/null -w '%{http_code}' -X PUT \
-    -H "Content-Type: application/octet-stream" --data-binary "@${f}" "$UPLOAD_URL" || true)"
-  if [ "$PUT_CODE" != "200" ] && [ "$PUT_CODE" != "201" ] && [ "$PUT_CODE" != "204" ]; then
-    echo "    错误：上传字节失败（HTTP ${PUT_CODE}）" >&2
-    FAILED=$((FAILED + 1))
-    continue
-  fi
+    UPLOAD_URL="$(json_field upload_url < "$RESP_FILE" || true)"
+    VERIFY_URL="$(json_field verify_url < "$RESP_FILE" || true)"
+    if [ -z "$UPLOAD_URL" ] || [ -z "$VERIFY_URL" ]; then
+      echo "    错误：响应中缺少 upload_url / verify_url" >&2
+      head -c 2000 "$RESP_FILE" >&2 || true
+      echo >&2
+      continue
+    fi
 
-  VERIFY_CODE="$(curl -sS -o "$RESP_FILE" -w '%{http_code}' -X POST "${H[@]}" "$VERIFY_URL" || true)"
-  if [ "$VERIFY_CODE" != "200" ] && [ "$VERIFY_CODE" != "201" ] && [ "$VERIFY_CODE" != "204" ]; then
-    echo "    错误：确认上传失败（HTTP ${VERIFY_CODE}）" >&2
-    head -c 2000 "$RESP_FILE" >&2 || true
-    echo >&2
-    FAILED=$((FAILED + 1))
-    continue
-  fi
+    # PUT 字节流：偶发 TLS 断链在这步最多见，curl 自身先做快速重试
+    # （--retry-all-errors 让网络类错误也参与重试；curl < 7.71 不认识该
+    #  参数，节点 curl 过旧时会报参数错误 → 这里用 || true 兜底降级为单发）
+    PUT_CODE="$(curl -sS --retry 3 --retry-delay 2 --retry-all-errors \
+      -o /dev/null -w '%{http_code}' -X PUT \
+      -H "Content-Type: application/octet-stream" --data-binary "@${f}" "$UPLOAD_URL" 2>/dev/null \
+      || curl -sS -o /dev/null -w '%{http_code}' -X PUT \
+      -H "Content-Type: application/octet-stream" --data-binary "@${f}" "$UPLOAD_URL" || true)"
+    if [ "$PUT_CODE" != "200" ] && [ "$PUT_CODE" != "201" ] && [ "$PUT_CODE" != "204" ]; then
+      echo "    错误：上传字节失败（HTTP ${PUT_CODE}）" >&2
+      continue
+    fi
 
-  echo "    完成"
+    VERIFY_CODE="$(curl -sS -o "$RESP_FILE" -w '%{http_code}' -X POST "${H[@]}" "$VERIFY_URL" || true)"
+    if [ "$VERIFY_CODE" != "200" ] && [ "$VERIFY_CODE" != "201" ] && [ "$VERIFY_CODE" != "204" ]; then
+      echo "    错误：确认上传失败（HTTP ${VERIFY_CODE}）" >&2
+      head -c 2000 "$RESP_FILE" >&2 || true
+      echo >&2
+      continue
+    fi
+
+    echo "    完成"
+    OK=1
+    break
+  done
+
+  [ "$OK" -ne 1 ] && FAILED=$((FAILED + 1))
 done
 
 if [ "$FAILED" -ne 0 ]; then
