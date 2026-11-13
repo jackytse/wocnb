@@ -150,7 +150,7 @@ pnpm test        # ④
 | --- | --- | --- |
 | macOS arm64 | `macos-latest`（原生） | `.app` + `.dmg` |
 | macOS x64 | `macos-latest`（交叉编译 `x86_64-apple-darwin`） | `.app` + `.dmg` |
-| Windows x64 | `windows-latest` | `.exe`（NSIS）+ `.msi`（WiX） |
+| Windows x64 | `windows-latest` | `.exe`（NSIS；**预发布版仅 NSIS**，正式版加 `.msi`，见下方要点） |
 | Linux x64 | `ubuntu-22.04` | `.deb` + `.AppImage` |
 
 实现要点（改前必读）：
@@ -158,6 +158,7 @@ pnpm test        # ④
 - 打包用 `--bundles` 显式覆盖 `tauri.conf.json` 的 `targets: "app"`（该值只对 macOS 有意义，是本机打包脚本的历史遗留约定）。
 - macOS **无签名证书**：`signingIdentity: "-"` 为 adhoc 签名，产物可用但未公证，用户首次打开需「右键 → 打开」绕过 Gatekeeper。
 - 预发布 tag（含 `-`，如 `v0.1.0-rc.1`）自动标记为 pre-release，不占 latest。
+- **Windows 预发布版不出 MSI**：WiX 硬性要求版本预发布标识纯数字且 ≤65535，`-rc.N` 必被拒收（流水线内按版本动态解析，见 release.yml 的「解析 Windows 打包目标」步骤）。
 - 每个平台除上传 Release 外，还会把 `bundle/` 产物上传为 workflow Artifact（保留 7 天），dry-run 验证就靠它取包。
 
 
