@@ -154,11 +154,17 @@ jobs:
           workspaces: src-tauri
           prefix-key: rust-${{ matrix.label }}
 
-      # 打包 + 发布一体：tauri-action 执行 tauri build（带 --bundles 覆盖配置），
-      # tag 触发时把产物上传到 GitHub Release；dry-run 时 includeRelease=false 只构建。
-      # · tagName 在 dry-run 下传占位值（includeRelease=false 时不使用，仅满足入参非空）；
+      # 打包 + 发布一体：tauri-action 执行 tauri build（带 --bundles 覆盖配置）。
+      #
+      # ⚠️ 两个关键入参行为（已核对部署版 @v0 源码，与 dev 分支不同）：
+      #   · @v0 只在 includeRelease=true 时才执行构建（dev 分支无条件构建）。
+      #     所以这里恒传 true；dry-run 与正式发版的区别改由 tagName 承担：
+      #     tagName 为空 → action 构建后打印 "skipping all uploads"，不建 Release；
+      #     tagName 为 tag 名 → getOrCreateRelease 创建 Release 并上传附件。
+      #   · @v0 不支持 includeTarball 入参（传入只产生 warning），已移除。
       # · prerelease：tag 含 "-"（如 v0.1.0-rc.23）→ 预发布，不占 latest；
-      # · includeTarball=false：GitHub 会自动附源码包，无需重复传；
+      # · retryAttempts=3：四个矩阵任务并发创建同一 Release 有竞态（422），
+      #   重试可吸收这种瞬时冲突；
       # · includeUpdaterJson=false：本项目未接入 tauri updater，不生成 latest.json。
       - name: Build & release（tauri-action）
         uses: tauri-apps/tauri-action@v0
@@ -166,13 +172,13 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
           projectPath: .
-          tagName: ${{ github.ref_type == 'tag' && github.ref_name || format('dry-run-{0}', github.run_id) }}
+          includeRelease: true
+          tagName: ${{ github.ref_type == 'tag' && github.ref_name || '' }}
           releaseName: ${{ github.ref_type == 'tag' && format('WOCNB {0}', github.ref_name) || '' }}
           releaseDraft: false
           prerelease: ${{ github.ref_type == 'tag' && contains(github.ref_name, '-') }}
-          includeRelease: ${{ github.ref_type == 'tag' }}
-          includeTarball: false
           includeUpdaterJson: false
+          retryAttempts: 3
           args: ${{ matrix.args }}
 
       # 产物同时上传为 workflow Artifact：dry-run 验证靠它取包，发版时也便于
