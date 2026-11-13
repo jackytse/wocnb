@@ -1,0 +1,116 @@
+classDiagram
+  class CnbAuth {
+    <<module>>
+    +cnbFetch~T~(path, options) Promise~T~
+    +cnbFetchText(path, options) Promise~Text~
+    +CnbApiError
+    +parseMissingScope(errmsg) string
+  }
+  class UseCnbRepo {
+    <<module>>
+    +fetchRepoDetail(repoPath) RepoDetail
+    +fetchBuildLogs(repoPath, opts) BuildLogItemList
+    +fetchBuildStatus(repoPath, sn) BuildStatus
+    +fetchCommitStatuses(repoPath, commitish) CommitStatusItemList
+    +fetchCompare(repoPath, baseHead) CompareResult
+    +triggerBuild(repoPath, opts) BuildTriggerResult
+    +stopBuild(repoPath, sn) BuildCommonResult
+    +deleteBuildLogs(repoPath, sn) BuildCommonResult
+  }
+  class UseCnbRepoManage {
+    <<module>>
+    +patchRepo(repoPath, input) void
+    +archiveRepo(slug) void
+    +unarchiveRepo(slug) void
+    +createRepo(slug, input) void
+  }
+  class UseCnbReleases {
+    <<module>>
+    +fetchReleases(repoPath, opts) ReleaseItemList
+    +fetchLatestRelease(repoPath) ReleaseItem
+    +fetchRelease(repoPath, releaseId) ReleaseItem
+    +createRelease(repoPath, input) ReleaseItem
+    +updateRelease(repoPath, releaseId, patch) void
+    +deleteRelease(repoPath, releaseId) void
+    +normalizeRelease(raw, repoPath) ReleaseItem
+  }
+  class UseCnbPackages {
+    <<module>>
+    +fetchPackages(slug, opts) PackageItemList
+    +fetchPackageTags(slug, type, name, opts) PackageTagItemList
+    +fetchPackageTag(slug, type, name, tag, opts) PackageTagDetail
+    +fetchPackageProvenance(slug, type, name, tag) ProvenanceInfo
+    +deletePackage(slug, type, name) void
+    +deletePackageTag(slug, type, name, tag) void
+    +pickByType~T~(raw, type) T
+  }
+  class UseCnbOrg {
+    <<module>>
+    +fetchOrgProfile(group) OrgProfile
+    +fetchSubGroups(slug, opts) SubGroupItemList
+    +fetchPinnedRepos(slug) PinnedRepoItemList
+    +updatePinnedRepos(slug, names) PinnedRepoItemList
+    +fetchGroupMemberAccessLevel(group, username) stringList
+    +fetchGroupInheritMembers(group, opts) InheritMemberGroupList
+  }
+  class UseCnbSocial {
+    <<module>>
+    +fetchFollowers(username, opts) FollowUserList
+    +fetchFollowing(username, opts) FollowUserList
+    +fetchMyStarredRepos(opts) CnbRepoList
+    +fetchRepoStarUsers(slug, opts) StarUserPage
+    +fetchUserPinnedRepos(username) PinnedRepoItemList
+  }
+  class UseCnbExplore {
+    <<module>>
+    +searchPublicRepos(key, opts) PinnedRepoItemList
+    +fetchRank(period, opts) RankResult
+    +fetchRankLanguages(rankType, date) stringList
+  }
+  class UseRepoRoute {
+    <<module>>
+    +tab() RepoTab
+    +release() string
+    +ptype() PackageType
+    +pname() string
+    +ptag() string
+    +switchTab(tab) void
+    +openRelease(id) void
+    +openPackage(name, type) void
+    +openPackageTag(name, type, tag) void
+  }
+  class TauriDownload {
+    <<module>>
+    +downloadArchive(url, fileName) DownloadResult
+    +isTauri() boolean
+  }
+  class ReleaseItem
+  class ReleaseAsset
+  class PackageItem
+  class PackageTagItem
+  class PackageTagDetail
+  class ProvenanceInfo
+  class OrgProfile
+  class PinnedRepoItem
+  class RankItem
+  class CommitStatusItem
+  class CompareResult
+  class RepoDetail
+
+  CnbAuth <.. UseCnbRepo : uses
+  CnbAuth <.. UseCnbRepoManage : uses
+  CnbAuth <.. UseCnbReleases : uses
+  CnbAuth <.. UseCnbPackages : uses
+  CnbAuth <.. UseCnbOrg : uses
+  CnbAuth <.. UseCnbSocial : uses
+  CnbAuth <.. UseCnbExplore : uses
+  UseCnbReleases ..> ReleaseItem : produces
+  ReleaseItem *-- ReleaseAsset
+  UseCnbPackages ..> PackageItem : produces
+  UseCnbPackages ..> PackageTagDetail : produces
+  PackageTagDetail --|> PackageTagItem
+  UseCnbOrg ..> OrgProfile : produces
+  UseCnbOrg ..> PinnedRepoItem : produces
+  UseCnbExplore ..> RankItem : produces
+  RankItem --|> PinnedRepoItem
+  UseRepoRoute ..> TauriDownload : 下载菜单使用

@@ -39,3 +39,9 @@ tsconfig.node.tsbuildinfo
 # （scripts/ci/pack-meta.sh 默认 --out release，package-source.sh 示例里常用 --out out）
 release/
 out/
+
+# 本地分析上下文（swagger.json 约 1.1MB，仅作开发期比对用，不入库）
+.workbuddy/context/
+
+# 每日巡检等自动化任务的本地配置与运行记录（含本机路径等环境信息，不入库）
+.workbuddy/memory/automations/

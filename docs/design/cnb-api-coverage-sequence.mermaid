@@ -1,0 +1,187 @@
+%% CNB API 覆盖增量 · 关键调用时序（对应 docs/design/cnb-api-coverage-design.md §6）
+%% 用法：按 `---` 分隔，每段可单独粘到支持 mermaid 的渲染器
+
+---
+%% ============ 6.1 触发构建（含轮询刷新）============
+sequenceDiagram
+  autonumber
+  actor U as 用户
+  participant L as RepoBuildList.vue
+  participant M as BuildTriggerModal.vue
+  participant R as useCnbRepo
+  participant A as CnbAuth (cnbFetch)
+  participant T as Rust cnb_http_request
+  participant C as CNB API
+  participant W as useCnbBuildWatch
+
+  U->>L: 点击「触发构建」
+  L->>M: open=true（分支列表由 fetchRepoBranches 提供）
+  U->>M: 选分支 + 可选标题 → 确认
+  M->>M: 校验 branch 非空
+  M->>R: triggerBuild(repoPath, {branch, title})
+  R->>A: cnbFetch(`/{repo}/-/build/start`, POST, body)
+  Note over R: body = {branch, event:'api_trigger', sync:'false', title}
+  A->>A: 附加 Bearer + Content-Type: application/json
+  A->>T: invoke('cnb_http_request')
+  T->>T: 白名单校验 https://api.cnb.cool/ (lib.rs:176)
+  T->>C: POST /{repo}/-/build/start
+  C-->>T: 200 {sn, buildLogUrl, message, success}
+  T-->>A: {status, body(text)}
+  A->>A: status!=2xx → throw CnbApiError(kind)
+  A-->>R: BuildResult
+  alt success === false
+    R-->>M: BuildTriggerResult{success:false, message}
+    M-->>U: toast.error(message)（HTTP 200 也可能失败）
+  else success === true
+    R-->>M: {sn, buildLogUrl}
+    M->>M: open=false
+    M-->>L: emit('triggered', sn)
+    L->>L: 乐观插入占位行（status=pending, sn）
+    L->>R: fetchBuildLogs(repoPath, {page:1})
+    R->>C: GET /{repo}/-/build/logs?page=1
+    C-->>R: BuildLogItem[]
+    R-->>L: 新列表
+    L->>L: 滚动到 sn 行并高亮 2s
+    L->>W: 构建看门狗已在轮询（initBuildWatcher），状态自动更新
+  end
+  Note over L,W: 构建状态由 useCnbBuildWatch 的定时器轮询（:1158）<br/>本页面不新增轮询，避免双通道重复请求
+
+---
+%% ============ 6.2 Release 创建（含写操作二次确认）============
+sequenceDiagram
+  autonumber
+  actor U as 用户
+  participant P as RepoReleases.vue
+  participant F as ReleaseFormModal.vue
+  participant D as ConfirmDialog.vue
+  participant R as useCnbReleases
+  participant C as CNB API
+
+  U->>P: ?tab=releases（列表）
+  P->>R: fetchReleases(repoPath, {page:1, pageSize:20})
+  R->>C: GET /{repo}/-/releases?page=1&page_size=20
+  C-->>R: api.Release[]
+  R-->>P: ReleaseItem[]（snake→camel + 兜底）
+  P-->>U: 列表（tag/标题/时间/pre-release/latest 徽标）
+
+  U->>P: 点击「新建版本」
+  P->>F: open=true, mode='create'
+  U->>F: 填 tag_name / target_commitish / name / body / prerelease
+  F->>F: zod 校验（tag 必填、tag 格式 ^[A-Za-z0-9._/-]+$）
+  F->>R: createRelease(repoPath, input)
+  R->>C: POST /{repo}/-/releases (openapi.PostReleaseForm)
+  alt 201
+    C-->>R: api.Release
+    R-->>F: ReleaseItem
+    F-->>P: emit('created', item)
+    P->>R: fetchReleases() 重新拉首页
+    P-->>U: toast.success + 列表即时出现新版本
+  else 422/400（tag 已存在 / target 非法）
+    C-->>R: {errcode, errmsg}
+    R-->>F: CnbApiError(message=errmsg)
+    F-->>U: 表单内 inline 错误（不关弹窗，保留输入）
+  end
+
+  U->>P: 列表项 →「删除」
+  P->>D: open=true, typeToConfirm=tagName, confirmColor='error'
+  Note over D: 删除 Release 不删 git tag（swagger 明确）<br/>文案必须写清这一点
+  U->>D: 输入 tag 名 → 确认
+  D->>R: deleteRelease(repoPath, id)
+  R->>C: DELETE /{repo}/-/releases/{id}
+  C-->>R: 200
+  R-->>D: void
+  D-->>P: close
+  P->>R: fetchReleases()
+  P-->>U: 列表移除该项 + toast
+
+---
+%% ============ 6.3 下载链路（D2 裁决后）============
+sequenceDiagram
+  autonumber
+  actor U as 用户
+  participant M as RepoCodeDownloadMenu.vue
+  participant X as tauriDownload.ts
+  participant T as Rust cnb_download_archive
+  participant C as CNB API
+  participant FS as 系统下载目录
+
+  U->>M: 点「下载源码包」→ 选 zip / tar.gz
+  M->>M: 检查 detail.visibility !== 'Secret'（秘密仓库 swagger 明确禁止导出）
+  M->>M: ref = effectiveRef || head.name
+  M->>X: downloadArchive(url, `{repoName}-{ref}.zip`)
+  X->>X: isTauri()? '__TAURI_INTERNALS__' in window
+  alt 非 Tauri（浏览器调试）
+    X-->>M: {unsupported:true}
+    M-->>U: 提示"桌面端专属" + openUrl(仓库归档页)
+  else Tauri
+    X->>T: invoke('cnb_download_archive', {url, fileName, token})
+    T->>T: is_allowed_api_url(url) —— 必须 https://api.cnb.cool/
+    T->>T: sanitize_archive_name(fileName) → Some(safe) / None → Err
+    T->>T: dirs::download_dir() → 建目录 → 计算不重名路径
+    T->>T: 自行拼接 Authorization: Bearer {token}（不接受调用方 header map）
+    T->>C: GET archive（仅 Bearer + Accept，scope repo-code:r）
+    Note over T: native-tls + no_proxy + timeout 300s + redirect none
+    C-->>T: 200 Content-Type: application/zip（流式）
+    loop bytes_stream 逐 chunk（StreamExt::next，需 futures-util）
+      T->>FS: write `{name}.part`
+      T->>T: 累计字节 > 1 GiB → 中止
+    end
+    T->>FS: rename `{name}.part` → `{name}`
+    T-->>X: {path, bytes, contentType}
+    X-->>M: {ok:true, path, bytes}
+    M-->>U: toast.success("已保存到 {path}") + 「复制路径」
+  end
+  alt 下载失败
+    T-->>X: Err("缺少 repo-code:r 权限，无法下载")
+    X-->>M: {ok:false, message}
+    M-->>U: toast.error(message) + 「在浏览器打开」兜底
+  end
+
+---
+%% ============ 6.4 制品库三栏加载 ============
+sequenceDiagram
+  autonumber
+  actor U as 用户
+  participant V as RepoPackages.vue
+  participant Q as useCnbPackages
+  participant C as CNB API
+
+  U->>V: ?tab=packages（ptype 缺省归一 'all'）
+  V->>Q: fetchPackages(slug, {type:'all', page:1})
+  Q->>C: GET /{slug}/-/packages?type=all&page=1
+  alt 400（该部署不支持 all）
+    C-->>Q: 400
+    Q->>Q: 降级 fanout：PACKAGE_TYPES 去掉 all，并发 3 逐个请求
+    Q->>C: GET ?type=docker / npm / maven …（合并去重）
+  end
+  C-->>Q: dto.Package[]（扁平）
+  Q-->>V: PackageItem[]（左栏）
+
+  U->>V: 点某个制品
+  V->>V: openPackage(name, type) → ?ptype=..&pname=..
+  V->>Q: fetchPackageTags(slug, type, name)
+  Q->>C: GET /{slug}/-/packages/{type}/{name}/-/tags
+  C-->>Q: dto.Tag（多态：{package, docker:[...]} 或 {package, npm:[...]}）
+  Q->>Q: pickByType(raw, type) → 具体数组 → 归一化
+  Q-->>V: PackageTagItem[]（中栏）
+
+  U->>V: 点某个 tag
+  V->>V: openPackageTag(name, type, tag) → ?ptag=..
+  par 并行
+    V->>Q: fetchPackageTag(slug, type, name, tag, {arch})
+    Q->>C: GET …/tag/{tag}?arch=linux/amd64/v3（docker 必需）
+    C-->>Q: dto.TagDetail（多态）→ pickByType
+  and
+    V->>Q: fetchPackageProvenance(slug, type, name, tag)
+    Q->>C: GET …/tag/{tag}/provenance
+    C-->>Q: dto.Provenance → pickByType
+  end
+  Q-->>V: PackageTagDetail + ProvenanceInfo（右栏）
+  V-->>U: 三栏渲染（<1100px 降级为主从两级）
+
+  U->>V: 删除 tag（仅 canManage 时可见）
+  V->>V: ConfirmDialog(typeToConfirm=tagName)
+  V->>Q: deletePackageTag(...)
+  Q->>C: DELETE …/tag/{tag}
+  C-->>Q: 200
+  V->>Q: fetchPackageTags() 刷新中栏

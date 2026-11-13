@@ -119,10 +119,17 @@ wocnb/
 - 语言偏好、主题偏好均可在 **设置 → 语言 / 外观** 中调整，选择结果持久化到本地，重启后保留。
 - 主题在页面加载前由 `index.html` 的内联脚本应用，避免浅色闪屏。
 
+## 参与贡献
+
+欢迎提 Issue 与 PR！开发环境搭建、代码规范、分支与提交规范、PR 流程与审核标准见 [`CONTRIBUTING.md`](CONTRIBUTING.md)。
+
+速记版：从 `main` 切分支（kebab-case，**禁止 `v` 开头**）→ 本地 `build → typecheck → lint → test` 四连全绿（build 必须最先，生成 `*.d.ts`）→ push 后向 `main` 提 PR（标题符合 Conventional Commits，描述写清改了什么 / 为什么 / 怎么验证）→ CI 门禁 `ci-pr` 自动运行 → 评审通过后 Squash 合并。任意 PR 都会自动触发代码检查、测试与构建，无需手工触发。
+
 ## 文档索引
 
 | 文档 | 内容 |
 | --- | --- |
+| [`CONTRIBUTING.md`](CONTRIBUTING.md) | 贡献指南：环境搭建、代码规范、PR 流程与审核标准 |
 | [`docs/BRANCHING.md`](docs/BRANCHING.md) | 分支规范、版本与 tag 规范、发布操作手册、需在平台侧手动完成的设置 |
 | [`docs/design/cnb-pipeline-design.md`](docs/design/cnb-pipeline-design.md) | `.cnb.yml` 流水线设计与取舍依据（含差异裁决与风险表） |
 | [`docs/prd/group-terminology-prd.md`](docs/prd/group-terminology-prd.md) | 组织（Group）术语与相关页面需求 |
