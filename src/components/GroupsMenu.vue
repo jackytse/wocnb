@@ -22,11 +22,13 @@ import {
   cnbUser,
   cnbGroupManageUrl,
   cnbGroupLogoUrl,
+  cnbGroups,
   type CnbGroup,
-  CNB_GROUP_CREATE_URL,
 } from '../composables/useCnbAuth'
 // 图片内存缓存：组织图标转 data URL 后绘制，菜单重新挂载不再闪动
 import { cachedImageSrc, ensureCnbImages } from '../composables/useCnbImages'
+// 站内创建组织弹窗（POST /groups）：与组织页「新建子组织」共用同一组件
+import CreateGroupModal from './org/CreateGroupModal.vue'
 
 /**
  * 在系统浏览器中打开外部链接。
@@ -53,12 +55,22 @@ defineProps<{
 // 界面文案翻译（加载中/空态/失败重试/操作项均随语言切换）
 const { t } = useI18n()
 
-/** 用户所在的组织列表（登录后从 CNB 拉取） */
-const groups = ref<CnbGroup[]>([])
+/**
+ * 用户所在的组织列表 —— 读**共享状态** `cnbGroups`（useCnbAuth）。
+ *
+ * 为什么不用组件内 ref：创建组织 / 转移组织之后需要侧边栏即时刷新。
+ * 列表若只存在本组件内部，组织页那边无法触发刷新，只能等本组件重新挂载，
+ * 用户看到的现象就是"操作说成功了但下拉列表没变"，容易误以为失败而重试。
+ * 现在任何调用方执行 fetchCnbGroups() 都会更新 cnbGroups，这里自动跟随。
+ */
+const groups = computed(() => cnbGroups.value ?? [])
 /** 加载状态：首次加载未完成时按钮与菜单显示占位 */
 const loading = ref(false)
 /** 加载失败标记（如令牌权限不足、网络异常），菜单中提示重试入口 */
 const loadError = ref(false)
+
+/** 创建组织弹窗开关（站内创建，不再外跳 cnb.cool） */
+const createOpen = ref(false)
 // 当前选中组织使用共享状态 selectedGroup（来自 useCnbAuth）：
 // 首页等组织维度的页面需要读取同一份选中状态，不再声明本地 ref
 
@@ -71,14 +83,15 @@ async function loadGroups() {
   loading.value = true
   loadError.value = false
   try {
-    groups.value = await fetchCnbGroups()
+    // fetchCnbGroups 内部写入共享状态 cnbGroups，本组件的 groups 随之更新
+    const list = await fetchCnbGroups()
     // 默认选中第一个组织（保持上次选择：若仍存在则不重置）
-    if (!selectedGroup.value || !groups.value.some(g => g.id === selectedGroup.value?.id)) {
-      selectedGroup.value = groups.value[0] || null
+    if (!selectedGroup.value || !list.some(g => g.id === selectedGroup.value?.id)) {
+      selectedGroup.value = list[0] || null
     }
     // 预热组织图标到内存缓存（data URL）：图标就绪后，菜单每次打开
     // 重新挂载的 <img> 都同步绘制，彻底消除"打开菜单头像闪动"
-    void ensureCnbImages(groups.value.map(g => cnbGroupLogoUrl(g.path)))
+    void ensureCnbImages(list.map(g => cnbGroupLogoUrl(g.path)))
   }
   catch {
     loadError.value = true
@@ -171,11 +184,12 @@ const items = computed<DropdownMenuItem[][]>(() => {
     ? cnbGroupManageUrl(cnbUser.value.username)
     : 'https://cnb.cool'
   const actionSection: DropdownMenuItem[] = [{
+    // 站内创建组织（POST /groups）：桌面端已能直接建，外跳 cnb.cool 反而
+    // 让用户以为必须去网页操作。因此这一项不再带 target（无外链箭头）。
     label: t('groups.create'),
     icon: 'i-lucide-circle-plus',
-    target: '_blank',
     onSelect: () => {
-      void openExternal(CNB_GROUP_CREATE_URL)
+      createOpen.value = true
     },
   }, {
     label: t('groups.manage'),
@@ -236,5 +250,9 @@ const items = computed<DropdownMenuItem[][]>(() => {
         @click="loadGroups"
       />
     </UTooltip>
+
+    <!-- 创建组织弹窗（与组织页「新建子组织」共用组件）：此处不传 parent-path，
+         用于建顶层组织。UModal 内部 teleport 到 body，不参与本行的 flex 布局 -->
+    <CreateGroupModal v-model:open="createOpen" />
   </div>
 </template>
