@@ -74,11 +74,13 @@ pnpm build       # vite build
 
 提交前建议四项全绿。注意 `components.d.ts` / `auto-imports.d.ts` / `src/route-map.d.ts` 为构建期自动生成物，`dev` 与 `build` 不要并发运行。
 
+CI 有两份，口径一致：CNB（[`.cnb.yml`](.cnb.yml)，主门禁 + 发布）与 GitHub 镜像（[`.github/workflows/ci.yml`](.github/workflows/ci.yml)，PR 检查 + `cargo test`）。
+
 ## 分支与发布
 
 主干为 `main`，日常开发一律从 `main` 切短生命周期分支（`feat/*`、`fix/*`、`chore/*`、`hotfix/*` …）后提 PR，主干只接受 Squash 合并；合并前必须通过 `ci-pr` 状态检查（`install → build → typecheck → lint → test`，`build` 前置是因为它负责生成构建期的 `*.d.ts`，缺了它们 `typecheck` 在干净克隆上会红）。
 
-推送分支或 PR 只做校验、不发版；**只有推送 `v*` tag 才会发版**：`.cnb.yml` 先跑完整门禁，再校验 tag 与 `src-tauri/tauri.conf.json` 的 `version` 严格一致，然后打源码包 / Web 包、创建 Release 并上传附件（macOS / Windows 安装包需接入自托管构建节点后启用，该链路尚未在真机验证）。
+推送分支或 PR 只做校验、不发版；**只有推送 `v*` tag 才会发版**：`.cnb.yml` 先跑完整门禁，再校验 tag 与 `src-tauri/tauri.conf.json` 的 `version` 严格一致，然后打源码包 / Web 包、创建 Release 并上传附件。自托管节点已接入：macOS 出 arm64 `.dmg`（ad-hoc 签名），Windows 出 x64 `.exe`（`makensis` 不可用时降级为 portable 单文件）。
 
 详见 [`docs/BRANCHING.md`](docs/BRANCHING.md)（分支规范、tag 与发布操作手册、需要人工在平台侧完成的设置）与 [`docs/design/cnb-pipeline-design.md`](docs/design/cnb-pipeline-design.md)（流水线设计与取舍依据）。
 

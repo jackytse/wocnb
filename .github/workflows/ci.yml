@@ -1,0 +1,120 @@
+# GitHub Actions 门禁（与 CNB 的 .cnb.yml 同口径的镜像 CI）
+#
+# 为什么两份 CI：
+#   · CNB（.cnb.yml）是本项目的主门禁，承载发布（tag → Release → 附件上传）；
+#   · GitHub 这份只做「PR 质量门禁」，让 GitHub 上的贡献者也能看到自动检查结果。
+#   两份的门禁顺序必须一致，改动时请同步修改，避免出现「一边绿一边红」的假安全感。
+#
+# ⚠️ 顺序不可调换：install → build → typecheck → lint → test
+#   `auto-imports.d.ts` / `components.d.ts` 被 .gitignore 忽略，干净克隆里不存在，
+#   跳过后直接 typecheck 必报 TS2304/TS2552。
+#
+# ⚠️ Rust 任务必须先构建前端：`src-tauri/src/lib.rs` 的 `tauri::generate_context!()`
+#   会在**编译期**把 tauri.conf.json 里 `frontendDist`（即 ../dist）的静态资源嵌进二进制，
+#   dist/ 不存在时 cargo 编译直接失败（不是运行时才报）。
+
+name: ci
+
+on:
+  push:
+    branches: [main]
+  # 任意 PR（含来自 fork 的）：PR 门禁才是这份配置的主要用途
+  pull_request:
+  # 允许在 Actions 页面手动重跑，便于排查环境偶发失败
+  workflow_dispatch:
+
+# 同一分支/PR 的新推送取消上一轮未完成的运行，省额度也避免结论混乱
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+# 只读权限即可：本工作流不写仓库、不发 Release
+permissions:
+  contents: read
+
+jobs:
+  frontend:
+    name: 前端门禁（build → typecheck → lint → test）
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      # 版本由 package.json 的 packageManager 字段（pnpm@12.14.0）决定，不在这里硬编码，
+      # 避免与本地/CNB 出现版本漂移
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          # 与 CNB 的 node:22 容器、本地开发环境保持一致
+          node-version: 22
+          cache: pnpm
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      # 必须先 build：生成 auto-imports.d.ts / components.d.ts 等被 gitignore 的声明文件
+      - name: Build
+        run: pnpm build
+
+      - name: Typecheck
+        run: pnpm typecheck
+
+      - name: Lint
+        run: pnpm lint
+
+      - name: Test
+        run: pnpm test
+
+  rust:
+    name: Rust 测试（cargo test）
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      # generate_context! 在编译期嵌入 ../dist，必须先有前端产物
+      - name: Build frontend（cargo 编译期需要 dist/）
+        run: pnpm build
+
+      # Tauri 2 在 Linux 编译需要 webkit2gtk / gtk3 / appindicator（tray-icon 特性）等系统库
+      - name: Install Tauri Linux system deps
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            libwebkit2gtk-4.1-dev \
+            libgtk-3-dev \
+            libayatana-appindicator3-dev \
+            librsvg2-dev \
+            libssl-dev \
+            patchelf \
+            pkg-config
+
+      # 固定 stable 工具链：Cargo.toml 声明 rust-version = 1.90，避免 runner 预装版本偏旧
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache cargo
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri
+
+      # --locked：Cargo.lock 已提交，锁死依赖版本，防止 CI 悄悄解析出与本地不同的依赖
+      - name: cargo test
+        run: cargo test --locked --manifest-path src-tauri/Cargo.toml

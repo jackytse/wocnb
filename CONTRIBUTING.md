@@ -121,6 +121,21 @@ pnpm test        # ④
 - PR 流水线刻意**不设按路径跳过**：纯文档 PR 也会跑完整门禁，避免「需要通过状态检查」的保护规则把 PR 永久卡住。
 - 失败排查：先看 stage 名定位阶段，`install` 失败多为 pnpm/corepack 环境问题；`build-generate` 前置是本仓库特有设计（见[提交前自检](#提交前自检)）。更详细的排错记录见 `.cnb.yml` 头部注释与 [`docs/design/cnb-pipeline-design.md`](docs/design/cnb-pipeline-design.md)。
 
+### GitHub 镜像门禁
+
+代码同时镜像到 GitHub（`jackytse/wocnb`），那里有一份**同口径的镜像 CI**：[`.github/workflows/ci.yml`](.github/workflows/ci.yml)，在 push 到 `main`、任意 PR、以及手动触发时运行两个并行任务：
+
+| 任务 | 内容 |
+| --- | --- |
+| 前端门禁 | install → build → typecheck → lint → test（顺序与 CNB 一致） |
+| Rust 测试 | 装 Tauri Linux 系统库 → `cargo test --locked`（编译期需要 `dist/`，故先跑一次 `pnpm build`） |
+
+两点注意：
+
+- **CNB 仍是唯一的主门禁**：分支保护、发布与 Release 都挂在 CNB 上；GitHub 这份只提供 PR 检查结果，不作合并依据。
+- 两份顺序必须同步修改。若你在本地跑 Rust 测试失败并提示 `frontendDist` 路径不存在，就是漏了先 `pnpm build`。
+
+
 ## 审核标准
 
 评审人主要看这几条（也是你的 PR 能否快速合并的关键）：
