@@ -135,6 +135,31 @@ pnpm test        # ④
 - **CNB 仍是唯一的主门禁**：分支保护、发布与 Release 都挂在 CNB 上；GitHub 这份只提供 PR 检查结果，不作合并依据。
 - 两份顺序必须同步修改。若你在本地跑 Rust 测试失败并提示 `frontendDist` 路径不存在，就是漏了先 `pnpm build`。
 
+### GitHub 发版流水线
+
+[`release.yml`](.github/workflows/release.yml) 在 GitHub 侧提供一条独立的发版链路（与 CNB 发版互不影响），流程为：**版本一致性校验 → 质量门禁（复用 `ci.yml`）→ 四平台打包 → Release 上传**。
+
+| 触发方式 | 行为 |
+| --- | --- |
+| 推送 `v*` tag | 完整发版：`check-version.sh` 校验 tag ≡ `tauri.conf.json` 的 version → 跑门禁 → 打包 → 创建 GitHub Release 并上传安装包 |
+| Actions 页面手动触发 | 打包验证（dry-run）：全矩阵构建并产出 Artifact，**不**创建 Release、不校验 tag，用于随时验证各平台能否正常出包 |
+
+构建矩阵（`fail-fast` 关闭，单平台失败不影响其他平台产物）：
+
+| 平台 | Runner | 产物 |
+| --- | --- | --- |
+| macOS arm64 | `macos-latest`（原生） | `.app` + `.dmg` |
+| macOS x64 | `macos-latest`（交叉编译 `x86_64-apple-darwin`） | `.app` + `.dmg` |
+| Windows x64 | `windows-latest` | `.exe`（NSIS）+ `.msi`（WiX） |
+| Linux x64 | `ubuntu-22.04` | `.deb` + `.AppImage` |
+
+实现要点（改前必读）：
+
+- 打包用 `--bundles` 显式覆盖 `tauri.conf.json` 的 `targets: "app"`（该值只对 macOS 有意义，是本机打包脚本的历史遗留约定）。
+- macOS **无签名证书**：`signingIdentity: "-"` 为 adhoc 签名，产物可用但未公证，用户首次打开需「右键 → 打开」绕过 Gatekeeper。
+- 预发布 tag（含 `-`，如 `v0.1.0-rc.1`）自动标记为 pre-release，不占 latest。
+- 每个平台除上传 Release 外，还会把 `bundle/` 产物上传为 workflow Artifact（保留 7 天），dry-run 验证就靠它取包。
+
 
 ## 审核标准
 

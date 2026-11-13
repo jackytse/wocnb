@@ -5,6 +5,10 @@
 #   · GitHub 这份只做「PR 质量门禁」，让 GitHub 上的贡献者也能看到自动检查结果。
 #   两份的门禁顺序必须一致，改动时请同步修改，避免出现「一边绿一边红」的假安全感。
 #
+# 本工作流同时通过 on.workflow_call 暴露为可复用工作流：
+#   release.yml（发版流水线）在打包前会调用本工作流跑一遍完整门禁，
+#   因此门禁步骤只有这一份实现，改这里即可同时影响 PR 检查与发版前校验。
+#
 # ⚠️ 顺序不可调换：install → build → typecheck → lint → test
 #   `auto-imports.d.ts` / `components.d.ts` 被 .gitignore 忽略，干净克隆里不存在，
 #   跳过后直接 typecheck 必报 TS2304/TS2552。
@@ -22,6 +26,8 @@ on:
   pull_request:
   # 允许在 Actions 页面手动重跑，便于排查环境偶发失败
   workflow_dispatch:
+  # 作为可复用工作流被 release.yml（发版流水线）调用，在打包前跑同一套门禁
+  workflow_call:
 
 # 同一分支/PR 的新推送取消上一轮未完成的运行，省额度也避免结论混乱
 concurrency:

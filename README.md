@@ -127,6 +127,8 @@ wocnb/
 
 速记版：从 `main` 切分支（kebab-case，**禁止 `v` 开头**）→ 本地 `build → typecheck → lint → test` 四连全绿（build 必须最先，生成 `*.d.ts`）→ push 后向 `main` 提 PR（标题符合 Conventional Commits，描述写清改了什么 / 为什么 / 怎么验证）→ CI 门禁 `ci-pr` 自动运行 → 评审通过后 Squash 合并。任意 PR 都会自动触发代码检查、测试与构建，无需手工触发。
 
+发版：推送 `v*` tag 即自动发版（版本校验 → 门禁 → 打包 → Release）。CNB 与 GitHub 各有一条独立发版流水线——CNB 出 macOS arm64 dmg 与 Windows 包，GitHub 出 macOS（arm64/x64）/ Windows / Linux 全平台安装包；详见 [`CONTRIBUTING.md`](CONTRIBUTING.md) 的「CI 门禁说明」。
+
 ## 文档索引
 
 | 文档 | 内容 |

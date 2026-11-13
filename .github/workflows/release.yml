@@ -1,0 +1,188 @@
+# GitHub 发版流水线（测试 + 发版验证 + 四平台桌面应用打包）
+#
+# 与 ci.yml 的分工：
+#   · ci.yml      —— 质量门禁（PR / push main），只读，不发版；
+#   · release.yml —— 发版链路：先复用 ci.yml 的门禁，再做多平台打包与 Release 上传。
+#
+# 两条发版链路并行存在：CNB（.cnb.yml）与 GitHub 各自独立发版，互不影响。
+# GitHub 这份的价值：贡献者无需接入 CNB 自托管节点，就能得到全平台安装包。
+#
+# ⚠️ 打包参数说明：tauri.conf.json 的 bundle.targets 是 "app"（只对 macOS 有意义，
+#   这是本机打包脚本的历史遗留约定）。CI 里用 --bundles 显式覆盖，按平台产出：
+#   macOS → app+dmg；Windows → nsis+msi；Linux → deb+appimage。
+#
+# ⚠️ macOS 无签名证书：tauri.conf.json 的 signingIdentity 为 "-"（adhoc 签名），
+#   产物可用但未公证，用户首次打开需「右键 → 打开」绕过 Gatekeeper。
+#
+# ⚠️ Rust 编译期依赖前端产物：src-tauri/src/lib.rs 的 generate_context!() 在
+#   **编译期**嵌入 ../dist（tauri.conf.json 的 frontendDist），因此打包前必须先
+#   pnpm build（tauri build 的 beforeBuildCommand 也会兜底执行一次，双保险）。
+
+name: release
+
+on:
+  # 推送 v* tag → 完整发版：版本校验 → 门禁 → 四平台打包 → GitHub Release
+  push:
+    tags: ['v*']
+  # 手动触发 → 打包验证（dry-run）：全矩阵构建并产出 Artifact，但不创建 Release、
+  # 不校验 tag。用于在不发版的情况下验证「各平台能否正常出包」。
+  workflow_dispatch:
+
+# 发版构建不允许被取消（tag 构建被取消一半会留下半成品 Release，比失败更难排查）
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+# 创建 Release 与上传附件需要 contents: write
+permissions:
+  contents: write
+
+jobs:
+  # ─────────────────────────────────────────────────────────────
+  # 第 1 步：版本一致性校验
+  # 复用 scripts/ci/check-version.sh（与 CNB 发版同一份脚本）：
+  # tag 去掉 v 必须严格等于 src-tauri/tauri.conf.json 的 version，
+  # 否则用户装到的版本号与 tag 对不上（静默错版比构建失败更危险）。
+  # 手动触发（dry-run）没有 tag，只打印说明、恒为成功。
+  # ─────────────────────────────────────────────────────────────
+  version-check:
+    name: 版本一致性校验
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: 校验 tag 与 tauri.conf.json 版本一致
+        if: github.ref_type == 'tag'
+        run: bash scripts/ci/check-version.sh "$GITHUB_REF_NAME"
+
+      - name: 手动触发为打包验证（跳过版本校验）
+        if: github.event_name == 'workflow_dispatch'
+        run: echo '手动触发 = dry-run：只产出 Artifact 供检查，不创建 Release，不校验 tag。'
+
+  # ─────────────────────────────────────────────────────────────
+  # 第 2 步：质量门禁（复用 ci.yml）
+  # 直接调用可复用工作流，避免两处维护同一套门禁步骤（install → build →
+  # typecheck → lint → test + cargo test）。ci.yml 通过 on.workflow_call 暴露。
+  # ─────────────────────────────────────────────────────────────
+  gates:
+    name: 质量门禁（复用 ci.yml）
+    uses: ./.github/workflows/ci.yml
+
+  # ─────────────────────────────────────────────────────────────
+  # 第 3 步：四平台打包矩阵
+  # fail-fast 必须关：单平台失败不应吞掉其他平台的产物（否则排查时什么也拿不到）。
+  # macOS x64 用交叉编译（GitHub 已退役 macos-13 x64 runner，arm 机器交叉编译
+  # x86_64-apple-darwin 是官方推荐做法，mac 双架构同源无需模拟器）。
+  # ─────────────────────────────────────────────────────────────
+  build:
+    name: 打包（${{ matrix.label }}）
+    needs: [version-check, gates]
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # macOS arm64（Apple Silicon）：runner 原生架构，直接编
+          - os: macos-latest
+            label: macos-arm64
+            args: '--bundles app,dmg'
+          # macOS x64（Intel）：在 arm runner 上交叉编译，产物落到
+          # target/x86_64-apple-darwin/ 下
+          - os: macos-latest
+            label: macos-x64
+            rust-target: x86_64-apple-darwin
+            args: '--target x86_64-apple-darwin --bundles app,dmg'
+          # Windows x64：NSIS 安装包 + WiX MSI 双产物
+          - os: windows-latest
+            label: windows-x64
+            args: '--bundles nsis,msi'
+          # Linux x64：deb 包 + AppImage（便携版）
+          - os: ubuntu-22.04
+            label: linux-x64
+            args: '--bundles deb,appimage'
+
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 45
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      # pnpm 版本由 package.json 的 packageManager（pnpm@12.14.0）决定，不硬编码
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      # 先产出 dist/（generate_context! 编译期需要）；beforeBuildCommand 会再跑一次 vite build，幂等
+      - name: Build frontend
+        run: pnpm build
+
+      # Tauri 2 在 Linux 编译需要 webkit2gtk / gtk3 / appindicator（托盘特性）等系统库
+      - name: Install Tauri Linux system deps
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            libwebkit2gtk-4.1-dev \
+            libgtk-3-dev \
+            libayatana-appindicator3-dev \
+            librsvg2-dev \
+            libssl-dev \
+            patchelf \
+            pkg-config \
+            file
+
+      # 固定 stable 工具链；交叉编译条目额外安装目标架构的 std
+      # （rust-target 为空时 targets 传空串 = 仅装宿主架构）
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.rust-target || '' }}
+
+      # cargo 缓存按 matrix.label 隔离，避免 arm64 / x64 / 各平台缓存互相污染
+      - name: Cache cargo
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri
+          prefix-key: rust-${{ matrix.label }}
+
+      # 打包 + 发布一体：tauri-action 执行 tauri build（带 --bundles 覆盖配置），
+      # tag 触发时把产物上传到 GitHub Release；dry-run 时 includeRelease=false 只构建。
+      # · tagName 在 dry-run 下传占位值（includeRelease=false 时不使用，仅满足入参非空）；
+      # · prerelease：tag 含 "-"（如 v0.1.0-rc.23）→ 预发布，不占 latest；
+      # · includeTarball=false：GitHub 会自动附源码包，无需重复传；
+      # · includeUpdaterJson=false：本项目未接入 tauri updater，不生成 latest.json。
+      - name: Build & release（tauri-action）
+        uses: tauri-apps/tauri-action@v0
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          projectPath: .
+          tagName: ${{ github.ref_type == 'tag' && github.ref_name || format('dry-run-{0}', github.run_id) }}
+          releaseName: ${{ github.ref_type == 'tag' && format('WOCNB {0}', github.ref_name) || '' }}
+          releaseDraft: false
+          prerelease: ${{ github.ref_type == 'tag' && contains(github.ref_name, '-') }}
+          includeRelease: ${{ github.ref_type == 'tag' }}
+          includeTarball: false
+          includeUpdaterJson: false
+          args: ${{ matrix.args }}
+
+      # 产物同时上传为 workflow Artifact：dry-run 验证靠它取包，发版时也便于
+      # 在 Actions 页面直接检查产物而不用去 Release 翻
+      - name: Upload bundle artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: bundles-${{ matrix.label }}
+          path: |
+            src-tauri/target/release/bundle/**
+            src-tauri/target/*/release/bundle/**
+          if-no-files-found: error
+          retention-days: 7
