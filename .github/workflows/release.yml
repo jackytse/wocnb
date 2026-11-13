@@ -93,7 +93,8 @@ jobs:
             label: macos-x64
             rust-target: x86_64-apple-darwin
             args: '--target x86_64-apple-darwin --bundles app,dmg'
-          # Windows x64：NSIS 安装包 + WiX MSI 双产物
+          # Windows x64：正式版出 NSIS + WiX MSI 双产物（实际目标由下面
+          # 「解析 Windows 打包目标」步骤按版本号动态写入 WIN_ARGS）
           - os: windows-latest
             label: windows-x64
             args: '--bundles nsis,msi'
@@ -124,6 +125,24 @@ jobs:
       # 先产出 dist/（generate_context! 编译期需要）；beforeBuildCommand 会再跑一次 vite build，幂等
       - name: Build frontend
         run: pnpm build
+
+      # WiX(MSI) 硬性要求版本预发布标识「纯数字且 ≤65535」（如 -20260101 可以，
+      # -rc.23 会被直接拒收），而 NSIS 无此限制。因此 Windows 按版本动态降级：
+      # 预发布版本（预发布标识含非数字字符）→ 只出 NSIS；正式版 → NSIS + MSI。
+      # 已知事实：0.1.0-rc.N 在 MSI 上必失败（CNB 流水线同样踩过此坑）。
+      - name: 解析 Windows 打包目标（预发布版 MSI 会拒非数字预发布标识）
+        if: runner.os == 'Windows'
+        shell: bash
+        run: |
+          VERSION=$(node -p "JSON.parse(require('fs').readFileSync('src-tauri/tauri.conf.json','utf8')).version")
+          PRERELEASE="${VERSION#*-}"
+          if [ "$VERSION" != "$PRERELEASE" ] && printf '%s' "$PRERELEASE" | grep -q '[^0-9.]'; then
+            echo "WIN_ARGS=--bundles nsis" >> "$GITHUB_ENV"
+            echo "版本 $VERSION 为预发布（标识 $PRERELEASE 含非数字字符）→ 仅出 NSIS"
+          else
+            echo "WIN_ARGS=--bundles nsis,msi" >> "$GITHUB_ENV"
+            echo "版本 $VERSION 可用 MSI → 出 NSIS + MSI"
+          fi
 
       # Tauri 2 在 Linux 编译需要 webkit2gtk / gtk3 / appindicator（托盘特性）等系统库
       - name: Install Tauri Linux system deps
@@ -179,7 +198,8 @@ jobs:
           prerelease: ${{ github.ref_type == 'tag' && contains(github.ref_name, '-') }}
           includeUpdaterJson: false
           retryAttempts: 3
-          args: ${{ matrix.args }}
+          # Windows 用动态解析出的 WIN_ARGS（预发布版只出 NSIS），其余平台用矩阵配置
+          args: ${{ runner.os == 'Windows' && env.WIN_ARGS || matrix.args }}
 
       # 产物同时上传为 workflow Artifact：dry-run 验证靠它取包，发版时也便于
       # 在 Actions 页面直接检查产物而不用去 Release 翻
