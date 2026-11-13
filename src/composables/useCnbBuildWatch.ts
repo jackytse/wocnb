@@ -733,22 +733,100 @@ export async function requestBuildNotificationPermission(): Promise<boolean> {
   return ensureNotificationPermission(true)
 }
 
-/** 发送一条 macOS 系统通知（非 Tauri 环境或未授权时静默跳过） */
-async function sendSystemNotification(title: string, body: string): Promise<void> {
+/**
+ * 发送一条系统通知（非 Tauri 环境或未授权时静默跳过）。
+ *
+ * @returns 是否真的把通知交给了系统（权限缺失/插件异常都返回 false）。
+ * 常规构建通知不消费返回值（失败只影响日志），测试通知需要它来区分
+ * "发送失败"与"权限未授权"两种给用户的提示文案。
+ *
+ * # 关于发送路径的语义变化（重要，勿"顺手"简化；QA 已按源码校正）
+ *
+ * 一旦 Rust 侧注册了 `on_action`（见 src-tauri/src/lib.rs），插件的发送
+ * 路径会从「show() + Drop 兜底（asynchronous: true）」切换为
+ * `show_tracked` → 独立后台线程（thread name "notification"）执行 wait()。
+ * 但**线程是否真的阻塞等用户交互，取决于该通知是否带 action 按钮**：
+ * - 通知**没有** action 按钮（未带/未注册 actionTypeId）：macOS 走
+ *   `Notification::wait_for_response`，内部 `asynchronous: false`，而
+ *   mac-notification-sys 的 `needs_response()` =
+ *   `main_button.is_some() || close_button.is_some() || wait_for_click`
+ *   三者皆 false → `should_wait=false` → send() 立即返回（只等 ≤2s 的
+ *   didDeliver XPC 确认）→ 后台线程很快退出。**不是**"每条通知占一个
+ *   线程直到用户响应"。
+ * - 通知**带** action 按钮（本功能注册了 actionTypeId=cnbBuildOpen 且
+ *   ActionType 里有 1 个 Action）：`main_button=Some → should_wait=true`
+ *   → 真正阻塞等用户点击/通知消失（自动消失由 mac-notification-sys 的
+ *   0.5s 轮询定时器兜底），线程不会永久泄漏。
+ *
+ * ⚠️ 这也是「点击直达」能成立的前提：只有 `should_wait=true` 时
+ * notify.m 才会把该通知留在 pending map 里等待 didActivate 回调；
+ * 否则 send() 早已返回并清掉 pending entry，用户之后点击会被直接丢弃
+ * （表现为"点了完全没反应"）。详见 Rust 侧 register_action_types 处注释。
+ *
+ * 若该路径在真机异常（通知不出/卡顿），整体退回旧路径的开关在 Rust 侧
+ * （注释掉 on_action + register_action_types 注册即可），前端无需改动。
+ */
+async function sendSystemNotification(
+  title: string,
+  body: string,
+  payload?: BuildNotificationPayload,
+): Promise<boolean> {
   if (!isTauriEnv()) {
-    return
+    return false
   }
   const granted = await ensureNotificationPermission(true)
   if (!granted) {
-    return
+    return false
   }
   try {
     const { sendNotification } = await import('@tauri-apps/plugin-notification')
-    sendNotification({ title, body })
+    // id 由模块内计数器分配（32 位安全回绕见 nextNotificationId）：
+    // 带上 id 让 Rust 侧点击上报能反查通知，extra 才是定位主通道（见
+    // BuildNotificationPayload 注释），id 只是辅助
+    lastNotificationId = nextNotificationId(lastNotificationId)
+    sendNotification(buildSystemNotificationOptions(lastNotificationId, title, body, payload))
+    return true
   }
   catch (err) {
     console.warn('[build-watch] 系统通知发送失败：', err)
+    return false
   }
+}
+
+/** 测试通知的发送结果（设置页按结果挑 toast 文案） */
+export type SendTestNotificationResult = 'sent' | 'permissionDenied' | 'notDesktop' | 'failed'
+
+/**
+ * 发送一条测试构建通知（设置页「发送测试通知」按钮入口）。
+ *
+ * # 为什么点击后打开的是通知面板而不是构建详情
+ *
+ * 测试通知不带 repoPath/sn——测试的目的只是验证"权限 + 通知能弹出 +
+ * 点击有反应"，硬编一个仓库路径属于臆造数据（当前组织可能没有任何
+ * 仓库）。点击打开通知面板既能验证点击链路，又能顺带看到真实构建通知。
+ *
+ * # 为什么不复用 sendSystemNotification 的权限结果做文案
+ *
+ * 权限失败与发送失败需要不同的 toast 文案（前者引导用户去系统设置，
+ * 后者提示稍后重试），因此这里单独走一次 ensureNotificationPermission，
+ * 先把"权限未授权"与"插件发送异常"区分开，再让 sendSystemNotification
+ * （内部缓存已授权，不会二次弹框）执行真正的发送。
+ */
+export async function sendTestBuildNotification(): Promise<SendTestNotificationResult> {
+  if (!isTauriEnv()) {
+    // 浏览器 dev 没有 Tauri 运行时：不是"权限被拒"，是环境整体缺席
+    return 'notDesktop'
+  }
+  const granted = await ensureNotificationPermission(true)
+  if (!granted) {
+    // interactive=true 已尽力申请过（且一次会话只弹一次框）；仍未授权
+    // 只能是用户拒绝或系统层不可用，统一走"去系统设置允许"的文案
+    return 'permissionDenied'
+  }
+  const title = i18n.global.t('buildWatch.testNotify.title')
+  const body = i18n.global.t('buildWatch.testNotify.body')
+  const ok = await sendSystemNotification(title, body, { kind: 'test' })
+  return ok ? 'sent' : 'failed'
 }
 
 /** 状态 -> 通知标题的 i18n 键（成功/失败/取消/未知） */
@@ -774,6 +852,125 @@ function buildBodyText(sourceRef: string, commitTitle: string): string {
   const ref = truncateText(sourceRef, 40) || '—'
   return truncateText(`${ref} · ${title}`, 100)
 }
+
+// ---------------------------------------------------------------------------
+// 系统通知点击直达（payload / id 分配）
+// ---------------------------------------------------------------------------
+
+/**
+ * 系统通知 ActionType 的 id（**必须与 Rust 侧常量完全一致**）。
+ *
+ * Rust 侧同值常量：`src-tauri/src/lib.rs` 的 `BUILD_NOTIFY_ACTION_TYPE_ID`。
+ * 两端注释互相指向，改一处必须改另一处（不一致的后果见 buildSystemNotificationOptions）。
+ *
+ * # 为什么必须注册/携带 ActionType（反直觉，勿当冗余删掉）
+ *
+ * macOS 旧后端（NSUserNotificationCenter）下，"点击上报"成立的前提是
+ * 通知发送时**真的阻塞等待响应**：mac-notification-sys 的
+ * `needs_response()` = `main_button.is_some() || close_button.is_some()
+ * || wait_for_click`。没有 action 按钮时三者皆 false → send() 立即返回 →
+ * notify.m 清掉 pending map → 用户之后点击的 didActivate 找不到 entry，
+ * **上报被静默丢弃**（现象：通知能弹出，但点击完全没反应）。
+ * 给通知挂 1 个 action 按钮（main_button=Some）才会 should_wait=true，
+ * 通知本体 tap 与按钮 action 才都能回调到 Rust 的 on_action。
+ */
+export const BUILD_NOTIFY_ACTION_TYPE_ID = 'cnbBuildOpen'
+
+/** 系统通知的类型（kind 会写进通知 extra，点击上报时原样带回前端） */
+export type BuildNotificationKind = 'single' | 'digest' | 'leftover' | 'test'
+
+/**
+ * 随系统通知携带的定位载荷。
+ *
+ * # 为什么走 extra 而不是 id 反查表
+ *
+ * tauri-plugin-notification 会把 extra 序列化进通知对象，Rust 侧点击上报时
+ * 可从 ActiveNotification.extra() 原样读回——进程重启、多窗口、通知中心
+ * 里停留数小时都不丢。而"数字 id -> 内容"的映射表存在内存里，进程重启
+ * 即失效；extra 是唯一跨进程生命周期可靠的通道。
+ */
+export interface BuildNotificationPayload {
+  kind: BuildNotificationKind
+  /** 仓库完整路径（仅 single 携带；digest/leftover/test 无法逐一定位） */
+  repoPath?: string
+  /** 构建序号（仅 single 携带） */
+  sn?: string
+}
+
+/**
+ * 系统通知 id 的 32 位上限。
+ *
+ * sendNotification 的 id 必须是 32 位整数（插件 Rust 侧按 i32 处理，
+ * 传 2^31 会直接报错），所以计数器在 2^31-1 处回绕，而不是等 JS 的
+ * Number 精度问题（那个要到 2^53 才出现，i32 早就炸了）。
+ * 导出仅为单测使用（回绕边界断言），业务代码请走 nextNotificationId。
+ */
+export const MAX_NOTIFICATION_ID = 2147483647
+
+/**
+ * 分配下一个系统通知 id（**纯函数**，回绕逻辑可单测）。
+ *
+ * 规则：previous 合法（1..2^31-1 的整数）时返回 previous+1；
+ * previous 已达上限或非法（0/负数/非整数）时回绕到 1。
+ * 回绕而非取模：通知 id 不要求全局唯一（只要求"同一时刻发送的几条
+ * 互不相同"），回绕到 1 比取模后落进任意旧值更可预期。
+ *
+ * @param previous 上一次分配的 id（模块外仅测试使用）
+ */
+export function nextNotificationId(previous: number): number {
+  if (!Number.isInteger(previous) || previous < 1 || previous >= MAX_NOTIFICATION_ID) {
+    return 1
+  }
+  return previous + 1
+}
+
+/**
+ * 组装 sendNotification 的完整选项（**纯函数**，payload 组装可单测）。
+ *
+ * # 三个不变式
+ * 1. `actionTypeId` **恒带**（四种 kind 都带）：只要带它，macOS 侧通知才会
+ *    有 action 按钮 → `needs_response()` 为 true → 发送时阻塞等响应，
+ *    点击（本体 tap 或按钮 action）才会上报到 Rust。少带这一项 = 点击
+ *    静默失效（机制见 BUILD_NOTIFY_ACTION_TYPE_ID 注释）。
+ * 2. `extra` 的字符串字段一律 `String()` 收敛：Rust 侧 extra_str 只认
+ *    `Value::String`，若上游把 sn 写成 number（服务端返回数字 sn 的
+ *    历史隐患），JSON 序列化后是 number → Rust 取不到 → 直达失效。
+ *    这是"最后一道收敛"，不依赖每个上游映射都写对。
+ * 3. extra 只写存在的字段：kind 恒写（前端/日志靠它区分通知类型）；
+ *    repoPath/sn 仅 single 有值时写——digest/leftover/test 写了也没意义，
+ *    且空串在 intent 解析里按"无"处理（显式不写让 payload 更诚实）。
+ *
+ * # 已知降级（不做运行时探测）
+ *
+ * 若 Rust 侧 register_action_types 失败（异常路径只 log::warn，不阻断
+ * 启动），带 actionTypeId 的通知在插件里 `and_then(|id|
+ * action_types.get(id))` 拿不到 ActionType → 不挂按钮 → 退回"点击不上报"。
+ * 这是静默降级：通知照常弹出，只是点击无反应。不做运行时探测的原因是
+ * 探测本身需要额外 IPC/状态同步，而失败概率极低且可从日志定位。
+ */
+export function buildSystemNotificationOptions(
+  id: number,
+  title: string,
+  body: string,
+  payload?: BuildNotificationPayload,
+): { id: number, title: string, body: string, actionTypeId: string, extra?: Record<string, unknown> } {
+  // actionTypeId 无条件携带（见上文不变式 1），因此无 payload 时也要返回它
+  const base = { id, title, body, actionTypeId: BUILD_NOTIFY_ACTION_TYPE_ID }
+  if (!payload) {
+    return base
+  }
+  const extra: Record<string, unknown> = { kind: payload.kind }
+  if (payload.repoPath) {
+    extra.repoPath = String(payload.repoPath)
+  }
+  if (payload.sn) {
+    extra.sn = String(payload.sn)
+  }
+  return { ...base, extra }
+}
+
+/** 模块级通知 id 计数器（0 表示尚未分配过；发送时经 nextNotificationId 递增） */
+let lastNotificationId = 0
 
 /**
  * 回查已结束构建的最终状态。
@@ -835,7 +1032,8 @@ async function emitResolvedNotices(resolved: ResolvedBuild[], nameOf: (repoPath:
       const body = buildBodyText(item.sourceRef, item.commitTitle)
       // 状态未知（''）只进应用内列表：系统通知里说不清成功还是失败，容易误导
       if (shouldNotifyStatus(item.status)) {
-        await sendSystemNotification(title, body)
+        // payload 带 repoPath+sn：点击系统通知可直达该构建详情（kind:'single'）
+        await sendSystemNotification(title, body, { kind: 'single', repoPath: item.repoPath, sn: item.sn })
       }
       pushNotice({
         repoPath: item.repoPath,
@@ -871,7 +1069,9 @@ async function emitResolvedNotices(resolved: ResolvedBuild[], nameOf: (repoPath:
     const unknownSuffix = plan.digest.unknown > 0
       ? i18n.global.t('buildWatch.notify.digestUnknown', { count: plan.digest.unknown })
       : ''
-    await sendSystemNotification(digestTitle, `${digestBody}${unknownSuffix}`)
+    // 摘要通知不带 repoPath/sn（一次摘要对应多条构建，无法逐一定位），
+    // 点击后由事件处理器兜底打开通知面板，面板里仍可逐条查看
+    await sendSystemNotification(digestTitle, `${digestBody}${unknownSuffix}`, { kind: 'digest' })
   }
   for (const item of resolved) {
     pushNotice({
@@ -902,7 +1102,9 @@ async function emitLeftoverNotices(finished: FinishedBuild[], nameOf: (repoPath:
   }
   const title = i18n.global.t('buildWatch.notify.leftoverTitle', { count: finished.length })
   const body = i18n.global.t('buildWatch.notify.leftoverBody')
-  await sendSystemNotification(title, body)
+  // 离线补推是"多条无法逐一定位"的汇总通知（kind:'leftover'），
+  // 不带 repoPath/sn，点击后兜底打开通知面板
+  await sendSystemNotification(title, body, { kind: 'leftover' })
   const now = Date.now()
   for (const item of finished) {
     pushNotice({

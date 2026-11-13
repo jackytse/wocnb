@@ -30,7 +30,7 @@ import {
   type BuildNotice,
 } from '../composables/useCnbBuildWatch'
 import { useDashboard } from '../composables/useDashboard'
-import { formatRelativeTime } from '../utils'
+import { formatRelativeTime, encodeRepoPathForRoute } from '../utils'
 
 const { isNotificationsSlideoverOpen } = useDashboard()
 // 界面文案翻译（面板标题随语言切换）
@@ -121,14 +121,10 @@ function timeLabel(time: number): string {
 /**
  * 仓库路径 -> 路由路径段：逐段 encodeURIComponent。
  *
- * 为什么必须编码（QA 缺陷 #7）：仓库路径可能含空格、'#'、中文等字符，
- * 直接拼进 path 会让 vue-router 把 '#' 当成 hash、把空格当成非法字符，
- * 结果是跳到 404 或错误的仓库。'/' 是路径分隔符必须保留，故按段编码
- * （与 useCnbRepo 内部的 encodeRepoPath 同一口径）。
+ * 实现已抽到 src/utils/encodeRepoPathForRoute 全局共享（QA 缺陷 #7 的
+ * 修复口径）：新增的"系统通知点击直达"是第二个消费方，编码规则属于
+ * 跨模块契约，私有复制会让两处口径漂移，故这里只 import。
  */
-function encodeRepoPathForRoute(repoPath: string): string {
-  return repoPath.split('/').filter(Boolean).map(encodeURIComponent).join('/')
-}
 
 /**
  * 点击构建通知：跳到该仓库的构建页签并展开对应构建。

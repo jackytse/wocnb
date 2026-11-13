@@ -15,7 +15,7 @@
  * 这样拆分的好处：设置页只渲染"当前事实"，不改写轮询状态，刷新/重进不会出现
  * "页面显示已开启但轮询其实没跑"的双份真相。
  */
-import { computed, watch } from 'vue'
+import { computed, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { openUrl } from '@tauri-apps/plugin-opener'
 import { cnbAvatarUrl, cnbGroupLogoUrl, cnbUser, selectedGroup } from '../../composables/useCnbAuth'
@@ -29,9 +29,13 @@ import {
   buildWatchRepoCount,
   buildWatchTruncated,
   requestBuildNotificationPermission,
+  sendTestBuildNotification,
 } from '../../composables/useCnbBuildWatch'
 
 const { t } = useI18n()
+
+// useToast 为 Nuxt UI 全局自动导入（见 auto-imports.d.ts）
+const toast = useToast()
 
 /**
  * 当前登录账号展示名（昵称优先，兜底用户名）。
@@ -143,11 +147,80 @@ watch(buildNotifyEnabled, (enabled) => {
  * 中间层都会引入一份可能不同步的状态（用户改了开关但忘记点保存 → 界面显示
  * 开启、实际没跑）。直接双向绑定让"用户操作即刻生效"，与"应用需保持运行"
  * 的产品心智一致。
- *
- * 为什么不提供"发送测试通知"按钮：系统通知权限只在真有内容时申请（见
- * useCnbBuildWatch 的口径说明），加一个测试按钮会诱导用户在没授权的情况
- * 下反复点击，反而制造"点了没反应"的误判；构建通知本身就是最好的自检。
  */
+
+// ---------------------------------------------------------------------------
+// 测试通知（通知链路自检入口）
+// ---------------------------------------------------------------------------
+
+/**
+ * 是否运行在 Tauri 桌面环境。
+ *
+ * 与 useCnbBuildWatch.isTauriEnv 同口径（__TAURI_INTERNALS__ 由运行时注入），
+ * 这里做成模块加载期常量而非 computed：运行环境在应用生命周期内不会变，
+ * 没有响应式追踪的必要。浏览器 dev（pnpm dev 直开网页）下为 false，
+ * 用于禁用按钮并给出明确提示（浏览器根本没有系统通知运行时，
+ * "禁用 + 说明"比"可点但必失败"诚实）。
+ */
+const isDesktopTauri = typeof window !== 'undefined' && '__TAURI_INTERNALS__' in window
+
+/** 测试通知发送中标记（按钮 loading，防连点） */
+const sendingTestNotify = ref(false)
+
+/**
+ * 发送测试通知并按结果给出 toast 反馈。
+ *
+ * 为什么不静默失败：本按钮存在的意义就是"让用户验证链路"，点了没反应
+ * 等于没验证。sendTestBuildNotification 的四种结果各自对应明确的文案：
+ * sent（成功）/ permissionDenied（引导去系统设置）/ notDesktop（浏览器
+ * 环境整体缺席）/ failed（插件发送异常，稍后重试）。
+ */
+async function onSendTestNotify() {
+  if (sendingTestNotify.value) {
+    return
+  }
+  sendingTestNotify.value = true
+  try {
+    const result = await sendTestBuildNotification()
+    switch (result) {
+      case 'sent':
+        toast.add({
+          title: t('buildWatch.testNotify.sent'),
+          description: t('buildWatch.testNotify.clickHint'),
+          color: 'success',
+          icon: 'i-lucide-bell-check',
+        })
+        break
+      case 'permissionDenied':
+        toast.add({
+          title: t('buildWatch.testNotify.failed'),
+          description: t('buildWatch.testNotify.permissionDenied'),
+          color: 'warning',
+          icon: 'i-lucide-bell-off',
+        })
+        break
+      case 'notDesktop':
+        toast.add({
+          title: t('buildWatch.testNotify.failed'),
+          description: t('buildWatch.testNotify.notDesktop'),
+          color: 'neutral',
+          icon: 'i-lucide-monitor-x',
+        })
+        break
+      case 'failed':
+        toast.add({
+          title: t('buildWatch.testNotify.failed'),
+          description: t('buildWatch.testNotify.failedDesc'),
+          color: 'error',
+          icon: 'i-lucide-circle-alert',
+        })
+        break
+    }
+  }
+  finally {
+    sendingTestNotify.value = false
+  }
+}
 
 /**
  * 本页卡片顺序（模板中自上而下）与理由：
@@ -339,6 +412,31 @@ watch(buildNotifyEnabled, (enabled) => {
           <p class="min-w-0 flex-1 text-xs text-muted">
             {{ t('buildWatch.settings.permissionDenied') }}
           </p>
+        </div>
+
+        <USeparator />
+
+        <!--
+          发送测试通知（通知链路自检入口）。
+          让用户不等待真实构建就能验证"权限 + 通知能弹出 + 点击有反应"：
+          测试通知不带仓库定位（当前组织可能没有任何仓库，硬编路径属于
+          臆造数据），点击它打开的是应用内通知面板。浏览器 dev 下按钮
+          禁用——没有 Tauri 运行时，测试必然失败，禁用比放行诚实。
+        -->
+        <div class="flex items-center gap-4 flex-wrap">
+          <p class="min-w-0 flex-1 text-xs text-muted">
+            {{ t('buildWatch.settings.testNotifyDesc') }}
+          </p>
+          <UButton
+            size="sm"
+            color="neutral"
+            variant="outline"
+            icon="i-lucide-bell-plus"
+            :label="t('buildWatch.settings.testNotify')"
+            :loading="sendingTestNotify"
+            :disabled="!isDesktopTauri"
+            @click="onSendTestNotify"
+          />
         </div>
       </div>
     </UPageCard>

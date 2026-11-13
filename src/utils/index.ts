@@ -50,6 +50,28 @@ export function formatRelativeTime(iso: string): string {
 }
 
 /**
+ * 仓库路径 -> 路由路径段：逐段 encodeURIComponent。
+ *
+ * # 为什么必须编码
+ *
+ * 仓库路径可能含空格、'#'、中文等字符：直接拼进 path 会让 vue-router 把
+ * '#' 当成 hash、把空格当成非法字符，结果是跳到 404 或错误的仓库。
+ * '/' 是路径分隔符必须保留，故按段编码（与 useCnbRepo 内部的
+ * encodeRepoPath 同一口径）。
+ *
+ * # 为什么放在公共 utils
+ *
+ * 该编码口径原来只在 NotificationsSlideover.vue 内私有实现（QA 缺陷 #7 的
+ * 修复）；新增"系统通知点击直达构建详情"后出现了第二个消费方
+ * （useBuildNotificationAction）。编码规则属于跨模块契约，私有实现会让
+ * 两处口径漂移（一处改了另一处忘改 → 同一仓库两种跳转结果），因此抽到
+ * 全局 utils 统一维护，调用方只 import 不复制。
+ */
+export function encodeRepoPathForRoute(repoPath: string): string {
+  return repoPath.split('/').filter(Boolean).map(encodeURIComponent).join('/')
+}
+
+/**
  * 毫秒耗时 -> 人类可读（构建/流水线耗时展示）。
  * <1s → '0.8s'；<60s → '12.3s'；≥60s → '3m 25s'；≥1h → '1h 05m'；空值返回 ''。
  */

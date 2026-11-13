@@ -10,6 +10,8 @@ import { openUrl } from '@tauri-apps/plugin-opener'
 import { restoreSession, cnbToken, setUnauthorizedHandler } from './composables/useCnbAuth'
 import { refreshCliTokenIfNeeded } from './composables/useCnbCliAuth'
 import { initBuildWatcher } from './composables/useCnbBuildWatch'
+import { initBuildNotificationActionHandler } from './composables/useBuildNotificationAction'
+import { isNotificationsSlideoverOpen } from './composables/useDashboard'
 import { localePref, resolvedLocale } from './composables/useAppLocale'
 import { i18n } from './i18n'
 import { LEGACY_ORG_ROUTE_NAME, legacyOrgRedirect } from './router/legacy-org'
@@ -152,6 +154,33 @@ refreshCliTokenIfNeeded().then(() => restoreSession())
  * 不要"顺手"改回布尔值。
  */
 initBuildWatcher()
+
+/**
+ * 系统通知点击处理：Rust 侧 on_action（src-tauri/src/lib.rs）把用户点击
+ * 通知的动作以事件 `cnb://build-notification-action` emit 给前端，这里
+ * 注册监听并把动作翻译成路由意图：
+ * - 通知带 repoPath+sn（逐条构建通知）→ 直达 /repos/<path>?tab=builds&sn=xxx；
+ * - 否则（摘要/离线补推/测试通知/字段缺失）→ 打开应用内通知面板兜底。
+ *
+ * 依赖注入的说明：router 在本文件内联创建且未导出（项目约定不导出
+ * router 实例），面板开关 ref 也不该被点击处理模块反向依赖——因此
+ * navigate/openPanel 都以回调形式注入（见 useBuildNotificationAction），
+ * 该设计同时让事件处理逻辑可以脱离 vue-router 做单测。
+ *
+ * 浏览器 dev（pnpm dev 直开网页）下 initBuildNotificationActionHandler
+ * 会因无 Tauri 运行时直接跳过，不会注册监听也不报错。
+ */
+initBuildNotificationActionHandler({
+  navigate: (target) => router.push(target),
+  openPanel: () => {
+    // 直接置位模块级面板开关 ref（与组件内 useDashboard 返回的是同一份
+    // 单例引用，铃铛面板打开状态自然同步）
+    isNotificationsSlideoverOpen.value = true
+  },
+}).catch((err) => {
+  // 注册失败只影响"点击直达"这一个入口（通知本身照常弹出），不阻断启动
+  console.warn('[wocnb] 注册系统通知点击处理失败：', err)
+})
 
 // 401 统一拦截：任意 CNB API 请求返回 401（令牌失效）时，
 // 清除本地登录态并跳转登录页；携带 redirect 供登录后原路返回，
