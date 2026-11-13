@@ -1,11 +1,13 @@
 <script setup lang="ts">
 import { computed, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
+import { useRouter } from 'vue-router'
 import type { NavigationMenuItem, CommandPaletteItem } from '@nuxt/ui'
 import { useOverlayUnlockGuard } from '../composables/useOverlayUnlockGuard'
 
 // 侧边栏导航文案随语言切换（computed 依赖 t 的响应式 locale）
 const { t } = useI18n()
+const router = useRouter()
 
 const open = ref(false)
 
@@ -63,6 +65,14 @@ const links = computed((): NavigationMenuItem[][] => [[{
   label: t('layout.home'),
   icon: 'i-lucide-house',
   to: '/',
+  onSelect: () => {
+    open.value = false
+  }
+}, {
+  // 探索页（T15）：公共仓库搜索 + 仓库排行榜；导航位次在首页之后（验收 1）
+  label: t('layout.explore'),
+  icon: 'i-lucide-compass',
+  to: '/explore',
   onSelect: () => {
     open.value = false
   }
@@ -188,6 +198,22 @@ const groups = computed(() => [{
   items: links.value.flat().map(item => (isExternalItem(item)
     ? { ...item, suffix: EXTERNAL_SUFFIX }
     : item)) as CommandPaletteItem[]
+}, {
+  id: 'actions',
+  label: t('layout.actions'),
+  // T15 验收 5 + R14 红线：⌘K 只加「跳转探索页」动作项 —— **远程搜索
+  // 不进命令面板**（面板输入是受控弹层，塞异步远程数据会破坏
+  // useOverlayUnlockGuard 守护的弹层生命周期，整窗点不动，踩过真坑）。
+  // 关键词经 ?q= 带入探索页后由页面内 300ms 防抖搜索承接。
+  items: [{
+    id: 'goto-explore',
+    label: t('layout.explore'),
+    icon: 'i-lucide-compass',
+    onSelect: () => {
+      searchOpen.value = false
+      void router.push('/explore')
+    }
+  }]
 }, {
   id: 'code',
   label: 'Code',

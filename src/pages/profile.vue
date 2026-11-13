@@ -16,17 +16,26 @@
  * 侧边栏用户菜单等界面随之立即更新。
  */
 import * as z from 'zod'
-import { computed, onMounted, reactive, ref } from 'vue'
+import { computed, onMounted, reactive, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
+import { useRouter } from 'vue-router'
 import {
   fetchCnbUserProfile,
   updateCnbProfile,
   cnbUser,
   type CnbProfilePayload,
 } from '../composables/useCnbAuth'
+import {
+  fetchMyStarredRepos,
+  type StarredRepoItem,
+} from '../composables/useCnbSocial'
+import PinnedRepoWall from '../components/org/PinnedRepoWall.vue'
+import FollowListDrawer from '../components/FollowListDrawer.vue'
+import StateAlert from '../components/repo/StateAlert.vue'
 
 const { t } = useI18n()
 const toast = useToast()
+const router = useRouter()
 
 /**
  * 表单校验规则构造器：各字段均可选。
@@ -44,6 +53,11 @@ const buildSchema = () => z.object({
     t('profile.siteInvalid'),
   ),
   wechatMp: z.string().optional(),
+  // 社交计数（T14）：只读派生值 —— schema 仅承载类型与回显，
+  // onSubmit 显式构造提交负载，三者不会随表单提交（-1 = 服务端缺失 → 「—」）
+  followerCount: z.number().optional(),
+  followingCount: z.number().optional(),
+  starsCount: z.number().optional(),
 })
 type ProfileSchema = z.output<ReturnType<typeof buildSchema>>
 
@@ -58,6 +72,9 @@ const profile = reactive<ProfileSchema>({
   address: '',
   site: '',
   wechatMp: '',
+  followerCount: undefined,
+  followingCount: undefined,
+  starsCount: undefined,
 })
 
 /** 首次加载状态：加载中显示骨架屏 */
@@ -66,6 +83,68 @@ const loading = ref(false)
 const loadError = ref(false)
 /** 保存中状态：按钮 loading + 防重复提交 */
 const saving = ref(false)
+
+// ---------------------------------------------------------------------------
+// 社交增强（T14）：粉丝/关注计数 + 我的 Star 页签 + 只读仓库墙
+// 均为独立区块（403 只影响自身，绝不阻塞上方资料编辑表单）
+// ---------------------------------------------------------------------------
+
+/** 计数展示：-1（服务端缺失 / 缺 account-engage:r）→「—」，0 合法 */
+function displayCount(value: number): string {
+  return value < 0 ? '—' : String(value)
+}
+
+const followerDisplay = computed(() => displayCount(profile.followerCount ?? -1))
+const followingDisplay = computed(() => displayCount(profile.followingCount ?? -1))
+const starsDisplay = computed(() => displayCount(profile.starsCount ?? -1))
+
+/** 抽屉状态（粉丝 / 关注共用一个 USlideover，mode 切换） */
+const drawerOpen = ref(false)
+const drawerMode = ref<'followers' | 'following'>('followers')
+
+function openFollowDrawer(mode: 'followers' | 'following') {
+  drawerMode.value = mode
+  drawerOpen.value = true
+}
+
+/** 「我的 Star / 仓库墙」页签（页签渲染于社交区块内，不影响资料表单） */
+const socialTab = ref<'stars' | 'wall'>('stars')
+const socialTabItems = computed(() => [
+  { label: t('profile.tabMyStars'), value: 'stars', icon: 'i-lucide-star' },
+  { label: t('profile.tabPinnedWall'), value: 'wall', icon: 'i-lucide-pin' },
+])
+
+/** 我的 Star 仓库（GET /user/stared-repos；红线：无任何"点 Star"入口） */
+const starredRepos = ref<StarredRepoItem[]>([])
+const starredLoading = ref(false)
+const starredError = ref<Error | null>(null)
+
+async function loadStarred() {
+  starredLoading.value = true
+  starredError.value = null
+  try {
+    starredRepos.value = await fetchMyStarredRepos()
+  }
+  catch (err) {
+    starredRepos.value = []
+    starredError.value = err as Error
+  }
+  finally {
+    starredLoading.value = false
+  }
+}
+
+/** Star 仓库点击进应用内详情 */
+function openStarredRepo(path: string) {
+  void router.push(`/repos/${path}?tab=code`)
+}
+
+// 首次切到 Star 页签或资料加载完成后拉取（独立区块，失败不影响表单）
+watch(socialTab, (value) => {
+  if (value === 'stars' && starredRepos.value.length === 0 && !starredError.value) {
+    void loadStarred()
+  }
+}, { immediate: true })
 
 /** 拉取当前资料并填充表单 */
 async function loadProfile() {
@@ -330,6 +409,135 @@ async function onSubmit() {
           </UFormField>
         </UPageCard>
       </UForm>
+
+      <!-- ====== 社交增强区块（T14，独立降级：不阻塞上方表单） ====== -->
+      <div class="mt-6 max-w-2xl flex flex-col gap-4">
+        <!-- 粉丝 / 关注 / Star 计数（点击开抽屉；缺失显示 —） -->
+        <UPageCard variant="subtle">
+          <div class="flex items-center gap-6 flex-wrap">
+            <button
+              type="button"
+              class="flex items-center gap-1.5 text-sm cursor-pointer hover:opacity-80"
+              @click="openFollowDrawer('followers')"
+            >
+              <UIcon
+                name="i-lucide-users"
+                class="size-4 text-dimmed"
+              />
+              <span class="text-dimmed">{{ t('profile.followers') }}</span>
+              <span class="font-semibold text-highlighted">{{ followerDisplay }}</span>
+            </button>
+            <button
+              type="button"
+              class="flex items-center gap-1.5 text-sm cursor-pointer hover:opacity-80"
+              @click="openFollowDrawer('following')"
+            >
+              <UIcon
+                name="i-lucide-user-plus"
+                class="size-4 text-dimmed"
+              />
+              <span class="text-dimmed">{{ t('profile.following') }}</span>
+              <span class="font-semibold text-highlighted">{{ followingDisplay }}</span>
+            </button>
+            <div class="flex items-center gap-1.5 text-sm">
+              <UIcon
+                name="i-lucide-star"
+                class="size-4 text-dimmed"
+              />
+              <span class="text-dimmed">{{ t('profile.starCountLabel') }}</span>
+              <span class="font-semibold text-highlighted">{{ starsDisplay }}</span>
+            </div>
+          </div>
+        </UPageCard>
+
+        <!-- 「我的 Star / 仓库墙」页签（红线：无任何"点 Star"入口） -->
+        <UTabs
+          v-model="socialTab"
+          :items="socialTabItems"
+          color="neutral"
+        />
+
+        <!-- 我的 Star 页签：仓库列表（点击进应用内详情；不提供 Star 操作） -->
+        <div v-if="socialTab === 'stars'">
+          <StateAlert
+            v-if="starredLoading"
+            state="loading"
+            loading-variant="list"
+          />
+          <StateAlert
+            v-else-if="starredError"
+            state="error"
+            :error="starredError"
+            :retry="loadStarred"
+          />
+          <StateAlert
+            v-else-if="starredRepos.length === 0"
+            state="empty"
+            :empty-text="t('profile.starsEmpty')"
+            :empty-desc="t('profile.starsEmptyDesc')"
+          />
+          <div
+            v-else
+            class="flex flex-col gap-2"
+          >
+            <button
+              v-for="repo in starredRepos"
+              :key="repo.path"
+              type="button"
+              class="flex items-center gap-3 px-4 py-2.5 rounded-lg border border-default text-left hover:bg-elevated/50 cursor-pointer"
+              @click="openStarredRepo(repo.path)"
+            >
+              <UIcon
+                name="i-lucide-folder-git-2"
+                class="size-4 text-muted shrink-0"
+              />
+              <span class="min-w-0 flex flex-col">
+                <span class="text-sm font-medium text-highlighted truncate">{{ repo.name }}</span>
+                <span
+                  v-if="repo.description"
+                  class="text-xs text-dimmed truncate"
+                >{{ repo.description }}</span>
+              </span>
+              <span class="ms-auto flex items-center gap-3 text-xs text-dimmed shrink-0">
+                <span
+                  v-if="repo.starCount > 0"
+                  class="inline-flex items-center gap-1"
+                >
+                  <UIcon
+                    name="i-lucide-star"
+                    class="size-3"
+                  />
+                  {{ repo.starCount }}
+                </span>
+                <span
+                  v-if="repo.forkCount > 0"
+                  class="inline-flex items-center gap-1"
+                >
+                  <UIcon
+                    name="i-lucide-git-fork"
+                    class="size-3"
+                  />
+                  {{ repo.forkCount }}
+                </span>
+              </span>
+            </button>
+          </div>
+        </div>
+
+        <!-- 仓库墙页签：个人墙只读（复用组织墙组件，样式一致，T14 验收 2） -->
+        <PinnedRepoWall
+          v-else
+          :username="cnbUser?.username || ''"
+          mode="readonly"
+        />
+      </div>
+
+      <!-- 粉丝 / 关注列表抽屉（T14 验收 1；列表项外跳用户主页） -->
+      <FollowListDrawer
+        v-model:open="drawerOpen"
+        :mode="drawerMode"
+        :username="cnbUser?.username || ''"
+      />
     </template>
   </UDashboardPanel>
 </template>

@@ -15,6 +15,7 @@
  */
 import { i18n } from '../i18n'
 import {
+  canManageRole,
   cnbFetch,
   cnbFetchText,
   CnbApiError,
@@ -99,6 +100,26 @@ export interface RepoDetail {
   license: string
   updatedAt: string
   createdAt: string
+  /**
+   * 仓库状态（constant.RepoStatus）：0 正常 / 1 已归档 / 2 fork 中。
+   * 归档仓库的写入口统一按 archived 派生值禁用（设计文档 §2.3）。
+   */
+  status: number
+  /** 派生：status === 1（RepoStatusArchived）。写按钮统一读该值 */
+  archived: boolean
+  /**
+   * 访问者权限级别（constant.AccessRole）：Guest/Reporter/Developer/Master/Owner。
+   * dto.Repos4User 自带 access 字段，此前被丢弃 —— 用于写入口可见性预判。
+   */
+  accessLevel: string
+  /** 派生：accessLevel ∈ {Master, Owner}。写入口按该值隐藏（403 只作兜底） */
+  canManage: boolean
+  /** 可见性变更是否被锁定（dto.Repos4User.visibility_change_lock，只读展示） */
+  visibilityChangeLock: boolean
+  /** 仓库主页（dto.Repos4User.site，PATCH 可修改项之一） */
+  site: string
+  /** 主题标签（dto.Repos4User.topics 为字符串，按分隔符拆分为数组） */
+  topics: string[]
 }
 
 /** 默认分支信息（GET /{repo}/-/git/head → openapi.HeadRef） */
@@ -176,6 +197,16 @@ interface RawRepoDetail {
   created_at?: string
   updated_at?: string
   last_updated_at?: string
+  /** 仓库状态（constant.RepoStatus：0 正常 / 1 已归档 / 2 fork 中） */
+  status?: number
+  /** 访问者权限级别（constant.AccessRole：Guest/Reporter/Developer/Master/Owner） */
+  access?: string
+  /** 可见性变更锁定标记（只读，仅展示） */
+  visibility_change_lock?: boolean
+  /** 仓库主页（PATCH /{repo} 的可修改项之一） */
+  site?: string
+  /** 主题标签 —— dto.Repos4User 中是**字符串**（PATCH 时才是数组） */
+  topics?: string
 }
 
 /**
@@ -186,6 +217,14 @@ interface RawRepoDetail {
  */
 export async function fetchRepoDetail(repoPath: string): Promise<RepoDetail> {
   const raw = await cnbFetch<RawRepoDetail>(`/${encodeRepoPath(repoPath)}`)
+  // 权限级别：Master/Owner 才可管理（写入口可见性预判，403 只作兜底）
+  const accessLevel = raw.access || ''
+  // topics 在 dto.Repos4User 中是字符串（空格或逗号分隔），拆分为数组供编辑表单回显；
+  // 拆分时兼容两种分隔符并过滤空段
+  const topics = (raw.topics || '')
+    .split(/[\s,]+/)
+    .map(t => t.trim())
+    .filter(Boolean)
   return {
     path: raw.path || repoPath,
     name: raw.name || repoPath.split('/').pop() || repoPath,
@@ -203,6 +242,15 @@ export async function fetchRepoDetail(repoPath: string): Promise<RepoDetail> {
     license: raw.license || '',
     updatedAt: raw.last_updated_at || raw.updated_at || '',
     createdAt: raw.created_at || '',
+    // 仓库状态：0 正常 / 1 已归档 / 2 fork 中；异常缺失按正常处理
+    status: raw.status ?? 0,
+    archived: raw.status === 1,
+    accessLevel,
+    // 角色判定单点实现（§8.2）：Master/Owner ⇒ 可管理，经 canManageRole 统一收敛
+    canManage: canManageRole(accessLevel),
+    visibilityChangeLock: !!raw.visibility_change_lock,
+    site: raw.site || '',
+    topics,
   }
 }
 
@@ -438,6 +486,159 @@ export async function fetchRepoCommit(repoPath: string, refOrSha: string): Promi
     `/${encodeRepoPath(repoPath)}/-/git/commits/${encodeURIComponent(refOrSha)}`,
   )
   return normalizeCommit(raw)
+}
+
+// ---------------------------------------------------------------------------
+// A+. 提交 CI 状态（T10）与提交比较（T11）
+// ---------------------------------------------------------------------------
+
+/**
+ * CI 状态元信息映射（T10 验收 2/4）—— **独立映射表**，与流水线构建状态
+ * （buildStatusBadge）分开维护：两套枚举来源不同（git commit-status 的
+ * state vs 构建 status），混用会让未知值误上错误色。
+ *
+ * 映射规则（设计文档 §7.2 T10）：
+ * - success → 绿 / failed → 红 / running → 蓝 / pending → 灰 /
+ *   canceled、skipped → 中性；
+ * - **未知值一律中性色**（绝不显示错误色）—— 服务端新增枚举时前端不误报。
+ */
+export function commitStatusMeta(state: string): {
+  /** Nuxt UI 徽标颜色 */
+  color: 'success' | 'error' | 'info' | 'neutral'
+  /** lucide 图标名 */
+  icon: string
+  /** i18n 键（repo.commitStatus.<key>） */
+  i18nKey: string
+} {
+  switch ((state || '').toLowerCase()) {
+    case 'success':
+      return { color: 'success', icon: 'i-lucide-check-circle-2', i18nKey: 'repo.commitStatus.success' }
+    case 'failed':
+      return { color: 'error', icon: 'i-lucide-x-circle', i18nKey: 'repo.commitStatus.failed' }
+    case 'running':
+      return { color: 'info', icon: 'i-lucide-loader-circle', i18nKey: 'repo.commitStatus.running' }
+    case 'pending':
+      return { color: 'neutral', icon: 'i-lucide-clock', i18nKey: 'repo.commitStatus.pending' }
+    case 'canceled':
+      return { color: 'neutral', icon: 'i-lucide-circle-off', i18nKey: 'repo.commitStatus.canceled' }
+    case 'skipped':
+      return { color: 'neutral', icon: 'i-lucide-skip-forward', i18nKey: 'repo.commitStatus.skipped' }
+    // 未知值（含空串）：中性色兜底，不误报为失败
+    default:
+      return { color: 'neutral', icon: 'i-lucide-help-circle', i18nKey: 'repo.commitStatus.unknown' }
+  }
+}
+
+/** git_internal_app_vcs_service_bff_api.CommitStatus 原始结构（单个 check） */
+interface RawCommitStatusCheck {
+  context?: string
+  state?: string
+  description?: string
+  target_url?: string
+  created_at?: string
+  updated_at?: string
+}
+
+/** api.CommitStatuses 原始结构 */
+interface RawCommitStatuses {
+  sha?: string
+  state?: string
+  statuses?: RawCommitStatusCheck[]
+}
+
+/** 提交 CI 状态（归一化后） */
+export interface CommitStatusResult {
+  sha: string
+  /** 整体状态（服务端聚合；空串表示该提交无 CI 记录，UI 隐藏徽标） */
+  state: string
+  checks: {
+    context: string
+    state: string
+    description: string
+    /** 明细外跳地址（PR 链接 / 构建详情等，原样透传） */
+    targetUrl: string
+  }[]
+}
+
+/**
+ * 提交 CI 状态（GET /{repo}/-/git/commit-statuses/{commitish}，scope repo-code:r）。
+ *
+ * 懒加载约定（T10 验收 1）：列表渲染时**不**为每行立即调用 —— 由
+ * RepoCommits 的 IntersectionObserver 在行进入视口后才请求，
+ * 结果以 Map<sha, CommitStatusResult> 缓存，翻页/切 ref 不重复拉取。
+ * @param commitish 分支名 / 提交 SHA / 标签名
+ */
+export async function fetchCommitStatuses(
+  repoPath: string,
+  commitish: string,
+): Promise<CommitStatusResult> {
+  const raw = await cnbFetch<RawCommitStatuses>(
+    `/${encodeRepoPath(repoPath)}/-/git/commit-statuses/${encodeURIComponent(commitish)}`,
+  )
+  return {
+    sha: raw.sha || '',
+    state: raw.state || '',
+    checks: (Array.isArray(raw.statuses) ? raw.statuses : []).map(check => ({
+      context: check.context || '',
+      state: check.state || '',
+      description: check.description || '',
+      targetUrl: check.target_url || '',
+    })),
+  }
+}
+
+/**
+ * 提交比较（GET /{repo}/-/git/compare/{base...head}，T11）。
+ *
+ * **三点编码口径（验收 3）**：swagger 把 base_head 声明为**单个 path 段**，
+ * 格式为 `base...head` —— 必须把整段 `base...head` 一起 encodeURIComponent
+ * （含分支名内部的 '/' 与三个点一起编码），不能只编码 base/head 各自内部
+ * 再拼 `...`，否则服务端按多段路径解析会 404。
+ *
+ * files 复用 PullFile 结构（api.CommitDiffFilePatch 与 PR files 字段一致），
+ * diff 渲染直接复用 PullDiffView。
+ */
+export interface CompareResult {
+  /** base...head 之间的提交数（ahead/behind 汇总口径，服务端给定） */
+  totalCommits: number
+  /** 区间提交列表（与提交列表同构） */
+  commits: CommitItem[]
+  /** 变更文件（复用 PullFile，patch 为空表示二进制/无文本差异） */
+  files: PullFile[]
+}
+
+export async function fetchCompare(
+  repoPath: string,
+  base: string,
+  head: string,
+): Promise<CompareResult> {
+  const raw = await cnbFetch<{
+    total_commits?: number
+    commits?: RawCommit[]
+    files?: {
+      name?: string
+      path?: string
+      status?: string
+      additions?: number
+      deletions?: number
+      patch?: string
+    }[]
+  }>(
+    `/${encodeRepoPath(repoPath)}/-/git/compare/${encodeURIComponent(`${base}...${head}`)}`,
+  )
+  return {
+    totalCommits: raw.total_commits ?? 0,
+    commits: (Array.isArray(raw.commits) ? raw.commits : []).map(normalizeCommit),
+    files: (Array.isArray(raw.files) ? raw.files : []).map(f => ({
+      // 优先 path（新路径），回退 name；与 PR files 归一化保持同构
+      filename: f.path || f.name || '',
+      status: (['add', 'modify', 'delete', 'rename', 'copy'] as const)
+        .find(s => s === f.status) || 'modify',
+      additions: f.additions ?? 0,
+      deletions: f.deletions ?? 0,
+      patch: f.patch || '',
+    })),
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -979,7 +1180,12 @@ export async function fetchBuildLogs(
     data?: (Omit<Partial<BuildLogItem>, 'durationMs'> & { duration?: number })[]
   }>(`/${encodeRepoPath(repoPath)}/-/build/logs?${query}`)
   const items = (Array.isArray(raw?.data) ? raw.data : []).map(d => ({
-    sn: d.sn || '',
+    // sn 用 String() 收敛，而不是 `d.sn || ''`（类型契约脆弱点）：
+    // 若服务端把 sn 返回成数字，`d.sn || ''` 会把 number 塞进声明为 string
+    // 的字段（TS 不报错但运行时是 number）。这条 sn 会进入系统通知的 extra，
+    // 被 JSON 序列化为数字；Rust 的 extra_str 只认 Value::String → 取不到 →
+    // 「点击通知直达构建详情」在所有平台静默退化成"打开通知面板"。
+    sn: String(d.sn ?? ''),
     status: d.status || '',
     commitTitle: d.commitTitle || '',
     sha: d.sha || '',
@@ -1112,3 +1318,114 @@ export async function fetchStageLog(
 
 /** 导出错误类别类型：StateAlert 组件按 kind 分支渲染（re-export 避免循环依赖页面直接引 useCnbAuth） */
 export type { CnbApiErrorKind }
+
+// ---------------------------------------------------------------------------
+// E. 流水线写操作（设计文档 §3.2 / 附录 A #1~#3，scope: repo-cnb-trigger:rw）
+// ---------------------------------------------------------------------------
+
+/**
+ * 构建触发结果（dto.BuildResult）。
+ *
+ * ⚠️ swagger 陷阱 3：`success` 是"是否触发成功"（如分支不存在 → false），
+ * **HTTP 200 + success=false 是合法组合** —— 调用方必须判该字段并把
+ * message 透出给用户，不能以"请求没抛错"当作触发成功。
+ */
+export interface BuildTriggerResult {
+  sn: string
+  buildLogUrl: string
+  message: string
+  /** HTTP 200 也可能为 false（分支不存在等），必须显式判断 */
+  success: boolean
+}
+
+/**
+ * 触发构建（POST /{repo}/-/build/start，body: dto.StartBuildReq）。
+ *
+ * dto.StartBuildReq 的 3 个 swagger 陷阱（全部已按实测行为处理）：
+ * 1. `event` 文档要求「须为 api_trigger 或以它开头」→ 固定传 'api_trigger'，
+ *    不暴露给调用方自定义（传其他值会被服务端拒绝）；
+ * 2. `sync` 的 swagger 类型是**字符串**而非 boolean（原文 "sync":
+ *    {"type":"string"}）→ 固定传 'false'（字符串），拿到 sn 立即返回；
+ * 3. `success` 判定见 BuildTriggerResult 注释 —— 本函数不做 success 拦截，
+ *    原样返回完整结果由调用方决定 UI 行为（弹窗内 toast error 等）。
+ *
+ * @param opts.branch 触发分支（缺省由服务端取主分支）
+ * @param opts.sha 提交 SHA（优先级高于 tag）
+ * @param opts.tag 触发 tag（优先级高于 branch）
+ * @param opts.title 构建标题（可选）
+ * @param opts.env 环境变量（可选，值必须全为字符串）
+ */
+export async function triggerBuild(
+  repoPath: string,
+  opts: { branch?: string, sha?: string, tag?: string, title?: string, env?: Record<string, string> } = {},
+): Promise<BuildTriggerResult> {
+  // 请求体组装：仅在调用方提供时写入对应字段（branch 缺省由服务端兜底）
+  const body: Record<string, unknown> = {
+    // —— 陷阱 1/2：event 固定 api_trigger；sync 是字符串 'false' ——
+    event: 'api_trigger',
+    sync: 'false',
+  }
+  if (opts.branch) {
+    body.branch = opts.branch
+  }
+  if (opts.sha) {
+    body.sha = opts.sha
+  }
+  if (opts.tag) {
+    body.tag = opts.tag
+  }
+  if (opts.title) {
+    body.title = opts.title
+  }
+  if (opts.env && Object.keys(opts.env).length > 0) {
+    body.env = opts.env
+  }
+  const raw = await cnbFetch<{
+    sn?: string
+    buildLogUrl?: string
+    message?: string
+    success?: boolean
+  }>(`/${encodeRepoPath(repoPath)}/-/build/start`, {
+    method: 'POST',
+    body: JSON.stringify(body),
+  })
+  return {
+    // 同上（fetchBuildLogs 的 sn）：trigger 响应里的 sn 也必须 String 收敛，
+    // 否则 number 型 sn 会让后续「构建详情路由 / 通知 extra」两处都失真
+    sn: String(raw?.sn ?? ''),
+    buildLogUrl: raw?.buildLogUrl || '',
+    message: raw?.message || '',
+    // success 缺失（服务端未返回）时按 false 处理，防止把异常响应当成功
+    success: raw?.success === true,
+  }
+}
+
+/** 构建写操作通用响应（停止 / 删日志：{code, message}） */
+export interface BuildCommonResult {
+  code: number
+  message: string
+}
+
+/**
+ * 停止构建（POST /{repo}/-/build/stop/{sn}，scope: repo-cnb-trigger:rw）。
+ * 成功后调用方应重拉 fetchBuildStatus 直到终态（success/error/cancel）。
+ */
+export async function stopBuild(repoPath: string, sn: string): Promise<BuildCommonResult> {
+  const raw = await cnbFetch<{ code?: number, message?: string }>(
+    `/${encodeRepoPath(repoPath)}/-/build/stop/${encodeURIComponent(sn)}`,
+    { method: 'POST' },
+  )
+  return { code: raw?.code ?? 0, message: raw?.message || '' }
+}
+
+/**
+ * 删除构建日志（DELETE /{repo}/-/build/logs/{sn}，scope: repo-cnb-trigger:rw）。
+ * ⚠️ 删除的是**日志**而非构建记录本身，删除后日志区呈空态（设计文档 T04-4）。
+ */
+export async function deleteBuildLogs(repoPath: string, sn: string): Promise<BuildCommonResult> {
+  const raw = await cnbFetch<{ code?: number, message?: string }>(
+    `/${encodeRepoPath(repoPath)}/-/build/logs/${encodeURIComponent(sn)}`,
+    { method: 'DELETE' },
+  )
+  return { code: raw?.code ?? 0, message: raw?.message || '' }
+}

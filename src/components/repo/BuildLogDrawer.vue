@@ -5,11 +5,16 @@
  * 渲染：等宽按行（保留空白）；行数 > 2000 默认只渲染尾部 2000 行、
  * 可"展开全部"；提供复制全文与"在浏览器打开日志"兜底出口；内容更新
  * 后自动滚动到底部（最新日志通常在末尾）。
+ *
+ * 本次增量（T04）：头部右上新增「删除日志」入口（DELETE /-/build/logs/{sn}，
+ * scope repo-cnb-trigger:rw）—— ConfirmDialog 输入 sn 确认（高危写操作）；
+ * 删除的是**日志**而非构建记录，删除后重拉呈空态。归档仓库禁用。
  */
 import { computed, nextTick, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { openUrl } from '@tauri-apps/plugin-opener'
-import { fetchStageLog, type StageLog } from '../../composables/useCnbRepo'
+import { deleteBuildLogs, fetchStageLog, type StageLog } from '../../composables/useCnbRepo'
+import ConfirmDialog from '../common/ConfirmDialog.vue'
 
 const props = defineProps<{
   open: boolean
@@ -21,6 +26,8 @@ const props = defineProps<{
   stageId: string
   /** 浏览器兜底日志地址（列表条目携带；直链不可得时留空隐藏按钮） */
   externalLogUrl?: string
+  /** 归档仓库：删除日志入口禁用 */
+  archived?: boolean
 }>()
 
 const emit = defineEmits<{
@@ -130,6 +137,40 @@ function openExternal() {
     window.open(url, '_blank')
   }
 }
+
+// ---------------------------------------------------------------------------
+// 删除日志（T04）：ConfirmDialog 输入 sn 确认 → DELETE → 重拉呈空态
+// ---------------------------------------------------------------------------
+
+const deleteDialogOpen = ref(false)
+/** 删除进行中（防重复提交） */
+const deleting = ref(false)
+
+/** 执行删除：成功后重拉日志（呈空态）并提示 */
+async function doDeleteLogs() {
+  if (!props.repoPath || !props.sn || deleting.value) {
+    return
+  }
+  deleting.value = true
+  try {
+    await deleteBuildLogs(props.repoPath, props.sn)
+    toast.add({ title: t('builds.deleteLogsSuccess'), color: 'success', duration: 2500 })
+    deleteDialogOpen.value = false
+    // 重拉当前阶段日志：服务端已删除，呈空态（T04-4 验收点）
+    await load()
+  }
+  catch (err) {
+    toast.add({
+      title: t('builds.deleteLogsFailed'),
+      description: (err as Error)?.message || '',
+      color: 'error',
+      duration: 6000,
+    })
+  }
+  finally {
+    deleting.value = false
+  }
+}
 </script>
 
 <template>
@@ -145,6 +186,16 @@ function openExternal() {
           {{ title }}
         </h3>
         <div class="ms-auto flex items-center gap-1.5 shrink-0">
+          <!-- 删除日志：高危写操作（输入 sn 确认）；归档仓库禁用 -->
+          <UButton
+            size="xs"
+            color="error"
+            variant="ghost"
+            icon="i-lucide-trash-2"
+            :label="t('builds.deleteLogs')"
+            :disabled="archived"
+            @click="deleteDialogOpen = true"
+          />
           <UButton
             size="xs"
             color="neutral"
@@ -246,4 +297,16 @@ function openExternal() {
       </template>
     </template>
   </UDrawer>
+
+  <!-- 删除日志二次确认：普通确认（主理人裁决 —— 日志可重新构建再生，
+       不值得输入长 sn 的摩擦；文案保留"删除后不可恢复"后果说明） -->
+  <ConfirmDialog
+    v-model:open="deleteDialogOpen"
+    :title="t('builds.deleteLogs')"
+    :desc="t('builds.deleteLogsConfirm', { sn })"
+    :confirm-label="t('builds.deleteLogs')"
+    confirm-color="error"
+    :loading="deleting"
+    @confirm="doDeleteLogs"
+  />
 </template>

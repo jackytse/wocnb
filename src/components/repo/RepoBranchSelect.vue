@@ -23,6 +23,17 @@ const props = defineProps<{
   repoPath: string
   /** 当前生效 ref（route 的 ?ref= 或默认分支名） */
   modelValue: string
+  /**
+   * 选中行为（T11 扩展，向后兼容）：
+   * - 'route'（默认）：写回 ?ref=（useRepoRoute.switchRef），代码/提交页签语义；
+   * - 'emit'：仅 emit('update:modelValue')，不做路由写入 —— 提交比较的
+   *   base/head 是本地选择态，写 ?ref= 会误清 path/sha 下钻键。
+   */
+  selectMode?: 'route' | 'emit'
+}>()
+
+const emit = defineEmits<{
+  (e: 'update:modelValue', value: string): void
 }>()
 
 const { t } = useI18n()
@@ -77,10 +88,15 @@ const filteredTags = computed(() =>
   tags.value.filter(tg => tg.name.toLowerCase().includes(filter.value.toLowerCase())),
 )
 
-/** 选中：写回 ?ref=（replace 且清空 path/sha）并收起弹层 */
+/** 选中：route 模式写回 ?ref=（replace 且清空 path/sha）；emit 模式仅向上传递 */
 function select(name: string) {
   open.value = false
-  switchRef(name)
+  if (props.selectMode === 'emit') {
+    emit('update:modelValue', name)
+  }
+  else {
+    switchRef(name)
+  }
 }
 </script>
 

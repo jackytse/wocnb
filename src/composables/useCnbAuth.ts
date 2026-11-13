@@ -241,6 +241,22 @@ export function parseMissingScope(errmsg: string): string | undefined {
 }
 
 /**
+ * 判断角色是否具备管理权限（Master/Owner）—— 全项目唯一实现点（§8.2）。
+ *
+ * 背景：constant.AccessRole 中可管理资源的角色为 Master/Owner，此前该判定
+ * 在 useCnbRepo / repos/index.vue / 制品删除入口 / 仓库墙编辑入口各自写了
+ * 字符串比较副本，迟早出现某处漏判或大小写不一致。统一收敛到这里，
+ * 各调用点（canManage、创建仓库入口、制品删除入口等）一律引用本函数。
+ *
+ * 大小写不敏感：服务端字段（access_role / accessLevel）口径若发生
+ * 大小写漂移不至于误判；null/undefined/空串/未知角色一律 false。
+ */
+export function canManageRole(role: string | null | undefined): boolean {
+  const normalized = (role || '').toLowerCase()
+  return normalized === 'master' || normalized === 'owner'
+}
+
+/**
  * 文本通道：与 cnbFetch 同一网络链路，但不做 response.json()，
  * 返回原始文本，供 raw 文件、阶段日志等非 JSON 场景使用。
  *
@@ -272,10 +288,16 @@ export async function cnbFetchText(path: string, options: {
 }
 
 /**
- * 调用 CNB Open API 的通用封装。
- * 自动附加 Bearer 认证头与 Accept 头（官方文档要求的两个 Header）。
+ * 发起一次 CNB API 请求并完成**错误归一**（不解析响应体）。
+ *
+ * 为什么单独抽出（而不是在 cnbFetch / cnbFetchVoid 里各写一遍）：
+ * 两条通道的错误语义必须严格一致 —— 401 触发全局登出、403 携带
+ * missingScope、网络异常归一为 kind=network。复制两份迟早漂移，届时
+ * "写操作 403 提示缺 scope、读操作不提示"这类诡异差异极难排查。
+ *
+ * @param path 以 `/` 开头的 API 路径（不含 https://api.cnb.cool 前缀）
  */
-export async function cnbFetch<T>(path: string, options: RequestInit = {}): Promise<T> {
+async function cnbRequest(path: string, options: RequestInit = {}): Promise<Response> {
   let response: Response
   try {
     response = await httpFetch(`${CNB_API_BASE}${path}`, {
@@ -318,7 +340,33 @@ export async function cnbFetch<T>(path: string, options: RequestInit = {}): Prom
       missingScope,
     )
   }
+  return response
+}
+
+/**
+ * 调用 CNB Open API 的通用封装（**JSON 通道**）。
+ * 自动附加 Bearer 认证头与 Accept 头（官方文档要求的两个 Header）。
+ */
+export async function cnbFetch<T>(path: string, options: RequestInit = {}): Promise<T> {
+  const response = await cnbRequest(path, options)
   return response.json() as Promise<T>
+}
+
+/**
+ * 写操作专用通道（**无响应体**）：2xx 即成功，响应体一律丢弃。
+ *
+ * 为什么必须有它（踩过的坑）：CNB 的写端点（删除成员、移除外部贡献者、
+ * 改组织信息、删保护分支规则……）在 swagger 里返回的是 `200` + 空 schema，
+ * 实际响应是空 body。走 cnbFetch 会在 `response.json()` 处抛
+ * "Unexpected end of JSON input"，把**成功**报成失败，用户会以为没生效而
+ * 反复点击（写操作尤其危险）。部分端点会回 `{}`，同样无意义，一并丢弃。
+ *
+ * 错误语义与 cnbFetch 完全一致（共用 cnbRequest）。
+ */
+export async function cnbFetchVoid(path: string, options: RequestInit = {}): Promise<void> {
+  const response = await cnbRequest(path, options)
+  // 有 body 也主动消费掉（避免连接未读完），解析失败不影响成功判定
+  await response.text().catch(() => '')
 }
 
 /**
@@ -529,7 +577,12 @@ export function cnbGroupUrl(path: string): string {
 export async function fetchCnbGroups(): Promise<CnbGroup[]> {
   const raw = await cnbFetch<CnbGroup[]>('/user/groups')
   // 兜底：接口应返回数组，异常时按空列表处理，避免调用方空指针
-  return Array.isArray(raw) ? raw : []
+  const list = Array.isArray(raw) ? raw : []
+  // 写入共享状态：侧边栏组织下拉直接读 cnbGroups，
+  // 于是「创建组织 / 转移组织」后任一调用方拉一次列表即可让侧边栏同步
+  // （此前列表只存在 GroupsMenu 组件内部，外部刷新不到）
+  cnbGroups.value = list
+  return list
 }
 
 /**
@@ -539,6 +592,21 @@ export async function fetchCnbGroups(): Promise<CnbGroup[]> {
  * 注意：不持久化，每次启动默认选中组织列表第一项。
  */
 export const selectedGroup = ref<CnbGroup | null>(null)
+
+/**
+ * 组织列表的**共享状态**（2026-11-11 组织能力扩展新增）。
+ *
+ * 为什么要把这份列表从 GroupsMenu 组件里提出来：
+ * 此前 groups 是 GroupsMenu 内部的 ref，只有该组件能刷新。于是「创建组织
+ * 成功」「转移组织成功」之后，侧边栏下拉列表仍是旧数据（要等组件重新挂载
+ * 才会更新），用户看到的现象是"操作说成功了但列表没变"，很容易误以为失败
+ * 而重复提交。现在列表由本模块唯一持有，任何调用方执行 fetchCnbGroups()
+ * 都会让侧边栏即时同步。
+ *
+ * null 表示**尚未加载**，与「加载完成但为空数组」语义不同：
+ * UI 据此区分「加载中占位」与「你还没有任何组织」。
+ */
+export const cnbGroups = ref<CnbGroup[] | null>(null)
 
 /** 组织仓库信息（仅声明界面用到的字段，来源：Swagger dto.Repos4User） */
 export interface CnbRepo {
@@ -594,17 +662,22 @@ interface RawCnbRepo {
  * @param slug 组织路径（CnbGroup.path）
  * @param page 页码（从 1 开始）
  * @param pageSize 每页条数（首页列表默认 30）
+ * @param search 关键字过滤（T13 仓库墙"搜索添加"用；服务端模糊匹配）
  */
 export async function fetchCnbGroupRepos(
   slug: string,
   page = 1,
   pageSize = 30,
+  search?: string,
 ): Promise<CnbRepo[]> {
   const query = new URLSearchParams({
     page: String(page),
     page_size: String(pageSize),
     descendant: '1',
   })
+  if (search) {
+    query.set('search', search)
+  }
   // slug 是资源路径的一部分，需编码防注入特殊字符
   // 原始响应为 snake_case（dto.Repos4User），字段名与 CnbRepo 不同，
   // 因此用 RawCnbRepo 类型承接后逐字段归一化
@@ -724,6 +797,14 @@ export interface CnbProfilePayload {
   site: string
   /** 微信公众号 */
   wechatMp: string
+  /**
+   * 社交计数（T14）：粉丝 / 关注 / Star 仓库数。
+   * -1 表示服务端未返回该字段（缺 account-engage:r 等场景），UI 显示「—」；
+   * 0 是合法值（没有人关注），与缺失语义不同，禁止混用。
+   */
+  followerCount: number
+  followingCount: number
+  starsCount: number
 }
 
 /**
@@ -734,6 +815,8 @@ export interface CnbProfilePayload {
 export async function fetchCnbUserProfile(): Promise<CnbProfilePayload> {
   const user = await cnbFetch<Record<string, unknown>>('/user')
   const str = (key: string): string => (typeof user[key] === 'string' ? (user[key] as string) : '')
+  // 社交计数：字段缺失 → -1（「—」）；存在 → 原值（0 合法）
+  const count = (key: string): number => (typeof user[key] === 'number' ? (user[key] as number) : -1)
   return {
     nickname: str('nickname'),
     bio: str('bio'),
@@ -742,6 +825,9 @@ export async function fetchCnbUserProfile(): Promise<CnbProfilePayload> {
     address: str('address'),
     site: str('site'),
     wechatMp: str('wechat_mp'),
+    followerCount: count('follower_count'),
+    followingCount: count('follow_count'),
+    starsCount: count('stars_count'),
   }
 }
 
@@ -764,7 +850,10 @@ export async function fetchCnbUserProfile(): Promise<CnbProfilePayload> {
  * @throws CnbApiError 更新失败时抛出（401 由拦截器统一处理；403 可能是
  *   令牌缺少 account-profile:rw 权限，错误信息透出状态码便于排查）
  */
-export async function updateCnbProfile(payload: CnbProfilePayload): Promise<void> {
+/** 可提交的资料字段（社交计数为只读派生值，不在提交负载内） */
+export type CnbProfileUpdatePayload = Omit<CnbProfilePayload, 'followerCount' | 'followingCount' | 'starsCount'>
+
+export async function updateCnbProfile(payload: CnbProfileUpdatePayload): Promise<void> {
   await cnbFetch('/user', {
     method: 'POST',
     // 注意：不带 nickname —— CNB 拒绝通过 API 修改昵称（见函数注释），

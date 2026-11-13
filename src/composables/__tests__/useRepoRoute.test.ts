@@ -188,4 +188,95 @@ describe('useRepoRoute 写入侧', () => {
     r.openCommit('abc123')
     expect(routerPush.mock.calls[1][0].query).toEqual({ tab: 'commits', sha: 'abc123' })
   })
+
+  // -------------------------------------------------------------------------
+  // §6 R3 回归：切换页签必须清空全部下钻键（8 页签 + 4 新键后为必修项）
+  // -------------------------------------------------------------------------
+
+  it('switchTab 清空全部下钻键：?tab=builds&sn=1&release=2 → releases 只剩 tab（R3 回归）', () => {
+    // 构造脏 URL：构建详情（sn=1）+ 残留的 release 下钻键
+    routeState.query = { tab: 'builds', sn: '1', release: '2' }
+    useRepoRoute().switchTab('releases')
+    expect(routerReplace).toHaveBeenCalledTimes(1)
+    // 断言只剩 tab，sn / release 均被清空 —— 否则切到 Releases 会直接打开 release=2
+    expect(routerReplace.mock.calls[0][0].query).toEqual({ tab: 'releases' })
+  })
+
+  it('switchTab 清空全部下钻键：制品三级下钻键 pname/ptag/ptype，ptype 保留（用户偏好）', () => {
+    routeState.query = {
+      tab: 'packages',
+      ptype: 'docker',
+      pname: 'my/app',
+      ptag: 'v1.0.0',
+      page: '2',
+      state: 'open',
+    }
+    useRepoRoute().switchTab('issues')
+    const call = routerReplace.mock.calls[0][0]
+    // 定位键全部清除：pname/ptag/page/sn/release 不应残留
+    expect(call.query).toEqual({ tab: 'issues', ptype: 'docker', state: 'open' })
+    expect(call.query.pname).toBeUndefined()
+    expect(call.query.ptag).toBeUndefined()
+  })
+
+  it('switchTab 从带 number 的 Issue 详情切走同样清 number（既有 5 页签回归保护）', () => {
+    routeState.query = { tab: 'issues', number: '42', state: 'closed' }
+    useRepoRoute().switchTab('builds')
+    expect(routerReplace.mock.calls[0][0].query).toEqual({ tab: 'builds', state: 'closed' })
+  })
+
+  // -------------------------------------------------------------------------
+  // 新增下钻键读取侧归一规则（设计文档 §2.3 表格）
+  // -------------------------------------------------------------------------
+
+  it('release：缺失/空串归一为空（渲染列表）；有值原样透传', () => {
+    routeState.query = { tab: 'releases' }
+    expect(useRepoRoute().release.value).toBe('')
+    routeState.query = { tab: 'releases', release: '' }
+    expect(useRepoRoute().release.value).toBe('')
+    routeState.query = { tab: 'releases', release: '99' }
+    expect(useRepoRoute().release.value).toBe('99')
+  })
+
+  it('ptype：缺失/非法值归一为 all；合法枚举值原样透传', () => {
+    routeState.query = { tab: 'packages' }
+    expect(useRepoRoute().ptype.value).toBe('all')
+    routeState.query = { tab: 'packages', ptype: 'bogus' }
+    expect(useRepoRoute().ptype.value).toBe('all')
+    routeState.query = { tab: 'packages', ptype: 'docker' }
+    expect(useRepoRoute().ptype.value).toBe('docker')
+  })
+
+  it('ptag：缺失归一为空；有 pname 无 ptag → 空；ptag 有值但 pname 缺失 → 丢弃 ptag', () => {
+    routeState.query = { tab: 'packages' }
+    expect(useRepoRoute().ptag.value).toBe('')
+    routeState.query = { tab: 'packages', pname: 'app', ptag: '' }
+    expect(useRepoRoute().ptag.value).toBe('')
+    // 三栏需要完整链式上下文：ptag 有值但无 pname 时必须丢弃
+    routeState.query = { tab: 'packages', ptag: 'v1' }
+    expect(useRepoRoute().ptag.value).toBe('')
+    routeState.query = { tab: 'packages', pname: 'app', ptag: 'v1' }
+    expect(useRepoRoute().ptag.value).toBe('v1')
+  })
+
+  it('openRelease/openPackage/openPackageTag 用 push 携带下钻参数', () => {
+    const r = useRepoRoute()
+    r.openRelease('12')
+    expect(routerPush.mock.calls[0][0].query).toEqual({ tab: 'releases', release: '12' })
+    r.openPackage('my/app', 'npm')
+    expect(routerPush.mock.calls[1][0].query).toEqual({ tab: 'packages', ptype: 'npm', pname: 'my/app' })
+    r.openPackageTag('my/app', 'docker', 'v2')
+    expect(routerPush.mock.calls[2][0].query).toEqual({
+      tab: 'packages',
+      ptype: 'docker',
+      pname: 'my/app',
+      ptag: 'v2',
+    })
+  })
+
+  it('backToList 同时清 release（Releases 详情返回列表）', () => {
+    routeState.query = { tab: 'releases', release: '12', page: '2' }
+    useRepoRoute().backToList()
+    expect(routerPush.mock.calls[0][0].query).toEqual({ tab: 'releases', page: '2' })
+  })
 })

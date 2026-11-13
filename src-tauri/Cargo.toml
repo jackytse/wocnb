@@ -27,7 +27,15 @@ tauri-plugin-log = "2"
 # CNB API 请求通道：前端经 IPC 调用 cnb_http_request 命令，由 Rust 侧执行。
 # 背景：CNB API 无 CORS 头（Webview fetch 被拦）且 tauri-plugin-http 的
 # rustls TLS 指纹被 CNB 网关风控 403，故用 native-tls reqwest 自建通道
-reqwest = "0.12"
+# stream：cnb_download_archive 需要流式读取响应体（bytes_stream），
+# 逐 chunk 落盘，避免把数十 MB 的源码包整体读入内存
+reqwest = { version = "0.12", features = ["stream"] }
+# futures-util：reqwest::Response::bytes_stream 返回 impl Stream，
+# 消费它需要 StreamExt（next()）；reqwest 不重导出该 trait
+futures-util = { version = "0.3", default-features = false, features = ["std"] }
+# tokio：Tauri 内部已含 tokio 运行时，这里显式声明以使用 fs/io-util ——
+# cnb_download_archive 用 tokio::fs::File 异步写盘 + AsyncWriteExt 写 chunk
+tokio = { version = "1", features = ["fs", "io-util"] }
 # base64：cnb_fetch_image 命令把头像/组织图标二进制编码后经 IPC 传给前端
 # （0.22 与依赖树中已有版本一致，不引入额外编译开销）
 base64 = "0.22"

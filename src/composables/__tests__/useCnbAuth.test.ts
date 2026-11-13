@@ -18,7 +18,7 @@ vi.mock('../../i18n', () => ({
   i18n: { global: { t: (key: string) => key } },
 }))
 
-import { CnbApiError, parseMissingScope } from '../useCnbAuth'
+import { canManageRole, CnbApiError, parseMissingScope } from '../useCnbAuth'
 
 // ---------------------------------------------------------------------------
 // parseMissingScope：从 403 errmsg 抽取缺失权限 scope（风险区 #1 配套）
@@ -62,6 +62,31 @@ describe('parseMissingScope', () => {
 
   it('更长 token 的前缀不得误匹配（:rwx 不抽出 :r / :rw）', () => {
     expect(parseMissingScope('missing scope repo-issue:rwx')).toBeUndefined()
+  })
+})
+
+// ---------------------------------------------------------------------------
+// canManageRole：Master/Owner 判定单点实现（§8.2，4 处副本收敛后唯一真源）
+// ---------------------------------------------------------------------------
+
+describe('canManageRole', () => {
+  it('Master/Owner 任意大小写均可管理', () => {
+    expect(canManageRole('Master')).toBe(true)
+    expect(canManageRole('Owner')).toBe(true)
+    expect(canManageRole('owner')).toBe(true)
+    expect(canManageRole('MASTER')).toBe(true)
+  })
+
+  it('其他角色一律 false', () => {
+    expect(canManageRole('Developer')).toBe(false)
+    expect(canManageRole('Guest')).toBe(false)
+    expect(canManageRole('Reporter')).toBe(false)
+  })
+
+  it('空值防御：null / undefined / 空串返回 false', () => {
+    expect(canManageRole(null)).toBe(false)
+    expect(canManageRole(undefined)).toBe(false)
+    expect(canManageRole('')).toBe(false)
   })
 })
 

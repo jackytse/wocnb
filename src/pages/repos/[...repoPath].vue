@@ -35,6 +35,9 @@ import RepoPullList from '../../components/repo/RepoPullList.vue'
 import RepoPullDetail from '../../components/repo/RepoPullDetail.vue'
 import RepoBuildList from '../../components/repo/RepoBuildList.vue'
 import RepoBuildDetail from '../../components/repo/RepoBuildDetail.vue'
+import RepoReleases from '../../components/repo/RepoReleases.vue'
+import RepoPackages from '../../components/repo/RepoPackages.vue'
+import RepoCommunity from '../../components/repo/RepoCommunity.vue'
 
 const router = useRouter()
 // route 用于读取原始 query.number（useRepoRoute 只暴露解析后的 number）
@@ -156,7 +159,7 @@ const invalidNumber = computed(() => {
       />
 
       <template v-else>
-        <RepoHeader :detail="detail" :loading="loading" />
+        <RepoHeader :detail="detail" :loading="loading" @updated="loadRepo" />
 
         <!-- 页签：概览加载中禁点（防用未就绪的 ref 发请求） -->
         <RepoTabs v-if="!loading && detail" />
@@ -169,7 +172,12 @@ const invalidNumber = computed(() => {
               state="loading"
               loading-variant="detail"
             />
-            <RepoCodeBrowser v-else :repo-path="repoPath" :git-ref="effectiveRef" />
+            <RepoCodeBrowser
+              v-else
+              :repo-path="repoPath"
+              :git-ref="effectiveRef"
+              :visibility="detail?.visibility"
+            />
           </template>
 
           <!-- 提交页签 -->
@@ -211,14 +219,34 @@ const invalidNumber = computed(() => {
             <RepoPullList v-else :repo-path="repoPath" />
           </template>
 
-          <!-- 流水线页签：sn 存在 → 详情，否则列表 -->
+          <!-- 流水线页签：sn 存在 → 详情，否则列表；archived 单向下发禁写入口 -->
           <template v-else-if="tab === 'builds'">
             <RepoBuildDetail
               v-if="sn"
               :repo-path="repoPath"
               :sn="sn"
+              :archived="detail?.archived"
             />
-            <RepoBuildList v-else :repo-path="repoPath" />
+            <RepoBuildList
+              v-else
+              :repo-path="repoPath"
+              :archived="detail?.archived"
+            />
+          </template>
+
+          <!-- Releases 页签：release 下钻 → 详情，否则列表（T07） -->
+          <template v-else-if="tab === 'releases'">
+            <RepoReleases :repo-path="repoPath" :detail="detail" />
+          </template>
+
+          <!-- 制品库页签（T08）：三栏布局 + URL 三键恢复（ptype/pname/ptag） -->
+          <template v-else-if="tab === 'packages'">
+            <RepoPackages :repo-path="repoPath" :detail="detail" />
+          </template>
+
+          <!-- 社区页签（T09）：四区块独立降级（贡献者/趋势/Fork/Star） -->
+          <template v-else-if="tab === 'community'">
+            <RepoCommunity :repo-path="repoPath" />
           </template>
         </div>
       </template>

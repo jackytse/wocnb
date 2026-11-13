@@ -17,12 +17,15 @@ import { useRepoRoute } from '../../composables/useRepoRoute'
 import { formatBytes } from '../../utils'
 import StateAlert from './StateAlert.vue'
 import RepoFileViewer from './RepoFileViewer.vue'
+import RepoCodeDownloadMenu from './RepoCodeDownloadMenu.vue'
 import MarkdownView from './MarkdownView.vue'
 
 const props = defineProps<{
   repoPath: string
   /** 当前生效 ref（?ref= 或默认分支名） */
   gitRef: string
+  /** 仓库可见性（大写三值；Secret 时下载入口置灰 —— T12） */
+  visibility?: string
 }>()
 
 const { t } = useI18n()
@@ -192,6 +195,13 @@ const siteUrl = computed(() =>
             {{ crumb.name }}
           </button>
         </template>
+        <!-- 源码包下载入口（T12；仅根目录工具行显示，Secret 置灰） -->
+        <RepoCodeDownloadMenu
+          class="ms-auto"
+          :repo-path="repoPath"
+          :git-ref="gitRef"
+          :visibility="visibility"
+        />
       </div>
 
       <!-- 空目录态（entries 为空/非数组已在数据层降级） -->

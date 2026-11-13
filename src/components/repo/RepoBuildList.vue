@@ -5,16 +5,23 @@
  * 字段：状态徽标 / sn / commitTitle / nickName / sourceRef / event /
  * duration（人类可读）/ createTime；status 筛选（pending/success/error/cancel）。
  * 空态带引导文案（"推送代码后会出现在这里"）。
+ *
+ * 本次增量（T04）：顶部「触发构建」按钮（BuildTriggerModal）；触发成功后
+ * 重拉列表并高亮新 sn 行 3s。归档仓库（archived）时按钮禁用（写入口统一
+ * 按 detail.archived 禁用，§8.5 / R4）。
  */
-import { computed, ref, watch } from 'vue'
+import { computed, nextTick, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { fetchBuildLogs, repoSiteUrl, type BuildLogItem } from '../../composables/useCnbRepo'
 import { useRepoRoute } from '../../composables/useRepoRoute'
 import { formatDateTime, formatDuration } from '../../utils'
 import StateAlert from './StateAlert.vue'
+import BuildTriggerModal from './BuildTriggerModal.vue'
 
 const props = defineProps<{
   repoPath: string
+  /** 归档仓库：写入口（触发构建）禁用 */
+  archived?: boolean
 }>()
 
 const { t } = useI18n()
@@ -112,11 +119,42 @@ function statusColor(status: string): 'neutral' | 'success' | 'error' | 'warning
 }
 
 const siteUrl = computed(() => repoSiteUrl(props.repoPath, '/-/builds'))
+
+// ---------------------------------------------------------------------------
+// 触发构建（T04）：弹窗 + 成功后刷新并高亮新 sn
+// ---------------------------------------------------------------------------
+
+const triggerOpen = ref(false)
+/** 触发成功后待高亮的 sn（3s 后清除） */
+const highlightSn = ref('')
+let highlightTimer: ReturnType<typeof setTimeout> | null = null
+
+/**
+ * 触发成功回调：重拉列表 → 滚动到新 sn 行并高亮 3s。
+ * 状态更新交由 useCnbBuildWatch 的既有轮询（本组件不新增轮询，
+ * 避免双通道重复请求 —— 设计文档 §6.1 Note）。
+ */
+async function onTriggered(sn: string) {
+  await load()
+  if (!sn) {
+    return
+  }
+  highlightSn.value = sn
+  await nextTick()
+  // 滚动到新构建行（列表首屏通常已包含它；翻页后回到第 1 页也能看到）
+  document.querySelector(`[data-build-sn="${CSS.escape(sn)}"]`)?.scrollIntoView({ block: 'center' })
+  if (highlightTimer) {
+    clearTimeout(highlightTimer)
+  }
+  highlightTimer = setTimeout(() => {
+    highlightSn.value = ''
+  }, 3000)
+}
 </script>
 
 <template>
   <div>
-    <!-- 筛选条：状态下拉 -->
+    <!-- 筛选条：状态下拉 + 触发构建按钮 -->
     <div class="flex items-center gap-2 mb-3">
       <USelect
         :model-value="currentStatus"
@@ -129,6 +167,17 @@ const siteUrl = computed(() => repoSiteUrl(props.repoPath, '/-/builds'))
       <span v-if="total && !loading" class="text-xs text-dimmed">
         {{ total }}
       </span>
+      <!-- 触发构建：归档仓库禁用（archived 单向下发） -->
+      <UButton
+        class="ms-auto"
+        size="sm"
+        color="primary"
+        variant="soft"
+        icon="i-lucide-play"
+        :label="t('builds.trigger')"
+        :disabled="archived"
+        @click="triggerOpen = true"
+      />
     </div>
 
     <StateAlert
@@ -155,7 +204,9 @@ const siteUrl = computed(() => repoSiteUrl(props.repoPath, '/-/builds'))
         v-for="item in items"
         :key="item.sn"
         type="button"
-        class="flex items-center gap-3 px-4 py-3 text-left hover:bg-elevated/50 cursor-pointer"
+        :data-build-sn="item.sn"
+        class="flex items-center gap-3 px-4 py-3 text-left hover:bg-elevated/50 cursor-pointer transition-colors"
+        :class="item.sn === highlightSn ? 'bg-primary/5 ring-1 ring-primary/40 rounded-none' : ''"
         @click="openBuild(item.sn)"
       >
         <UBadge
@@ -210,5 +261,13 @@ const siteUrl = computed(() => repoSiteUrl(props.repoPath, '/-/builds'))
         {{ t('common.nextPage') }}
       </UButton>
     </div>
+
+    <!-- 触发构建弹窗 -->
+    <BuildTriggerModal
+      v-model:open="triggerOpen"
+      :repo-path="repoPath"
+      :disabled="archived"
+      @triggered="onTriggered"
+    />
   </div>
 </template>
