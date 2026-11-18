@@ -455,3 +455,237 @@ export async function updateOutsideCollaborator(
 export async function removeOutsideCollaborator(repoPath: string, username: string): Promise<void> {
   await cnbFetchVoid(outsideCollaboratorPath(repoPath, username), { method: 'DELETE' })
 }
+
+// ---------------------------------------------------------------------------
+// 仓库级成员（批次 2 · REQ-11，8 端点）
+// ---------------------------------------------------------------------------
+//
+// ⚠️ 与组织级成员的关键差异（PRD §6.1 踩坑#1）：
+// `/{repo}/-/members` 系列是**仓库维度**端点，传组织路径（如 `my-group`）会被
+// 网关拒绝（`400 This feature is not supported for organizations.`）。
+// 因此 UI 必须先让用户选定**完整仓库路径**（`组织/仓库`）再调用；
+// 数据层本身不做拦截（保持纯请求，便于单测与将来复用），
+// 由 members.vue 的仓库选择器保证入参合法。
+//
+// 通道：三个写端点均返回 **200 空 body** → `cnbFetchVoid`；
+// 读端点均返回 JSON → `cnbFetch`（逐条见各函数注释）。
+
+/**
+ * 仓库直属成员列表（GET /{repo}/-/members?search=&page=&page_size=，
+ * scope `repo-manage:r`）。
+ *
+ * 响应 dto.UsersWithAccessLevelInSlug[] 与组织级成员结构一致，
+ * 因此复用 `normalizeMember`（头像/昵称/角色兜底口径完全一致）。
+ *
+ * @param repoPath **完整仓库路径**（`组织/仓库`），传组织路径会 400
+ */
+export async function fetchRepoMembers(
+  repoPath: string,
+  opts: { search?: string, page?: number, pageSize?: number } = {},
+): Promise<MemberItem[]> {
+  if (!repoPath) {
+    return []
+  }
+  const query = new URLSearchParams({
+    page: String(opts.page ?? 1),
+    page_size: String(opts.pageSize ?? 50),
+  })
+  if (opts.search) {
+    query.set('search', opts.search)
+  }
+  const raw = await cnbFetch<RawMember[]>(
+    `/${encodeSlugPath(repoPath)}/-/members?${query}`,
+  )
+  if (!Array.isArray(raw)) {
+    return []
+  }
+  return raw.map(normalizeMember).filter(m => m.username)
+}
+
+/** 仓库成员写端点的路径拼装（与组织级 memberWritePath 同构，仅路径段不同） */
+function repoMemberWritePath(repoPath: string, username: string): string {
+  if (!repoPath) {
+    throw new Error('仓库成员是仓库级能力，必须传入完整仓库路径')
+  }
+  if (!username) {
+    throw new Error('成员用户名不能为空')
+  }
+  return `/${encodeSlugPath(repoPath)}/-/members/${encodeURIComponent(username)}`
+}
+
+/**
+ * 新增仓库成员（POST /{repo}/-/members/{username}，scope `repo-manage:rw`）
+ * → 200 空 body，走 `cnbFetchVoid`。
+ *
+ * body 与组织级共用 dto.UpdateMembersRequest（`access_level` 大小写敏感）。
+ */
+export async function addRepoMember(
+  repoPath: string,
+  username: string,
+  role: MemberRole,
+  opts: AddGroupMemberOptions = {},
+): Promise<void> {
+  const body: RawUpdateMembersRequest = { access_level: role }
+  if (opts.isOutsideCollaborator !== undefined) {
+    body.is_outside_collaborator = opts.isOutsideCollaborator
+  }
+  await cnbFetchVoid(repoMemberWritePath(repoPath, username), {
+    method: 'POST',
+    body: JSON.stringify(body),
+  })
+}
+
+/**
+ * 修改仓库成员角色（PUT /{repo}/-/members/{username}，scope `repo-manage:rw`）
+ * → 200 空 body。
+ */
+export async function updateRepoMemberRole(
+  repoPath: string,
+  username: string,
+  role: MemberRole,
+  opts: AddGroupMemberOptions = {},
+): Promise<void> {
+  const body: RawUpdateMembersRequest = { access_level: role }
+  if (opts.isOutsideCollaborator !== undefined) {
+    body.is_outside_collaborator = opts.isOutsideCollaborator
+  }
+  await cnbFetchVoid(repoMemberWritePath(repoPath, username), {
+    method: 'PUT',
+    body: JSON.stringify(body),
+  })
+}
+
+/**
+ * 移除仓库成员（DELETE /{repo}/-/members/{username}，scope `repo-manage:rw`）
+ * → 200 空 body。
+ *
+ * 破坏性操作：UI 必须 ConfirmDialog + 输入用户名二次确认。
+ */
+export async function removeRepoMember(repoPath: string, username: string): Promise<void> {
+  await cnbFetchVoid(repoMemberWritePath(repoPath, username), { method: 'DELETE' })
+}
+
+/**
+ * 仓库成员批量权限（GET /{repo}/-/members/access-level，
+ * scope `repo-manage:r`）。
+ *
+ * 响应 dto.MemberAccessLevelInSlugUnion 与组织级同构，直接复用
+ * `normalizeMemberAccessLevel` 的三形态兼容（map / 数组 / 单对象）。
+ * 单对象等无法识别结构时返回空 Map → UI 自动降级为逐人按需加载（N7/R9）。
+ *
+ * @param includeInherit 是否包含继承成员（直属成员视图传 false）
+ */
+export async function fetchRepoMembersAccessLevel(
+  repoPath: string,
+  includeInherit: boolean,
+): Promise<Map<string, string>> {
+  if (!repoPath) {
+    return new Map<string, string>()
+  }
+  const query = new URLSearchParams({ include_inherit: includeInherit ? 'true' : 'false' })
+  const raw = await cnbFetch<unknown>(
+    `/${encodeSlugPath(repoPath)}/-/members/access-level?${query}`,
+  )
+  return normalizeMemberAccessLevel(raw)
+}
+
+/**
+ * 单个仓库成员的权限明细（GET /{repo}/-/members/{username}/access-level，
+ * scope `repo-manage:r`）→ dto.MemberAccessLevel[]。
+ *
+ * 返回的是**权限来源链**（直授 / 继承自组织 / 继承自上级仓库），
+ * 因此是数组而非单值；本函数提取每条的 `access_level` 文本供 UI 展示，
+ * 无权限信息时返回空数组（不是 'None'，避免误导）。
+ */
+export async function fetchRepoMemberAccessLevel(
+  repoPath: string,
+  username: string,
+): Promise<string[]> {
+  if (!repoPath || !username) {
+    return []
+  }
+  const raw = await cnbFetch<unknown>(
+    `/${encodeSlugPath(repoPath)}/-/members/${encodeURIComponent(username)}/access-level`,
+  )
+  if (!Array.isArray(raw)) {
+    return []
+  }
+  return raw
+    .map((item) => {
+      const entry = (item && typeof item === 'object' ? item : {}) as { access_level?: unknown }
+      return normalizeAccessLevel(entry.access_level)
+    })
+    .filter(level => level !== '')
+}
+
+/**
+ * 仓库"有效成员"列表（GET /{slug}/-/list-members，scope `repo-manage:r`）。
+ *
+ * 与 `/members` 的差别：`/members` 只列**直属**成员，`/list-members` 返回
+ * **含继承**的全部有效成员（组织权限 + 仓库直授的并集）。
+ * 响结构与成员列表一致，复用同一归一化。
+ *
+ * @param repoPath 完整仓库路径
+ */
+export async function fetchAllMembers(repoPath: string): Promise<MemberItem[]> {
+  if (!repoPath) {
+    return []
+  }
+  const raw = await cnbFetch<RawMember[]>(
+    `/${encodeSlugPath(repoPath)}/-/list-members`,
+  )
+  if (!Array.isArray(raw)) {
+    return []
+  }
+  return raw.map(normalizeMember).filter(m => m.username)
+}
+
+/** 继承成员分组（dto.ListInheritMembers）：来自某个上级路径的一组成员 */
+export interface InheritMemberGroup {
+  /** 继承来源路径（组织路径或上级仓库路径，用于分区展示） */
+  inheritPath: string
+  /** 该来源的成员总数（服务端给的 total，可能大于当次返回的 users 长度） */
+  total: number
+  users: MemberItem[]
+}
+
+/**
+ * 仓库继承成员（GET /{repo}/-/inherit-members，scope `repo-manage:r`）
+ * → dto.ListInheritMembers[]。
+ *
+ * 响应按 `inherit_path` 分组，UI 需分区展示"这组成员从哪继承来"，
+ * 否则用户无法理解"为什么我不是成员却有权限"。
+ */
+export async function fetchRepoInheritMembers(repoPath: string): Promise<InheritMemberGroup[]> {
+  if (!repoPath) {
+    return []
+  }
+  const raw = await cnbFetch<unknown>(
+    `/${encodeSlugPath(repoPath)}/-/inherit-members`,
+  )
+  if (!Array.isArray(raw)) {
+    return []
+  }
+  return raw.map((item) => {
+    const source = (item && typeof item === 'object' ? item : {}) as {
+      inherit_path?: unknown
+      total?: unknown
+      users?: unknown
+    }
+    const users = Array.isArray(source.users)
+      ? source.users
+          .map((user) => {
+            // 继承成员条目可能是 { user: {...} } 包裹或直接是成员对象，双兼容
+            const entry = (user && typeof user === 'object' ? user : {}) as Record<string, unknown>
+            const inner = (entry.user && typeof entry.user === 'object' ? entry.user : entry) as RawMember
+            return normalizeMember(inner)
+          })
+          .filter(m => m.username)
+      : []
+    return {
+      inheritPath: typeof source.inherit_path === 'string' ? source.inherit_path : '',
+      total: Number(source.total) || users.length,
+      users,
+    }
+  }).filter(group => group.inheritPath !== '' || group.users.length > 0)
+}

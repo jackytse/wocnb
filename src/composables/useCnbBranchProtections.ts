@@ -380,3 +380,108 @@ export async function deleteBranchProtection(slug: string, id: string): Promise<
     { method: 'DELETE' },
   )
 }
+
+// ===========================================================================
+// 仓库级保护分支规则（批次 2 · REQ-07，5 个端点）
+// ===========================================================================
+//
+// 与组织级的差异（设计文档 §3.1 表）：
+// - 路径：`/{repo}/-/settings/branch-protections`（组织级是
+//   `/{group}/-/git-group-settings/branch-protections`）；
+// - scope：`repo-manage:r` / `repo-manage:rw`（组织级是 `group-manage:*`）；
+// - 仓库级**独有**单条查询 `GET …/{id}`（组织级只能从列表里取详情）。
+//
+// 三个写端点的响应体：POST 是 **201 空 body**（注意组织级是 200，但都是空 body），
+// PATCH/DELETE 是 200 空 body —— 全部走 `cnbFetchVoid`。
+// 归一化与请求体构造**直接复用** `normalizeBranchProtection` /
+// `buildBranchProtectionBody`（22 字段映射表只有一份，避免 N5 字段漂移）。
+//
+// 为什么并列函数而不是给组织级函数加 scopeLevel 参数：数据层保持"一个函数
+// 只打一类端点"的纯度，UI 层再用 adapter 选择（见 OrgProtectionsTab），
+// 单测可以分别断言 URL 前缀，不会出现"传错 scope 打了另一个层级的端点"。
+
+/**
+ * 仓库级保护分支规则列表（GET /{repo}/-/settings/branch-protections，
+ * scope `repo-manage:r`）。
+ *
+ * `repoPath` 是**完整仓库路径**（`组织/仓库`），逐段编码保留层级
+ * （踩坑#4：整体 encode 会把 `/` 压成 `%2F` 导致 404）。
+ * `rule` 为空的条目与组织级同样丢弃（无法展示也无法定位删除）。
+ */
+export async function fetchRepoBranchProtections(repoPath: string): Promise<BranchProtectionRule[]> {
+  if (!repoPath) {
+    return []
+  }
+  const raw = await cnbFetch<unknown>(
+    `/${encodeSlug(repoPath)}/-/settings/branch-protections`,
+  )
+  if (!Array.isArray(raw)) {
+    return []
+  }
+  return raw
+    .map(normalizeBranchProtection)
+    .filter(item => item.rule !== '')
+}
+
+/**
+ * 单条仓库级保护分支规则（GET /{repo}/-/settings/branch-protections/{id}，
+ * scope `repo-manage:r`）→ 200 `api.BranchProtection`。
+ *
+ * 仓库级独有能力：列表可能分页或字段裁剪，详情页需要完整 22 字段时走本函数。
+ * 响应非对象时返回空规则（`rule === ''`），调用方可据此渲染"未找到"。
+ */
+export async function fetchRepoBranchProtection(
+  repoPath: string,
+  id: string,
+): Promise<BranchProtectionRule> {
+  const raw = await cnbFetch<unknown>(
+    `/${encodeSlug(repoPath)}/-/settings/branch-protections/${encodeURIComponent(id)}`,
+  )
+  return normalizeBranchProtection(raw)
+}
+
+/**
+ * 创建仓库级保护分支规则（POST，scope `repo-manage:rw`）→ **201 空 body**。
+ *
+ * 失败语义同组织级：403 = 缺 `repo-manage:rw`；422 = 超 10 条上限或字段非法
+ * （服务端 errmsg 会被拼进 message，UI 原样透出）。
+ */
+export async function createRepoBranchProtection(
+  repoPath: string,
+  rule: BranchProtectionRule,
+): Promise<void> {
+  await cnbFetchVoid(`/${encodeSlug(repoPath)}/-/settings/branch-protections`, {
+    method: 'POST',
+    body: JSON.stringify(buildBranchProtectionBody(rule)),
+  })
+}
+
+/**
+ * 更新仓库级保护分支规则（PATCH …/{id}，scope `repo-manage:rw`）→ 200 空 body。
+ *
+ * `id` 走路径段并 `encodeURIComponent`（服务端生成的 id 可能含对 URL 有语义的字符）；
+ * 请求体不含 id（与组织级同一约定）。
+ */
+export async function updateRepoBranchProtection(
+  repoPath: string,
+  id: string,
+  rule: BranchProtectionRule,
+): Promise<void> {
+  await cnbFetchVoid(
+    `/${encodeSlug(repoPath)}/-/settings/branch-protections/${encodeURIComponent(id)}`,
+    { method: 'PATCH', body: JSON.stringify(buildBranchProtectionBody(rule)) },
+  )
+}
+
+/**
+ * 删除仓库级保护分支规则（DELETE …/{id}，scope `repo-manage:rw`）→ 200 空 body。
+ *
+ * 不可逆：删除后匹配该规则的分支不再受保护。UI 必须 ConfirmDialog +
+ * 输入规则名二次确认。
+ */
+export async function deleteRepoBranchProtection(repoPath: string, id: string): Promise<void> {
+  await cnbFetchVoid(
+    `/${encodeSlug(repoPath)}/-/settings/branch-protections/${encodeURIComponent(id)}`,
+    { method: 'DELETE' },
+  )
+}

@@ -200,6 +200,27 @@ export function useRepoRoute() {
    */
   const compare = computed(() => route.query.compare === '1')
 
+  /**
+   * 选中的评审 id（PR 详情内的评审区下钻，批次 2 · REQ-10）。
+   * 归一：缺失/非字符串 → ''（不展开任何评审卡）。
+   */
+  const review = computed(() => {
+    const raw = route.query.review
+    return typeof raw === 'string' && raw ? raw : ''
+  })
+
+  /**
+   * 选中的行级评论 id（评审卡的评论树定位，批次 2 · REQ-10）。
+   * 与 review 联动：review 缺失时 rcomment 无意义 → 丢弃。
+   */
+  const rcomment = computed(() => {
+    const raw = route.query.rcomment
+    if (!(typeof raw === 'string' && raw) || !review.value) {
+      return ''
+    }
+    return raw
+  })
+
   /** 合并 query 变更并导航（mode 决定 replace/push；resetPage 时清 page） */
   function navigate(partial: Record<string, string | number | null>, mode: 'replace' | 'push' = 'replace') {
     const query: Record<string, string> = {}
@@ -231,7 +252,7 @@ export function useRepoRoute() {
   function switchTab(value: RepoTab) {
     navigate({
       tab: value === 'code' ? null : value,
-      // —— 下钻定位键：全部清空（8 个 + compare）——
+      // —— 下钻定位键：全部清空（8 个 + compare + 评审下钻）——
       number: null,
       sn: null,
       sha: null,
@@ -240,6 +261,9 @@ export function useRepoRoute() {
       pname: null,
       ptag: null,
       compare: null,
+      // 评审下钻键（批次 2 · REQ-10）：跨页签残留会让"切到 PR 页直接展开某条评审"
+      review: null,
+      rcomment: null,
       // 翻页状态属于列表视图，切页签后旧页码无意义
       page: null,
       // ptype 保留：用户偏好而非定位状态
@@ -311,6 +335,27 @@ export function useRepoRoute() {
   }
 
   /**
+   * 展开某条评审（PR 详情下钻，批次 2 · REQ-10）：push，返回键可回到收起态。
+   * 同时清 rcomment：换了评审，旧的行级评论定位必然失效。
+   */
+  function openReview(reviewId: string) {
+    navigate({ review: reviewId, rcomment: null }, 'push')
+  }
+
+  /** 收起评审卡片：push，清 review + rcomment */
+  function closeReview() {
+    navigate({ review: null, rcomment: null }, 'push')
+  }
+
+  /**
+   * 定位某条行级评论：push。
+   * rcomment 依赖 review（computed 里已做联动归一），因此必须同时写入。
+   */
+  function openReviewComment(reviewId: string, commentId: string) {
+    navigate({ review: reviewId, rcomment: commentId }, 'push')
+  }
+
+  /**
    * 关闭制品 tag 详情（右栏 → 中栏）：push，仅清 ptag。
    * 与 openPackageTag 对称的下钻退出键，保证浏览器返回键与界面按钮语义一致。
    */
@@ -374,6 +419,8 @@ export function useRepoRoute() {
     pname,
     ptag,
     compare,
+    review,
+    rcomment,
     switchTab,
     openPath,
     switchRef,
@@ -390,6 +437,9 @@ export function useRepoRoute() {
     closePackage,
     setPtype,
     backToList,
+    openReview,
+    closeReview,
+    openReviewComment,
     setState,
     setKeyword,
     setPage,

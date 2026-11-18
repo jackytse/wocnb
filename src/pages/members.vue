@@ -68,6 +68,7 @@ import {
 } from '../composables/useCnbAuth'
 import { formatDateTime } from '../utils'
 import StateAlert from '../components/repo/StateAlert.vue'
+import RepoMembersPanel from '../components/org/RepoMembersPanel.vue'
 
 const { t } = useI18n()
 // useToast 为 Nuxt UI 全局自动导入（见 auto-imports.d.ts）
@@ -82,9 +83,12 @@ const router = useRouter()
 // ---------------------------------------------------------------------------
 
 /** 当前页签（非法值归一 members） */
-const tab = computed<'members' | 'outsiders' | 'inherited'>(() => {
+const tab = computed<'members' | 'outsiders' | 'inherited' | 'repo'>(() => {
   const value = route.query.tab
-  return value === 'outsiders' || value === 'inherited' ? value : 'members'
+  if (value === 'outsiders' || value === 'inherited' || value === 'repo') {
+    return value
+  }
+  return 'members'
 })
 
 const keyword = computed(() =>
@@ -127,7 +131,7 @@ function navigate(partial: Record<string, string | null>) {
 }
 
 /** 切换页签（replace，重置 keyword/page/repo） */
-function switchTab(value: 'members' | 'outsiders' | 'inherited') {
+function switchTab(value: 'members' | 'outsiders' | 'inherited' | 'repo') {
   // repo 是 outsiders 专属定位键：切走后必须清掉，否则回到页签会锁死旧仓库
   navigate({ tab: value === 'members' ? null : value, keyword: null, page: null, repo: null })
 }
@@ -243,8 +247,9 @@ function onRepoSelect(value: unknown) {
 
 async function load() {
   const slug = selectedGroup.value?.path
-  // 继承成员页签由 loadInherit 独立加载，列表请求跳过（避免无谓调用）
-  if (!slug || tab.value === 'inherited') {
+  // 继承成员页签由 loadInherit 独立加载；仓库成员页签由 RepoMembersPanel 自管
+  // —— 两者都不走本页的列表请求，避免无谓调用与状态互串
+  if (!slug || tab.value === 'inherited' || tab.value === 'repo') {
     members.value = []
     error.value = null
     return
@@ -830,6 +835,8 @@ const tabItems = computed((): TabsItem[] => [
   { label: t('members.tabMembers'), icon: 'i-lucide-users', value: 'members' },
   { label: t('members.tabOutsiders'), icon: 'i-lucide-user-check', value: 'outsiders' },
   { label: t('members.tabInherited'), icon: 'i-lucide-users-round', value: 'inherited' },
+  // 仓库成员（批次 2 · REQ-11）：仓库维度成员管理，与组织成员互不影响
+  { label: t('repo.members.tab'), icon: 'i-lucide-book-marked', value: 'repo' },
 ])
 
 /**
@@ -910,12 +917,12 @@ function openManage() {
         :items="tabItems"
         color="neutral"
         class="mb-4"
-        @update:model-value="(value: string | number) => switchTab(value as 'members' | 'outsiders')"
+        @update:model-value="(value: string | number) => switchTab(value as 'members' | 'outsiders' | 'inherited' | 'repo')"
       />
 
-      <!-- 搜索（透传服务端 search 参数；继承成员页签不需要搜索） -->
+      <!-- 搜索（透传服务端 search 参数；继承成员/仓库成员页签各自管理，不需要本页搜索） -->
       <UInput
-        v-if="tab !== 'inherited'"
+        v-if="tab !== 'inherited' && tab !== 'repo'"
         v-model="keywordDraft"
         size="sm"
         variant="soft"
@@ -1057,8 +1064,13 @@ function openManage() {
       <template v-else>
         <!-- 引导态（非错误态）：服务端明确表示「组织不支持外部贡献者」，
              说明当前上下文没有落到仓库维度，给出可操作指引 -->
+        <!-- 仓库成员页签（批次 2 · REQ-11）：组件自包含（仓库选择 + 成员表 + 写操作）。
+             放在 v-if 链首位：命中后后续 v-else-if 分支自动跳过，
+             不会残留组织成员的加载/空态提示。 -->
+        <RepoMembersPanel v-if="tab === 'repo'" />
+
         <UAlert
-          v-if="outsidersUnsupported"
+          v-else-if="outsidersUnsupported"
           icon="i-lucide-info"
           color="neutral"
           variant="soft"

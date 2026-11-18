@@ -11,7 +11,7 @@
  *
  * 数据一致性（§8.5）：Release CUD 后本地 reload()（重拉当前页/详情）。
  */
-import { computed, ref, watch } from 'vue'
+import { computed, reactive, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import {
   deleteRelease,
@@ -20,12 +20,20 @@ import {
   type ReleaseItem,
 } from '../../composables/useCnbReleases'
 import { useRepoRoute } from '../../composables/useRepoRoute'
-import { repoSiteUrl, type RepoDetail } from '../../composables/useCnbRepo'
+import { fetchRepoTags, repoSiteUrl, type RepoDetail, type TagItem } from '../../composables/useCnbRepo'
+import {
+  createTag,
+  deleteTag,
+  fetchTagDetail,
+  type TagDetail,
+} from '../../composables/useCnbGitRefs'
 import { formatDateTime, formatRelativeTime } from '../../utils'
 import StateAlert from './StateAlert.vue'
 import MarkdownView from './MarkdownView.vue'
 import ReleaseFormModal from './ReleaseFormModal.vue'
 import ReleaseAssetList from './ReleaseAssetList.vue'
+import RepoBranchSelect from './RepoBranchSelect.vue'
+import AnnotationsPanel from './AnnotationsPanel.vue'
 import ConfirmDialog from '../common/ConfirmDialog.vue'
 
 const props = defineProps<{
@@ -77,6 +85,166 @@ async function load() {
 }
 
 // ---------------------------------------------------------------------------
+// Git 标签（REQ-02：与 Release 列表同源刷新，但二者是不同实体）
+// ---------------------------------------------------------------------------
+
+/** Git 标签列表（fetchRepoTags 复用既有归一化，仅 name/sha） */
+const tags = ref<TagItem[]>([])
+const tagsLoading = ref(false)
+const tagsError = ref<Error | null>(null)
+
+async function loadTags() {
+  if (!props.repoPath) {
+    return
+  }
+  tagsLoading.value = true
+  tagsError.value = null
+  try {
+    tags.value = await fetchRepoTags(props.repoPath)
+  }
+  catch (err) {
+    tags.value = []
+    tagsError.value = err as Error
+  }
+  finally {
+    tagsLoading.value = false
+  }
+}
+
+/** 新建标签弹窗：name 必填，target 默认当前 ref（RepoBranchSelect emit 模式不写 ?ref=） */
+const tagFormOpen = ref(false)
+const tagForm = reactive({ name: '', target: '', message: '' })
+const tagSubmitting = ref(false)
+
+/** 标签名合法性：非空 + 与 Git ref 一致的字符集合 */
+const tagNameError = computed(() => {
+  const name = tagForm.name.trim()
+  if (!name) {
+    return t('repo.tags.nameRequired')
+  }
+  if (!/^[A-Za-z0-9._/-]+$/.test(name)) {
+    return t('repo.tags.nameInvalid')
+  }
+  if (tags.value.some(item => item.name === name)) {
+    return t('repo.tags.nameDuplicate')
+  }
+  return null
+})
+
+function openCreateTag() {
+  tagForm.name = ''
+  tagForm.target = ''
+  tagForm.message = ''
+  tagFormOpen.value = true
+}
+
+/** 新建成功：createTag 返回体（api.Tag）插入列表 + 同步重拉 Release 列表（PRD 验收） */
+async function onSubmitTag() {
+  if (tagNameError.value || tagSubmitting.value) {
+    return
+  }
+  tagSubmitting.value = true
+  try {
+    const created = await createTag(props.repoPath, {
+      name: tagForm.name.trim(),
+      ...(tagForm.target ? { target: tagForm.target } : {}),
+      ...(tagForm.message ? { message: tagForm.message } : {}),
+    })
+    toast.add({ title: t('repo.tags.createSuccess'), color: 'success', duration: 2500 })
+    tagFormOpen.value = false
+    // createTag 返回实体直接插入列表（避免一次重拉）：同名校验已保证唯一，
+    // 先滤掉同名项再追加到末尾（与服务端"新标签在后"的返回顺序一致）
+    tags.value = [...tags.value.filter(item => item.name !== created.name), { name: created.name, sha: created.sha }]
+    // Release 列表同步刷新（新建 tag 后很可能被 Release 页面引用）
+    await load()
+  }
+  catch (err) {
+    toast.add({
+      title: t('repo.tags.createFailed'),
+      description: (err as Error)?.message || '',
+      color: 'error',
+      duration: 6000,
+    })
+  }
+  finally {
+    tagSubmitting.value = false
+  }
+}
+
+/** 标签详情：点 tag 名 → 页内 UCard（不新增路由键，设计 §2.2） */
+const selectedTag = ref<TagDetail | null>(null)
+const tagDetailLoading = ref(false)
+const tagDetailError = ref<Error | null>(null)
+/** 当前展开的 tag 名（用于点击折叠） */
+const expandedTagName = ref('')
+
+async function toggleTagDetail(name: string) {
+  if (expandedTagName.value === name) {
+    expandedTagName.value = ''
+    selectedTag.value = null
+    return
+  }
+  expandedTagName.value = name
+  tagDetailLoading.value = true
+  tagDetailError.value = null
+  try {
+    selectedTag.value = await fetchTagDetail(props.repoPath, name)
+  }
+  catch (err) {
+    selectedTag.value = null
+    tagDetailError.value = err as Error
+  }
+  finally {
+    tagDetailLoading.value = false
+  }
+}
+
+/** 轻量 / 附注标签文案（target_type==='tag' 为附注） */
+const tagTypeLabel = computed(() =>
+  selectedTag.value?.annotated ? t('repo.tags.typeAnnotated') : t('repo.tags.typeLightweight'),
+)
+
+/** 删除标签：二次确认 + 文案说明"不影响关联 Release" */
+const tagDeleteOpen = ref(false)
+const tagDeleteTarget = ref('')
+const tagDeleting = ref(false)
+
+function confirmDeleteTag(name: string) {
+  tagDeleteTarget.value = name
+  tagDeleteOpen.value = true
+}
+
+async function doDeleteTag() {
+  const name = tagDeleteTarget.value
+  if (!name || tagDeleting.value) {
+    return
+  }
+  tagDeleting.value = true
+  try {
+    await deleteTag(props.repoPath, name)
+    toast.add({ title: t('repo.tags.deleteSuccess'), color: 'success', duration: 2500 })
+    tagDeleteOpen.value = false
+    if (expandedTagName.value === name) {
+      expandedTagName.value = ''
+      selectedTag.value = null
+    }
+    // 标签与 Release 是不同实体，但 PRD 要求新建/删除后列表同步刷新
+    await Promise.all([loadTags(), load()])
+  }
+  catch (err) {
+    toast.add({
+      title: t('repo.tags.deleteFailed'),
+      description: (err as Error)?.message || '',
+      color: 'error',
+      duration: 6000,
+    })
+  }
+  finally {
+    tagDeleting.value = false
+  }
+}
+
+// ---------------------------------------------------------------------------
 // 详情
 // ---------------------------------------------------------------------------
 
@@ -111,7 +279,9 @@ watch(
       void loadDetail()
     }
     else {
+      // Git 标签区与 Release 列表并行加载（二者独立降级，互不影响）
       void load()
+      void loadTags()
     }
   },
   { immediate: true },
@@ -322,6 +492,128 @@ const releaseBadge = computed(() => releaseDetail.value ? badgeOf(releaseDetail.
 
     <!-- ======================= 列表视图（?tab=releases） ======================= -->
     <template v-else>
+      <!-- ======== Git 标签区（REQ-02）：新建 / 列表 / 详情 / 删除 ======== -->
+      <UCollapsible class="mb-5">
+        <UButton
+          variant="ghost"
+          color="neutral"
+          trailing-icon="i-lucide-chevron-down"
+          class="w-full flex justify-between"
+        >
+          <span class="flex items-center gap-2">
+            <UIcon name="i-lucide-tag" class="size-4 text-muted" />
+            {{ t('repo.tags.title') }}
+            <UBadge
+              color="neutral"
+              variant="subtle"
+              size="sm"
+              :label="String(tags.length)"
+            />
+          </span>
+        </UButton>
+        <template #content>
+          <div class="pt-2 flex flex-col gap-2">
+            <!-- 新建标签入口：canManage 预判（repo-release:rw） -->
+            <div v-if="canManage" class="flex justify-end">
+              <UButton
+                size="sm"
+                color="primary"
+                variant="soft"
+                icon="i-lucide-plus"
+                :label="t('repo.tags.create')"
+                :disabled="archived"
+                @click="openCreateTag"
+              />
+            </div>
+            <StateAlert v-if="tagsLoading" state="loading" loading-variant="list" />
+            <StateAlert
+              v-else-if="tagsError"
+              state="error"
+              :error="tagsError"
+              :retry="loadTags"
+            />
+            <StateAlert
+              v-else-if="tags.length === 0"
+              state="empty"
+              :empty-text="t('repo.tags.empty')"
+            />
+            <div v-else class="flex flex-col border border-default rounded-lg divide-y divide-default overflow-hidden">
+              <div
+                v-for="tag in tags"
+                :key="tag.name"
+                class="flex flex-col"
+              >
+                <div class="flex items-center gap-2 px-3 py-2">
+                  <button
+                    type="button"
+                    class="flex items-center gap-2 min-w-0 flex-1 text-left cursor-pointer"
+                    @click="toggleTagDetail(tag.name)"
+                  >
+                    <UIcon name="i-lucide-tag" class="size-3.5 text-muted shrink-0" />
+                    <span class="font-mono text-sm text-highlighted truncate">{{ tag.name }}</span>
+                    <span v-if="tag.sha" class="font-mono text-xs text-dimmed truncate">{{ tag.sha.slice(0, 7) }}</span>
+                  </button>
+                  <UButton
+                    v-if="canManage"
+                    size="xs"
+                    color="error"
+                    variant="ghost"
+                    icon="i-lucide-trash-2"
+                    :aria-label="t('repo.tags.delete')"
+                    :disabled="archived"
+                    @click="confirmDeleteTag(tag.name)"
+                  />
+                </div>
+                <!-- 页内详情卡（不新增路由键） -->
+                <div
+                  v-if="expandedTagName === tag.name"
+                  class="px-3 pb-3 border-t border-default"
+                >
+                  <StateAlert v-if="tagDetailLoading" state="loading" loading-variant="plain" />
+                  <StateAlert
+                    v-else-if="tagDetailError"
+                    state="error"
+                    :error="tagDetailError"
+                    :retry="() => toggleTagDetail(tag.name)"
+                  />
+                  <div v-else-if="selectedTag" class="pt-3 flex flex-col gap-2 text-sm">
+                    <div class="flex flex-wrap items-center gap-2">
+                      <UBadge
+                        color="neutral"
+                        variant="subtle"
+                        size="sm"
+                        :label="tagTypeLabel"
+                      />
+                      <span v-if="selectedTag.verified" class="inline-flex items-center gap-1 text-xs text-success">
+                        <UIcon name="i-lucide-shield-check" class="size-3.5" />
+                        {{ t('repo.tags.verified') }}
+                      </span>
+                    </div>
+                    <p class="text-xs text-muted font-mono">
+                      {{ t('repo.tags.sha') }}: {{ selectedTag.sha || '-' }}
+                    </p>
+                    <MarkdownView
+                      v-if="selectedTag.message"
+                      :source="selectedTag.message"
+                      class="mt-1"
+                    />
+                    <!-- 标签元数据（批次 2 · REQ-08）：需要 repo-release:* 权限，
+                         canManage 决定可编辑；403 只在本折叠区提示 -->
+                    <AnnotationsPanel
+                      class="mt-2"
+                      :repo-path="repoPath"
+                      kind="tag"
+                      :ref-key="selectedTag.name"
+                      :can-edit="canManage"
+                    />
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+        </template>
+      </UCollapsible>
+
       <!-- 头部：标题 + 新建版本 -->
       <div class="flex items-center gap-2 mb-3">
         <h2 class="text-sm font-semibold text-highlighted">
@@ -444,6 +736,71 @@ const releaseBadge = computed(() => releaseDetail.value ? badgeOf(releaseDetail.
       :type-to-confirm="deleteTarget?.tagName || ''"
       :type-to-confirm-label="t('repo.releases.deleteTypeToConfirm', { tag: deleteTarget?.tagName || '' })"
       @confirm="doDelete"
+    />
+
+    <!-- 新建 Git 标签弹窗（REQ-02） -->
+    <UModal
+      v-model:open="tagFormOpen"
+      :title="t('repo.tags.create')"
+      :ui="{ content: 'max-w-lg' }"
+    >
+      <template #body>
+        <div class="flex flex-col gap-4">
+          <UFormField :label="t('repo.tags.name')" required :error="tagNameError ?? undefined">
+            <UInput
+              v-model="tagForm.name"
+              class="w-full"
+              :placeholder="t('repo.tags.namePlaceholder')"
+              autocomplete="off"
+            />
+          </UFormField>
+          <UFormField :label="t('repo.tags.target')">
+            <!-- emit 模式：本地选择态，不写 ?ref= 误清 release 下钻键 -->
+            <RepoBranchSelect
+              v-model="tagForm.target"
+              :repo-path="repoPath"
+              select-mode="emit"
+            />
+          </UFormField>
+          <UFormField :label="t('repo.tags.message')">
+            <UTextarea
+              v-model="tagForm.message"
+              class="w-full"
+              :rows="3"
+              autoresize
+              :placeholder="t('repo.tags.messagePlaceholder')"
+            />
+          </UFormField>
+        </div>
+      </template>
+      <template #footer>
+        <div class="flex justify-end gap-2 w-full">
+          <UButton
+            color="neutral"
+            variant="ghost"
+            :label="t('common.cancel')"
+            @click="tagFormOpen = false"
+          />
+          <UButton
+            color="primary"
+            :loading="tagSubmitting"
+            :disabled="!!tagNameError"
+            :label="t('repo.tags.create')"
+            @click="onSubmitTag"
+          />
+        </div>
+      </template>
+    </UModal>
+
+    <!-- 删除 Git 标签二次确认（文案明确：不影响关联 Release） -->
+    <ConfirmDialog
+      v-model:open="tagDeleteOpen"
+      :title="t('repo.tags.delete')"
+      :desc="t('repo.tags.deleteConfirm', { tag: tagDeleteTarget })"
+      :confirm-label="t('repo.tags.delete')"
+      confirm-color="error"
+      :loading="tagDeleting"
+      @confirm="doDeleteTag"
     />
   </div>
 </template>

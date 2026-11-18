@@ -336,7 +336,8 @@ function onCreateGroup(path: string) {
         <!-- 保护分支：仅根组织生效，子组织由组件内部给引导 -->
         <OrgProtectionsTab
           v-else
-          :slug="slug"
+          :target="slug"
+          scope-level="group"
           :can-manage="canManage"
         />
       </div>

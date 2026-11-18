@@ -18,8 +18,10 @@
  * 契约（调用方 group.vue 已固定）：props { slug, canManage }；本组件自行负责
  * 加载/错误/空态/写操作，不向父组件抛异常，403 只在本页签内降级。
  */
+// 数据层：组织级/仓库级两套保护分支端点（读写均在 useCnbBranchProtections 收口）
 import { computed, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
+// 站内跳转（子组织 → 根组织引导）
 import { useRouter } from 'vue-router'
 import {
   BRANCH_PROTECTION_LIMIT,
@@ -27,9 +29,13 @@ import {
   BRANCH_PROTECTION_PUSH_FLAGS,
   createBranchProtection,
   createEmptyBranchProtection,
+  createRepoBranchProtection,
   deleteBranchProtection,
+  deleteRepoBranchProtection,
   fetchBranchProtections,
+  fetchRepoBranchProtections,
   updateBranchProtection,
+  updateRepoBranchProtection,
   type BranchProtectionBooleanKey,
   type BranchProtectionRule,
 } from '../../composables/useCnbBranchProtections'
@@ -37,29 +43,75 @@ import { CNB_TOKEN_MANAGE_URL } from '../../composables/useCnbAuth'
 import ConfirmDialog from '../common/ConfirmDialog.vue'
 import StateAlert from '../repo/StateAlert.vue'
 
+/**
+ * 两个作用域共用本组件（批次 2 · REQ-07，N4 防串数据）：
+ * - `scopeLevel='group'` + `target=<组织路径>`：打 `/-/git-group-settings/branch-protections`；
+ * - `scopeLevel='repo'`  + `target=<仓库完整路径>`：打 `/-/settings/branch-protections`。
+ *
+ * `slug` 是组织页的历史 prop 名，保留为**向后兼容别名**（target 优先）；
+ * 新调用方一律传 target + scopeLevel。
+ */
 const props = defineProps<{
-  /** 组织路径（'org' 或 'org/sub'） */
-  slug: string
-  /** 是否有组织管理权限（false 时隐藏全部写入口，表格只读） */
+  /** 组织路径（'org' 或 'org/sub'）—— 历史别名，target 优先 */
+  slug?: string
+  /** 定位参数：组织路径或仓库完整路径 */
+  target?: string
+  /** 作用域层级（决定端点前缀与权限语义），缺省按组织处理 */
+  scopeLevel?: 'group' | 'repo'
+  /** 是否有管理权限（false 时隐藏全部写入口，表格只读） */
   canManage: boolean
 }>()
 
-const { t } = useI18n()
-const router = useRouter()
-const toast = useToast()
+const { t } = useI18n() // 文案（org.protections.* 与 repo.protections.* 双命名空间）
+const router = useRouter() // 子组织跳根组织用（站内路由，非外链）
+const toast = useToast() // 成功/失败提示（422 原文透出，不用兜底文案）
+
+// ---------------------------------------------------------------------------
+// 作用域适配（adapter）：同一套 UI，按 scopeLevel 选不同数据层函数
+// ---------------------------------------------------------------------------
+
+/** 是否仓库级（默认组织级，兼容未传 scopeLevel 的历史调用） */
+const isRepoScope = computed(() => props.scopeLevel === 'repo')
+
+/** 实际定位参数：target 优先，其次历史 slug */
+const target = computed(() => props.target || props.slug || '')
+
+/**
+ * 作用域适配器：把 4 个操作收敛为统一签名的函数引用。
+ *
+ * 为什么要适配器而不是在每处 onClick 里写 if：表单/确认框/加载共用同一套
+ * 交互，只有"打哪个端点"不同；适配器让差异**只在一处**，也便于单测断言
+ * 两个 scope 各自打到正确前缀（N4：防止组织页误打仓库端点、反之亦然）。
+ */
+const api = computed(() => isRepoScope.value
+  ? {
+      // 仓库级端点（/-/settings/branch-protections）
+      list: fetchRepoBranchProtections,
+      create: createRepoBranchProtection,
+      update: updateRepoBranchProtection,
+      remove: deleteRepoBranchProtection,
+    }
+  : {
+      // 组织级端点（/-/git-group-settings/branch-protections，仅根组织可用）
+      list: fetchBranchProtections,
+      create: createBranchProtection,
+      update: updateBranchProtection,
+      remove: deleteBranchProtection,
+    })
 
 // ---------------------------------------------------------------------------
 // 根组织守卫（设计文档 §1 D4）
 // ---------------------------------------------------------------------------
 
 /**
- * 是否子组织：`slug` 含 `/` 即为子组织（如 `org/sub`）。
- * 判定口径与 CNB 路径语义一致（组织路径段用 `/` 分隔），无需额外请求探测。
+ * 是否子组织：**仅组织级**且 `target` 含 `/` 时为真（如 `org/sub`）。
+ * 仓库级路径天然含 `/`（`org/repo`），不能被误判成"子组织"——因此
+ * 必须先判 isRepoScope（历史上这里只看 slug.includes('/')，泛化后必须加作用域判断）。
  */
-const isSubGroup = computed(() => props.slug.includes('/'))
+const isSubGroup = computed(() => !isRepoScope.value && target.value.includes('/'))
 
 /** 根组织路径（子组织取第一段）；空串时按钮不渲染 */
-const rootSlug = computed(() => props.slug.split('/')[0] || '')
+const rootSlug = computed(() => target.value.split('/')[0] || '')
 
 /**
  * 跳到根组织：走站内路由 `?slug=`，由 group.vue 的 slug watch 同步
@@ -67,6 +119,7 @@ const rootSlug = computed(() => props.slug.split('/')[0] || '')
  * URL 驱动下钻通道，组件直接复用即可，避免再加一条状态回路。
  */
 function goRootGroup() {
+  // 根路径为空（target 异常）：按钮本不该渲染，防御性返回
   if (!rootSlug.value) {
     return
   }
@@ -84,13 +137,13 @@ const loading = ref(false)
 /** 加载失败对象（CnbApiError.kind 决定 403/网络分支，交给 StateAlert） */
 const loadError = ref<Error | null>(null)
 
-/**
- * 拉取规则列表。
+/** 拉取规则列表。
  * 子组织 / 空 slug 直接跳过 —— 子组织请求必然 400，发出去只是浪费一次往返
  * 并让用户看到无意义的错误。
  */
 async function load() {
-  if (!props.slug || isSubGroup.value) {
+  // 守卫：无目标或子组织 → 清空态直接返回（不发请求）
+  if (!target.value || isSubGroup.value) {
     rules.value = []
     loadError.value = null
     loading.value = false
@@ -99,10 +152,11 @@ async function load() {
   loading.value = true
   loadError.value = null
   try {
-    rules.value = await fetchBranchProtections(props.slug)
+    // 按作用域选列表端点：组织级 / 仓库级（adapter 已在上面收敛）
+    rules.value = await api.value.list(target.value)
   }
   catch (err) {
-    rules.value = []
+    rules.value = [] // 失败清列表（StateAlert error 接管展示）
     loadError.value = (err as Error) ?? new Error(String(err))
   }
   finally {
@@ -124,13 +178,23 @@ const countLabel = computed(() =>
 /** 是否展示写入口（有管理权限且当前是根组织） */
 const showWriteEntry = computed(() => props.canManage && !isSubGroup.value)
 
+/**
+ * 上限提示文案按作用域切换（QA 批次 2 遗留③）：
+ * - 组织级 → `org.protections.limitHint`（"每个组织最多 {limit} 条规则"）；
+ * - 仓库级 → `repo.protections.limitHint`（"每个仓库最多 {limit} 条规则"）。
+ * 为什么不能共用一条：仓库设置抽屉复用本组件，沿用组织口径会把"仓库"说成
+ * "组织"，让用户误以为上限是按组织计算的。
+ */
+const limitHintText = computed(() => isRepoScope.value
+  ? t('repo.protections.limitHint', { limit: BRANCH_PROTECTION_LIMIT })
+  : t('org.protections.limitHint', { limit: BRANCH_PROTECTION_LIMIT }))
+
 // ---------------------------------------------------------------------------
 // 新建 / 编辑弹窗（复用同一个 UModal）
 // ---------------------------------------------------------------------------
 
 /** 表单状态里的布尔开关集合（键与 BranchProtectionRule 的布尔字段一一对应） */
 type FlagRecord = Record<BranchProtectionBooleanKey, boolean>
-
 /** 表单状态（数字用字符串承载：UInput 的数字值形态随地输入法/清空而变化，统一在提交时解析校验） */
 interface ProtectionFormState {
   /** 规则名（必填） */
@@ -172,24 +236,26 @@ const submitting = ref(false)
 
 /** 新建：清空表单并进入新建模式 */
 function openCreate() {
+  // 已达上限：按钮已 disabled，这里防御性再拦一次
   if (limitReached.value) {
     return
   }
-  editingId.value = ''
-  form.value = emptyFormState()
+  editingId.value = '' // 空串 = 新建模式
+  form.value = emptyFormState() // 全量重置（含 18 个开关的默认值）
   formOpen.value = true
 }
 
 /** 编辑：把规则回填进表单（数字转字符串，布尔逐键复制） */
 function openEdit(rule: BranchProtectionRule) {
+  // 逐键复制布尔回填：避免直接引用 rule 的字段导致表单改写列表数据
   const flags = {} as FlagRecord
   for (const key of ALL_FLAG_KEYS) {
-    flags[key] = rule[key] === true
+    flags[key] = rule[key] === true // 严格 === true：服务端可能返回 null/缺失
   }
   editingId.value = rule.id
   form.value = {
     rule: rule.rule,
-    reviewCountText: String(rule.requiredApprovedReviewCount),
+    reviewCountText: String(rule.requiredApprovedReviewCount), // 数字 → 表单字符串
     reviewRatioText: String(rule.requiredApprovedReviewRatio),
     flags,
   }
@@ -199,6 +265,7 @@ function openEdit(rule: BranchProtectionRule) {
 /** 严格整数解析（空串/小数/带字母一律 NaN，不静默取整欺骗用户） */
 function parseStrictInt(text: string): number {
   const trimmed = text.trim()
+  // 只接受纯整数字符串（允许负号但后续区间校验会拦掉负值）
   if (!/^-?\d+$/.test(trimmed)) {
     return Number.NaN
   }
@@ -210,7 +277,7 @@ const reviewCountValue = computed(() => parseStrictInt(form.value.reviewCountTex
 /** 评审通过率（服务端约束 1~100） */
 const reviewRatioValue = computed(() => parseStrictInt(form.value.reviewRatioText))
 const reviewCountValid = computed(() =>
-  Number.isInteger(reviewCountValue.value)
+  Number.isInteger(reviewCountValue.value) // NaN 直接不通过
   && reviewCountValue.value >= 1
   && reviewCountValue.value <= 5,
 )
@@ -229,10 +296,12 @@ const ruleError = computed(() => (ruleNameValid.value ? '' : t('org.protections.
 
 /** 表单状态 → 规则对象（id 留空：POST 由服务端生成，PATCH 走路径段） */
 function buildRuleFromForm(): BranchProtectionRule {
+  // 从空规则出发逐字段覆盖，保证不携带表单之外的陈旧字段
   const rule = createEmptyBranchProtection()
   rule.rule = form.value.rule.trim()
   rule.requiredApprovedReviewCount = reviewCountValue.value
   rule.requiredApprovedReviewRatio = reviewRatioValue.value
+  // 18 个布尔开关统一写回（提交前校验已保证数字字段合法）
   for (const key of ALL_FLAG_KEYS) {
     rule[key] = form.value.flags[key] === true
   }
@@ -241,7 +310,8 @@ function buildRuleFromForm(): BranchProtectionRule {
 
 /** 提交（新建 POST / 编辑 PATCH）；失败保留弹窗与输入，便于改完再试 */
 async function onSubmit() {
-  if (!props.slug || submitting.value || !formValid.value) {
+  // 目标缺失 / 提交中 / 校验不过：直接返回（按钮 disabled，双保险）
+  if (!target.value || submitting.value || !formValid.value) {
     return
   }
   const editing = editingId.value !== ''
@@ -249,19 +319,20 @@ async function onSubmit() {
   try {
     const payload = buildRuleFromForm()
     if (editing) {
-      await updateBranchProtection(props.slug, editingId.value, payload)
+      // 仓库级 / 组织级各自打到自己的 PATCH 端点（adapter 隔离）
+      await api.value.update(target.value, editingId.value, payload)
     }
     else {
-      await createBranchProtection(props.slug, payload)
+      await api.value.create(target.value, payload)
     }
     toast.add({
       title: editing ? t('org.protections.updated') : t('org.protections.created'),
-      description: payload.rule,
+      description: payload.rule, // 提示哪条规则被写成功
       color: 'success',
       duration: 3000,
     })
     formOpen.value = false
-    await load()
+    await load() // 写后重拉（新规则/改动以服务端为准）
   }
   catch (err) {
     // 422 的两种可能（已达 10 条上限 / 字段非法）必须让用户看见服务端原文，
@@ -301,28 +372,30 @@ const deleteTyped = ref('')
 
 /** 打开删除确认（typeToConfirm 用规则名，并清空上次残留的输入） */
 function askDelete(rule: BranchProtectionRule) {
-  deleteTyped.value = ''
+  deleteTyped.value = '' // 清空上次输入（ConfirmDialog 只在取消时清，成功路径要自己清）
   deleteTarget.value = rule
   deleteOpen.value = true
 }
 
 /** 确认删除：成功后刷新列表；失败保留弹窗并透出服务端原文 */
 async function onDeleteConfirm() {
-  const target = deleteTarget.value
-  if (!props.slug || !target || deleting.value) {
+  const targetRule = deleteTarget.value
+  // 目标缺失（已删过）/ 提交中：直接返回
+  if (!target.value || !targetRule || deleting.value) {
     return
   }
   deleting.value = true
   try {
-    await deleteBranchProtection(props.slug, target.id)
+    // 仓库级 / 组织级各自打到自己的 DELETE 端点（adapter 隔离）
+    await api.value.remove(target.value, targetRule.id)
     toast.add({
       title: t('org.protections.deleted'),
-      description: target.rule,
+      description: targetRule.rule,
       color: 'success',
       duration: 3000,
     })
     deleteOpen.value = false
-    deleteTarget.value = null
+    deleteTarget.value = null // 清目标：下次打开确认框不残留
     await load()
   }
   catch (err) {
@@ -339,18 +412,20 @@ async function onDeleteConfirm() {
 }
 
 // ---------------------------------------------------------------------------
-// 生命周期：slug 变化（切组织 / 子组织下钻）→ 关闭弹窗并重拉列表
+// 生命周期：定位参数或作用域变化（切组织 / 子组织下钻 / 切仓库）→ 关闭弹窗并重拉
 //
 // 注意：本 watch 刻意放在所有 ref 声明之后 —— 带 immediate 的 watch 在 setup
 // 期间同步执行回调，若放在 formOpen / deleteTarget 的 const 声明之前会命中
 // 暂时性死区（TDZ），组件挂载即抛 ReferenceError。
+// 同时监听 scopeLevel：同一组件实例从组织切到仓库（或反之）必须重拉，
+// 否则会拿组织规则去渲染仓库页签（N4 串数据）。
 // ---------------------------------------------------------------------------
 
-watch(() => props.slug, () => {
-  formOpen.value = false
+watch(() => [target.value, props.scopeLevel], () => {
+  formOpen.value = false // 关闭写弹窗（旧定位的表单对新目标无意义）
   deleteOpen.value = false
   deleteTarget.value = null
-  void load()
+  void load() // 按新定位/新作用域重拉列表
 }, { immediate: true })
 
 // ---------------------------------------------------------------------------
@@ -459,9 +534,10 @@ function flagLabel(value: boolean): string {
       />
 
       <div v-else class="flex flex-col gap-2">
-        <!-- 已达上限提示（按钮同时 disabled，双保险：文案解释"为什么点不了"） -->
+        <!-- 已达上限提示（按钮同时 disabled，双保险：文案解释"为什么点不了"）；
+             文案按 scopeLevel 切换组织/仓库口径（QA 批次 2 遗留③） -->
         <p v-if="showWriteEntry && limitReached" class="text-xs text-warning">
-          {{ t('org.protections.limitHint', { limit: BRANCH_PROTECTION_LIMIT }) }}
+          {{ limitHintText }}
         </p>
 
         <!-- 规则表格：规则名 / 评审要求 / 关键布尔项 / 操作

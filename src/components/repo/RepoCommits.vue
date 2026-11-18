@@ -28,11 +28,15 @@ import { formatDateTime } from '../../utils'
 import StateAlert from './StateAlert.vue'
 import CommitStatusBadge from './CommitStatusBadge.vue'
 import RepoCompare from './RepoCompare.vue'
+import RepoBranchSelect from './RepoBranchSelect.vue'
+import AnnotationsPanel from './AnnotationsPanel.vue'
 
 const props = defineProps<{
   repoPath: string
   /** 当前生效 ref（?ref= 或默认分支名） */
   gitRef: string
+  /** 是否可管理（Master/Owner；控制分支新建/锁定/删除入口显隐，BUG-04） */
+  canManage?: boolean
 }>()
 
 const { t } = useI18n()
@@ -223,11 +227,17 @@ const siteUrl = computed(() =>
     />
 
     <template v-else>
-      <!-- 比较入口（T11）：仅在列表视图显示 -->
+      <!-- 工具行：分支切换（含管理入口，BUG-04）+ 比较入口（仅在列表视图显示） -->
       <div
         v-if="!sha"
-        class="flex justify-end"
+        class="flex items-center justify-between flex-wrap gap-2"
       >
+        <!-- route 模式：组件内部 switchRef 写 ?ref=（ref 变化自动重载列表） -->
+        <RepoBranchSelect
+          :model-value="gitRef"
+          :repo-path="repoPath"
+          :can-manage="canManage"
+        />
         <UButton
           size="sm"
           color="neutral"
@@ -305,6 +315,16 @@ const siteUrl = computed(() =>
           <p v-else class="mt-3 text-xs text-dimmed">
             {{ t('repo.commits.noParent') }}
           </p>
+
+          <!-- 提交元数据（批次 2 · REQ-08）：折叠区，展开才请求；canManage 决定可编辑 -->
+          <div class="mt-3 pt-3 border-t border-default">
+            <AnnotationsPanel
+              :repo-path="repoPath"
+              kind="commit"
+              :ref-key="sha"
+              :can-edit="!!canManage"
+            />
+          </div>
         </template>
       </div>
 

@@ -17,6 +17,7 @@ import { openUrl } from '@tauri-apps/plugin-opener'
 import { archiveRepo, patchRepo, unarchiveRepo } from '../../composables/useCnbRepoManage'
 import { visibilityBadge, repoSiteUrl, type RepoDetail } from '../../composables/useCnbRepo'
 import ConfirmDialog from '../common/ConfirmDialog.vue'
+import OrgProtectionsTab from '../org/OrgProtectionsTab.vue'
 
 const props = defineProps<{
   /** 抽屉开关（v-model:open） */
@@ -269,6 +270,17 @@ function openExternal(url: string) {
             :placeholder="t('repo.settings.topicsPlaceholder')"
           />
         </UFormField>
+
+        <!-- 仓库级保护分支规则（批次 2 · REQ-07）：
+             与组织级共用 OrgProtectionsTab，靠 scopeLevel='repo' 打仓库端点
+             （repo-manage:* scope），不会串到组织级数据（N4）。 -->
+        <div class="pt-3 border-t border-default">
+          <OrgProtectionsTab
+            scope-level="repo"
+            :target="detail?.path || ''"
+            :can-manage="!!detail?.canManage"
+          />
+        </div>
 
         <!-- 操作区：归档/解除归档在左，保存/取消在右 -->
         <div class="flex justify-between gap-2 pt-2 border-t border-default">

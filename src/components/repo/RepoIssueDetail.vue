@@ -13,6 +13,7 @@ import {
   fetchIssueActivities,
   updateIssueState,
   repoSiteUrl,
+  type RepoDetail,
   type RepoIssue,
   type IssueActivity,
 } from '../../composables/useCnbRepo'
@@ -22,11 +23,18 @@ import StateAlert from './StateAlert.vue'
 import MarkdownView from './MarkdownView.vue'
 import CommentSection from './CommentSection.vue'
 import IssueTimeline from './IssueTimeline.vue'
+import IssueMetaEditor from './IssueMetaEditor.vue'
+import IssuePropertiesPanel from './IssuePropertiesPanel.vue'
 
 const props = defineProps<{
   repoPath: string
   number: string
+  /** 仓库详情：标签/处理人写入口按 canManage 预判（repo-issue:rw） */
+  detail?: RepoDetail | null
 }>()
+
+/** 是否可编辑标签/处理人（Master/Owner 单点预判，403 只作兜底） */
+const canManage = computed(() => !!props.detail?.canManage)
 
 const { t } = useI18n()
 const toast = useToast()
@@ -69,6 +77,14 @@ watch(() => `${props.repoPath}|${props.number}`, () => void load(), { immediate:
 
 /** 外跳兜底：cnb.cool 的 Issue 页 */
 const siteUrl = computed(() => repoSiteUrl(props.repoPath, `/-/issues/${props.number}`))
+
+/** 标签/处理人编辑弹窗（REQ-04） */
+const metaEditOpen = ref(false)
+
+/** 写后一致性：任一写成功 → 重拉详情（N2，不乐观更新） */
+function onMetaUpdated() {
+  void load()
+}
 
 // ---------------------------------------------------------------------------
 // 关闭 / 重开（二次确认 + 失败回滚）
@@ -192,7 +208,7 @@ async function doChangeState() {
         <span v-if="issue.closedAt"> · {{ t('issues.closedBy', { name: issue.authorName || '-', time: formatDateTime(issue.closedAt) }) }}</span>
       </p>
 
-      <!-- 标签 / 处理人 -->
+      <!-- 标签 / 处理人（REQ-04：canManage 时显示编辑入口，写后重拉详情） -->
       <div class="mt-3 flex items-center gap-2 flex-wrap text-xs">
         <UBadge
           v-for="label in issue.labels"
@@ -207,6 +223,24 @@ async function doChangeState() {
           {{ t('issues.assignees') }}:
           <span>{{ issue.assignees.map(a => a.nickname).join(', ') }}</span>
         </span>
+        <UButton
+          v-if="canManage"
+          size="xs"
+          color="neutral"
+          variant="ghost"
+          icon="i-lucide-pencil"
+          :label="t('repo.issues.editMeta')"
+          @click="metaEditOpen = true"
+        />
+      </div>
+
+      <!-- 自定义属性（批次 2 · REQ-09）：折叠区，展开才并行拉字典与当前值 -->
+      <div class="mt-3">
+        <IssuePropertiesPanel
+          :repo-path="repoPath"
+          :number="number"
+          :can-edit="canManage"
+        />
       </div>
 
       <!-- 正文（Markdown 消毒渲染；空正文给占位文案）。
@@ -232,6 +266,25 @@ async function doChangeState() {
         <CommentSection :repo-path="repoPath" :number="number" kind="issues" />
       </div>
     </template>
+
+    <!-- 标签 / 处理人编辑弹窗（REQ-04） -->
+    <UModal
+      v-model:open="metaEditOpen"
+      :title="t('repo.issues.editMeta')"
+      :ui="{ content: 'max-w-lg' }"
+    >
+      <template #body>
+        <IssueMetaEditor
+          v-if="issue"
+          :repo-path="repoPath"
+          :number="number"
+          :labels="issue.labels"
+          :assignees="issue.assignees"
+          @updated="onMetaUpdated"
+          @close="metaEditOpen = false"
+        />
+      </template>
+    </UModal>
 
     <!-- 关闭/重开 二次确认弹窗（UModal，确认按钮用明确动词） -->
     <UModal
