@@ -791,17 +791,20 @@ v*:
             # 可用** —— shim 指向 corepack 缓存（...\node\corepack\v1\pnpm\<版本>），
             # 缓存缺失时非交互环境（无 TTY）不会触发自动下载，`pnpm -v` 直接
             # MODULE_NOT_FOUND（本次 NODE 环境 + corepack 缓存双双漂移）。
-            # 所以 enable 之后必须实测一次 pnpm -v，不可用就 npm 全局装兜底
-            # （与本文件 Linux 线 install 的 `pnpm -v || npm i -g` 同一范式）。
+            # rc.27 再补一课：pnpm **命令不存在**时，PowerShell 抛
+            # CommandNotFoundException —— 在 $ErrorActionPreference='Stop' 下是
+            # **终止性错误**，`*> $null` 重定向救不了，实测行自己就把脚本带崩
+            # （兜底永远执行不到）。所以探测必须包一层 `cmd /c`：cmd 恒存在、
+            # 失败只体现为退出码（找不到命令=9009）、不经过 PS 的错误语义。
             $env:COREPACK_ENABLE_DOWNLOAD_PROMPT = '0'
             if (Get-Command corepack -ErrorAction SilentlyContinue) {
               corepack enable
               if ($LASTEXITCODE) { Write-Output "[wocnb-ci] corepack enable 失败（忽略，走 npm 兜底）" }
             }
-            # 实测 pnpm：shim 坏了/缓存缺失在这里暴露，而不是到 pnpm install 才炸
-            pnpm -v *> $null
-            if ($LASTEXITCODE) {
-              Write-Output "[wocnb-ci] pnpm shim 不可用（rc.26 corepack 缓存缺失），npm 全局安装 pnpm@12.14.0 兜底"
+            # 实测 pnpm：shim 坏了（非 0 退出）/ 命令缺失（9009）在这里暴露
+            cmd /c "pnpm -v >nul 2>&1"
+            if ($LASTEXITCODE -ne 0) {
+              Write-Output "[wocnb-ci] pnpm 不可用（rc.26 corepack 缓存缺失 / rc.27 命令缺失），npm 全局安装 pnpm@12.14.0 兜底"
               npm i -g pnpm@12.14.0 --force
               if ($LASTEXITCODE) { exit $LASTEXITCODE }
             }
@@ -814,7 +817,7 @@ v*:
               Write-Output "[wocnb-ci] npm 全局 bin 已补进 PATH: $npmPrefix"
             }
             # PATH 补齐后再次实测（npm 兜底路径的 pnpm.cmd 此刻才真正可见）
-            pnpm -v
+            cmd /c "pnpm -v"
             if ($LASTEXITCODE) { exit $LASTEXITCODE }
             node -v
             if ($LASTEXITCODE) { exit $LASTEXITCODE }
@@ -851,6 +854,19 @@ v*:
             $npmPrefix2 = & npm config get prefix
             if ($npmPrefix2 -and (Test-Path $npmPrefix2) -and ($env:PATH -notlike "*$npmPrefix2*")) {
               $env:PATH = "$npmPrefix2;$env:PATH"
+            }
+            # pnpm 可用性实测（rc.27 教训）：本阶段是独立脚本进程，且 pnpm 命令
+            # 不存在时 PS 的 CommandNotFoundException 是终止性错误 —— 直接调用
+            # 就崩，兜底永远执行不到。必须 cmd /c 包一层探测，不可用再兜底。
+            cmd /c "pnpm -v >nul 2>&1"
+            if ($LASTEXITCODE -ne 0) {
+              Write-Output "[wocnb-ci] build-x64 pnpm 不可用，npm 全局安装 pnpm@12.14.0 兜底"
+              npm i -g pnpm@12.14.0 --force
+              if ($LASTEXITCODE) { exit $LASTEXITCODE }
+              $npmPrefix3 = & npm config get prefix
+              if ($npmPrefix3 -and (Test-Path $npmPrefix3) -and ($env:PATH -notlike "*$npmPrefix3*")) {
+                $env:PATH = "$npmPrefix3;$env:PATH"
+              }
             }
             # NSIS 工具链预置（rc.13 实测）：Rust 编译成功后，tauri bundler 打
             # NSIS 安装包时要从 GitHub 下载 nsis-3.13.zip + nsis_tauri_utils.dll，
