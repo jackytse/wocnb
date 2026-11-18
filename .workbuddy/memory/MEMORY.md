@@ -50,6 +50,9 @@
 - **.ps1 脚本必须带 UTF-8 BOM**：Windows PowerShell 5.1 无 BOM 时按 GBK 解码中文注释，会吃掉后续引号导致「意外的标记」级联语法错误（rc.20 事故）
 - tauri bundler 从 GitHub 下载 NSIS/WiX 工具链会超时：设 `TAURI_BUNDLER_TOOLS_GITHUB_MIRROR=https://ghfast.top/` 可走镜像（URL 拼接格式为 `<mirror>/https://github.com/...`）
 - 上传附件偶发 TLS 断链（curl 56）：release-upload.sh 已加每文件 3 次重试，每次重新申请上传地址
+- **重发只能升版本号**：CNB tag 保护 hook 拒绝删除已推送 tag（`hook declined`，2026-11-18 rc.24 实测），`git push origin :refs/tags/vX` 无效 → 删不掉必然撞 tag already exists。BRANCHING.md §2.3 已改为「升版本重发」
+- **release-windows 是 `allowFailure: true`**：它失败时构建总状态仍是 success → 验收发版必须逐 pipeline 查，只看总状态会把「Windows 缺产物」当成通过（rc.24 实测）
+- **Windows runner 的 node 不在 PATH**（rc.24 实测）：`C:\Users\Administrator\.nvm\versions\node\vX\bin\` 存在但里面没有 node.exe → `Get-Command node` 失败。475f090 起 install 做三级兜底（探测常见安装位 → npmmirror 拉 Node 22.14 到 `C:\ci-tools\node` → 前置 PATH）
 
 ## CNB API 覆盖增量落地约定（2026-11-11 完成后固化）
 
