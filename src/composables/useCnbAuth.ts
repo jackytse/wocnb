@@ -9,7 +9,7 @@
  * - 接口地址与认证方式均来自 CNB 官方文档：
  *   https://docs.cnb.cool/zh/develops/openapi.html
  */
-import { ref } from 'vue'
+import { ref, watch } from 'vue'
 import { useStorage } from '@vueuse/core'
 // 错误文案的 i18n 翻译：composable 层不依赖组件上下文，直接使用全局 Composer
 // （legacy:false 模式下 i18n.global 即 reactive 翻译函数，语言切换后新抛出的
@@ -589,9 +589,106 @@ export async function fetchCnbGroups(): Promise<CnbGroup[]> {
  * 当前选中的组织（全局共享状态）。
  * 侧边栏 GroupsMenu 切换组织时写入，首页等组织维度的页面读取，
  * 保证"侧边栏选中哪个组织、首页就展示哪个组织的仓库"。
- * 注意：不持久化，每次启动默认选中组织列表第一项。
+ *
+ * 持久化（2026-11-18 新增）：选中组织的 **path** 写入 localStorage，
+ * 应用启动 / 更新重启后加载组织列表时优先恢复上次选择，不再重置为
+ * 列表第一项（见下方 readLastSelectedGroupPath / resolveLastSelectedGroup
+ * 与模块级 watch）。存 path 而非 name：path 是 CNB 资源唯一标识
+ * （接口与路由 slug 都用它），name 只是展示名、组织管理员可修改，
+ * 用它做恢复键在改名后必然失配。
  */
 export const selectedGroup = ref<CnbGroup | null>(null)
+
+/** localStorage 键：上次选中的组织路径（CnbGroup.path） */
+export const LAST_GROUP_STORAGE_KEY = 'wocnb.group.lastSelectedPath'
+
+/**
+ * 「上次选中组织路径」内存缓存（null = 尚未从持久层读过）。
+ *
+ * 与 useAppUpdate 的去重状态同范式：localStorage 负责跨启动持久化，
+ * memo 保证 vitest node 环境（无 localStorage）里"写过就能读到"，
+ * 持久化与恢复逻辑可被单测完整驱动。
+ */
+let lastSelectedGroupPathMemo: string | null = null
+
+/** 读取上次选中的组织路径（无记录 / 读失败 → 空串） */
+export function readLastSelectedGroupPath(): string {
+  if (lastSelectedGroupPathMemo !== null) {
+    return lastSelectedGroupPathMemo
+  }
+  try {
+    const raw = typeof localStorage !== 'undefined'
+      ? localStorage.getItem(LAST_GROUP_STORAGE_KEY)
+      : null
+    lastSelectedGroupPathMemo = typeof raw === 'string' ? raw : ''
+  }
+  catch {
+    lastSelectedGroupPathMemo = ''
+  }
+  return lastSelectedGroupPathMemo
+}
+
+/** 写入上次选中的组织路径（memo + 尽力持久化；写失败只影响下次恢复） */
+function persistSelectedGroupPath(path: string): void {
+  lastSelectedGroupPathMemo = path
+  try {
+    if (typeof localStorage !== 'undefined') {
+      localStorage.setItem(LAST_GROUP_STORAGE_KEY, path)
+    }
+  }
+  catch {
+    // 容器无 localStorage / 隐私模式禁写：静默降级（会话内 memo 仍生效）
+  }
+}
+
+/**
+ * 从组织列表恢复上次选中的组织（**纯函数**，不读写任何外部状态）。
+ *
+ * 匹配键是 path（唯一标识）；匹配不到返回 null，由调用方回退列表首项：
+ * - 组织已被移除 / 用户已退出该组织 / 令牌失去权限；
+ * - 上次选中的是**子组织**（group 页 slug 下钻会同步 selectedGroup，
+ *   而 GET /user/groups 只返回顶层组织）——子组织不在列表中。这里明确
+ *   取舍：宁可回到可治理的顶层组织，也不凭路径构造一个缺 id/access_role
+ *   的伪条目（伪条目的权限判定会失真，属既有红线）。
+ *
+ * @param list 组织列表（GET /user/groups 结果）
+ * @param storedPath 上次持久化的组织路径（readLastSelectedGroupPath）
+ */
+export function resolveLastSelectedGroup(list: CnbGroup[], storedPath: string): CnbGroup | null {
+  if (!storedPath) {
+    return null
+  }
+  return list.find(group => group.path === storedPath) ?? null
+}
+
+/**
+ * 落盘时机：单点挂在 selectedGroup 上（模块级 watch）。
+ *
+ * 为什么不分散到各写入点（GroupsMenu 切换 / group 页 slug 同步 /
+ * CreateGroupModal 创建后置位）：写入点已有 3 处且未来可能增加，
+ * 漏一处就会出现"切了组织但重启回到旧组织"的诡异现象；watch 覆盖
+ * 所有赋值路径，新增写入点无需任何额外改动。
+ */
+watch(selectedGroup, (group) => {
+  persistSelectedGroupPath(group?.path || '')
+})
+
+/**
+ * 供单测重置持久化状态（生产代码不应调用）。
+ * 用例之间需要显式复位，否则前一个用例写入的路径会影响后一个用例的
+ * 恢复断言。
+ */
+export function resetSelectedGroupPersistForTest(): void {
+  lastSelectedGroupPathMemo = null
+  try {
+    if (typeof localStorage !== 'undefined') {
+      localStorage.removeItem(LAST_GROUP_STORAGE_KEY)
+    }
+  }
+  catch {
+    // 忽略：测试环境异常不该让用例挂掉
+  }
+}
 
 /**
  * 组织列表的**共享状态**（2026-11-11 组织能力扩展新增）。

@@ -23,6 +23,8 @@ import {
   cnbGroupManageUrl,
   cnbGroupLogoUrl,
   cnbGroups,
+  readLastSelectedGroupPath,
+  resolveLastSelectedGroup,
   type CnbGroup,
 } from '../composables/useCnbAuth'
 // 图片内存缓存：组织图标转 data URL 后绘制，菜单重新挂载不再闪动
@@ -85,9 +87,17 @@ async function loadGroups() {
   try {
     // fetchCnbGroups 内部写入共享状态 cnbGroups，本组件的 groups 随之更新
     const list = await fetchCnbGroups()
-    // 默认选中第一个组织（保持上次选择：若仍存在则不重置）
+    // 选中组织的确定顺序（2026-11-18 起支持跨启动恢复）：
+    // 1. 会话内已有选中且仍在列表中 → 保持不动（切换组织后其他页面
+    //    的联动逻辑不被打断）；
+    // 2. 否则恢复 localStorage 里上次选中的组织（应用更新/重启后回到
+    //    用户上次用的组织，而不是重置为列表第一项）；
+    // 3. 仍匹配不到（组织被移除 / 上次选的是子组织 / 首次使用）→ 回退
+    //    列表第一项，列表为空则置 null。
     if (!selectedGroup.value || !list.some(g => g.id === selectedGroup.value?.id)) {
-      selectedGroup.value = list[0] || null
+      selectedGroup.value = resolveLastSelectedGroup(list, readLastSelectedGroupPath())
+        || list[0]
+        || null
     }
     // 预热组织图标到内存缓存（data URL）：图标就绪后，菜单每次打开
     // 重新挂载的 <img> 都同步绘制，彻底消除"打开菜单头像闪动"
