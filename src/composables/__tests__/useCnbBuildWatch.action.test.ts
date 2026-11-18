@@ -251,3 +251,54 @@ describe('initBuildNotificationActionHandler（事件监听）', () => {
     expect(openPanel).toHaveBeenCalledTimes(1)
   })
 })
+
+// ---------------------------------------------------------------------------
+// 应用级通知（kind=update）的点击分流
+// ---------------------------------------------------------------------------
+
+describe('resolveBuildNotificationIntent（update 类型）', () => {
+  it('kind=update → 直达「设置 · 关于」意图（即使带了杂散字段也不误入其他分支）', () => {
+    expect(resolveBuildNotificationIntent({
+      actionId: 'tap',
+      notificationId: 7,
+      repoPath: null,
+      sn: null,
+      kind: 'update',
+    })).toEqual({ type: 'open-about' })
+    // 带脏字段（非法 repoPath/sn）同样按 kind 优先分流
+    expect(resolveBuildNotificationIntent({ repoPath: 123, sn: '', kind: 'update' })).toEqual({
+      type: 'open-about',
+    })
+  })
+})
+
+describe('initBuildNotificationActionHandler（update 类型执行）', () => {
+  beforeEach(() => {
+    resetBuildNotificationActionHandlerForTest()
+    vi.unstubAllGlobals()
+  })
+
+  afterEach(() => {
+    vi.unstubAllGlobals()
+  })
+
+  it('open-about 意图：navigate 到 /settings/about，不开面板', async () => {
+    vi.stubGlobal('window', { __TAURI_INTERNALS__: {} })
+    const { deps, listeners, navigate, openPanel } = makeDeps()
+    await initBuildNotificationActionHandler(deps)
+
+    await listeners[0]({ payload: { kind: 'update' } })
+    expect(navigate).toHaveBeenCalledWith({ path: '/settings/about', query: {} })
+    expect(openPanel).not.toHaveBeenCalled()
+  })
+
+  it('open-about 的 navigate 失败 → 兜底打开面板（不向上抛）', async () => {
+    vi.stubGlobal('window', { __TAURI_INTERNALS__: {} })
+    const { deps, listeners, navigate, openPanel } = makeDeps()
+    navigate.mockRejectedValueOnce(new Error('router blocked'))
+    await initBuildNotificationActionHandler(deps)
+
+    await listeners[0]({ payload: { kind: 'update' } })
+    expect(openPanel).toHaveBeenCalledTimes(1)
+  })
+})

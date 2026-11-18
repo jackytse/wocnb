@@ -147,6 +147,18 @@ export default {
     codeReview: 'Code review | {count} code reviews',
     createRepo: 'Created a repository',
     joinGroup: 'Joined a group',
+    updatesSection: 'App notifications',
+    updatesEmpty: 'No app notifications',
+    updateBadge: 'Update',
+  },
+  // ---------------------------------------------------------------------------
+  // App update check (useAppUpdate: new version → system notification + panel record)
+  // ---------------------------------------------------------------------------
+  appUpdate: {
+    notify: {
+      title: 'New version {version} available',
+      body: 'Current {current}. Click to view and download',
+    },
   },
   // ---------------------------------------------------------------------------
   // Build result notifications (polling → system notification + in-app panel)

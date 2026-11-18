@@ -797,6 +797,30 @@ async function sendSystemNotification(
 export type SendTestNotificationResult = 'sent' | 'permissionDenied' | 'notDesktop' | 'failed'
 
 /**
+ * 发送一条「应用级」系统通知（当前仅更新检测使用）。
+ *
+ * # 为什么放这里而不是让调用方自己实现一遍
+ *
+ * 系统通知的完整链路（权限申请时机 / id 分配回绕 / ActionType 注册 /
+ * extra 载荷收敛）都沉淀在本模块的 sendSystemNotification 里，且与构建
+ * 通知共享同一个权限缓存与点击上报通道——应用级通知复用它即可获得
+ * 「点击可上报到前端」的全部能力，单独再实现一份必然造成权限缓存、
+ * id 计数器等状态分叉（两处各自申请权限会导致一次会话弹两次权限框）。
+ *
+ * @param title 通知标题（调用方负责本地化）
+ * @param body 通知正文（调用方负责本地化）
+ * @param payload 定位载荷（如 { kind: 'update' }；带 repoPath+sn 时点击可直达详情）
+ * @returns 是否真的交给了系统（浏览器 dev / 未授权 / 插件异常均 false）
+ */
+export async function sendAppSystemNotification(
+  title: string,
+  body: string,
+  payload?: BuildNotificationPayload,
+): Promise<boolean> {
+  return sendSystemNotification(title, body, payload)
+}
+
+/**
  * 发送一条测试构建通知（设置页「发送测试通知」按钮入口）。
  *
  * # 为什么点击后打开的是通知面板而不是构建详情
@@ -876,8 +900,14 @@ function buildBodyText(sourceRef: string, commitTitle: string): string {
  */
 export const BUILD_NOTIFY_ACTION_TYPE_ID = 'cnbBuildOpen'
 
-/** 系统通知的类型（kind 会写进通知 extra，点击上报时原样带回前端） */
-export type BuildNotificationKind = 'single' | 'digest' | 'leftover' | 'test'
+/**
+ * 系统通知的类型（kind 会写进通知 extra，点击上报时原样带回前端）。
+ *
+ * 'update' 为应用级通知（更新检测，由 useAppUpdate 经
+ * sendAppSystemNotification 发送）：不带 repoPath/sn，点击后直达
+ * 「设置 · 关于」页（resolveBuildNotificationAction 按 kind 分流）。
+ */
+export type BuildNotificationKind = 'single' | 'digest' | 'leftover' | 'test' | 'update'
 
 /**
  * 随系统通知携带的定位载荷。

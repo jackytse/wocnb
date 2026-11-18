@@ -21,14 +21,16 @@ import {
   type CnbActivityItem,
 } from '../composables/useCnbAuth'
 import { unreadBuildCount } from '../composables/useCnbBuildWatch'
+import { unreadAppNoticeCount } from '../composables/useAppNotices'
 
 const { isNotificationsSlideoverOpen } = useDashboard()
 
 /**
- * 铃铛徽标数字：未读构建通知数（来自 useCnbBuildWatch 的轮询结果）。
+ * 铃铛徽标数字：未读通知总数 = 未读构建通知（useCnbBuildWatch 轮询产出）
+ * + 未读应用通知（更新检测等应用级事件）。
  * 0 时不渲染徽标（UChip 的 show 属性），避免常驻一个 0 的圆点。
  */
-const bellBadgeCount = computed(() => unreadBuildCount.value)
+const bellBadgeCount = computed(() => unreadBuildCount.value + unreadAppNoticeCount.value)
 // 页面文案随语言切换（computed 包裹保证热切换生效）
 const { t } = useI18n()
 

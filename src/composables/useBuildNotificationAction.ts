@@ -9,8 +9,8 @@
  * 以事件 `cnb://build-notification-action` emit 给前端，本模块负责：
  * 1. 监听该事件；
  * 2. 把窗口前置（用户很可能在托盘/后台状态点击通知）；
- * 3. 按 payload 决定路由意图：有 repoPath+sn → 构建详情；否则 → 应用内
- *    通知面板（digest/leftover/解析失败都走兜底，面板里有全部条目）。
+ * 3. 按 payload 决定路由意图：有 repoPath+sn → 构建详情；kind=update →
+ *    「设置 · 关于」页；其余（digest/leftover/解析失败）→ 应用内通知面板。
  *
  * # 为什么独立成模块而不是塞进 useCnbBuildWatch
  *
@@ -61,6 +61,10 @@ export type BuildNotificationIntent =
       query: { tab: 'builds', sn: string }
     }
   | {
+      /** 应用级通知（更新检测）：直达「设置 · 关于」页（有「前往下载」入口） */
+      type: 'open-about'
+    }
+  | {
       /** 兜底：打开应用内通知面板（面板里有全部构建通知条目） */
       type: 'open-panel'
     }
@@ -91,6 +95,13 @@ export function resolveBuildNotificationIntent(payload: unknown): BuildNotificat
   const data = (typeof payload === 'object' && payload !== null ? payload : {}) as Partial<BuildNotificationActionPayload>
   const repoPath = typeof data.repoPath === 'string' ? data.repoPath.trim() : ''
   const sn = typeof data.sn === 'string' ? data.sn.trim() : ''
+  const kind = typeof data.kind === 'string' ? data.kind : ''
+
+  // 应用级通知（更新检测）优先分流：kind 在 extra 里由 Rust 原样带回，
+  // 即使未来 update 通知带了多余字段也不会误入其他分支
+  if (kind === 'update') {
+    return { type: 'open-about' }
+  }
 
   // 两者齐全才产出直达详情的意图；repoPath 必须逐段 encodeURIComponent
   // （仓库路径可能含空格/#/中文，'/' 是分隔符保留——与 NotificationsSlideover
@@ -206,6 +217,16 @@ export async function initBuildNotificationActionHandler(deps: BuildNotification
         // 路由跳转失败（如守卫拦截、目标记录不存在）时兜底打开通知面板：
         // 面板里有该条构建通知，用户手动点击也能到同一位置，体验闭环
         console.warn('[build-notify-action] 路由跳转失败，回退打开通知面板：', err)
+        deps.openPanel()
+      }
+    }
+    else if (intent.type === 'open-about') {
+      // 更新通知：直达「设置 · 关于」页（版本比对结果 + 「前往下载」按钮都在那里）
+      try {
+        await deps.navigate({ path: '/settings/about', query: {} })
+      }
+      catch (err) {
+        console.warn('[build-notify-action] 跳转关于页失败，回退打开通知面板：', err)
         deps.openPanel()
       }
     }

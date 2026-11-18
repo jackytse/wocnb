@@ -29,6 +29,10 @@ import {
   markBuildNoticesRead,
   type BuildNotice,
 } from '../composables/useCnbBuildWatch'
+import {
+  appNoticeFeed,
+  markAppNoticesRead,
+} from '../composables/useAppNotices'
 import { useDashboard } from '../composables/useDashboard'
 import { formatRelativeTime, encodeRepoPathForRoute } from '../utils'
 
@@ -71,10 +75,11 @@ async function loadActivities() {
 }
 
 // 面板打开时拉取最新动态（首次打开与每次重新打开都刷新），
-// 同时清掉铃铛上的未读构建数（用户已经看到列表了）
+// 同时清掉铃铛上的未读数（构建通知 + 应用通知两类都已展示给用户）
 watch(isNotificationsSlideoverOpen, (open) => {
   if (open) {
     markBuildNoticesRead()
+    markAppNoticesRead()
     void loadActivities()
   }
 })
@@ -140,6 +145,20 @@ function openBuildNotice(notice: BuildNotice) {
 
 /** 构建通知条目（最新在前；为空时展示空态文案） */
 const notices = computed(() => buildNoticeFeed.value)
+
+/** 应用通知条目（最新在前；当前仅更新检测产生记录） */
+const appNotices = computed(() => appNoticeFeed.value)
+
+/**
+ * 点击应用通知：直达「设置 · 关于」页（版本信息与「前往下载」入口都在那里）。
+ * 与构建通知点击同为 push 下钻语义，返回键可回到原页面。
+ * 目前应用通知点击目标统一为关于页（条目本身不含独立路由信息），
+ * 因此不消费条目参数；未来 kind 扩展出各自目标时再按 notice 分流。
+ */
+function openAppNotice() {
+  isNotificationsSlideoverOpen.value = false
+  void router.push('/settings/about')
+}
 </script>
 
 <template>
@@ -184,6 +203,48 @@ const notices = computed(() => buildNoticeFeed.value)
                   <p class="text-xs text-dimmed">
                     {{ timeLabel(notice.time) }}
                     <span v-if="notice.leftover">· {{ t('buildWatch.panel.leftover') }}</span>
+                  </p>
+                </div>
+              </button>
+            </li>
+          </ul>
+        </section>
+
+        <USeparator />
+
+        <!-- —— 应用通知分区（更新检测等应用级事件）—— -->
+        <section class="flex flex-col gap-2">
+          <h3 class="text-sm font-semibold text-highlighted">
+            {{ t('notifications.updatesSection') }}
+          </h3>
+
+          <p v-if="appNotices.length === 0" class="text-sm text-muted">
+            {{ t('notifications.updatesEmpty') }}
+          </p>
+
+          <ul v-else class="flex flex-col gap-1">
+            <li v-for="notice in appNotices" :key="notice.id">
+              <button
+                type="button"
+                class="flex w-full items-start gap-3 rounded-md p-2 text-left hover:bg-elevated/60"
+                @click="openAppNotice()"
+              >
+                <UBadge
+                  color="info"
+                  variant="subtle"
+                  size="sm"
+                  :label="t('notifications.updateBadge')"
+                  class="shrink-0"
+                />
+                <div class="min-w-0 flex-1">
+                  <p class="text-sm font-medium text-highlighted truncate">
+                    {{ notice.title }}
+                  </p>
+                  <p class="text-xs text-muted truncate">
+                    {{ notice.body }}
+                  </p>
+                  <p class="text-xs text-dimmed">
+                    {{ timeLabel(notice.time) }}
                   </p>
                 </div>
               </button>

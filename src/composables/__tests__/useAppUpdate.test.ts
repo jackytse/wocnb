@@ -26,6 +26,25 @@ vi.mock('../useCnbReleases', () => ({
   fetchLatestRelease: (...args: unknown[]) => fetchLatestReleaseMock(...args),
 }))
 
+// mock 系统通知发送（useCnbBuildWatch 内部依赖 Tauri 运行时，node 下不存在）。
+// 用类型化数组记录入参：比 mock.calls 更易断言，也规避 vi.fn 空签名
+// 导致的展开参数 / 元组转型类型问题
+const sentNotifications: Array<{ title: string, body: string, payload: { kind: string } }> = []
+const sendAppSystemNotificationMock = vi.fn((title: string, body: string, payload: { kind: string }) => {
+  sentNotifications.push({ title, body, payload })
+  return Promise.resolve(true)
+})
+vi.mock('../useCnbBuildWatch', () => ({
+  sendAppSystemNotification: (title: string, body: string, payload: { kind: string }) =>
+    sendAppSystemNotificationMock(title, body, payload),
+}))
+
+// mock 应用通知记录（记录本身的行为由 useAppNotices.test.ts 单独锁定）
+const pushAppNoticeMock = vi.fn()
+vi.mock('../useAppNotices', () => ({
+  pushAppNotice: (...args: unknown[]) => pushAppNoticeMock(...args),
+}))
+
 import {
   APP_RELEASES_PAGE_URL,
   APP_SOURCE_REPO,
@@ -35,12 +54,18 @@ import {
   isNewerVersion,
   maybeAutoCheckOnStartup,
   parseVersion,
+  resetUpdateNotifyStateForTest,
   useAppUpdate,
 } from '../useAppUpdate'
 
 beforeEach(() => {
   fetchLatestReleaseMock.mockReset()
   isLoggedInMock.mockReturnValue(true)
+  sendAppSystemNotificationMock.mockClear()
+  sentNotifications.length = 0
+  pushAppNoticeMock.mockClear()
+  // 复位「已通知版本」去重状态：通知编排用例之间互不串扰
+  resetUpdateNotifyStateForTest()
   // 复位模块级单例（vi.resetModules 成本高，这里直接驱动状态复位：
   // 跑一次置 error 的检查即可覆盖 checking → error；available/upToDate
   // 由各用例自身的断言顺序保证独立性）
@@ -231,5 +256,62 @@ describe('maybeAutoCheckOnStartup', () => {
     const result = await maybeAutoCheckOnStartup({ currentVersion: '0.1.0-rc.25' })
     expect(result).toBeNull()
     expect(fetchLatestReleaseMock).not.toHaveBeenCalled()
+  })
+})
+
+// ---------------------------------------------------------------------------
+// 发现新版本 → 系统通知 + 应用通知记录（按版本去重）
+// ---------------------------------------------------------------------------
+
+describe('发现新版本的通知编排', () => {
+  it('首次发现新版本：推系统通知（kind=update）+ 落一条应用通知记录', async () => {
+    fetchLatestReleaseMock.mockResolvedValue({ id: '1', tagName: 'v0.1.0-rc.30', name: 'rc.30' })
+    const result = await checkForUpdate({ currentVersion: '0.1.0-rc.25' })
+    expect(result.available).toBe(true)
+
+    expect(sendAppSystemNotificationMock).toHaveBeenCalledTimes(1)
+    const { title, body, payload } = sentNotifications[0]    // 标题带新版本号、正文带当前版本（通知中心一眼可辨）
+    expect(title).toContain('0.1.0-rc.30')
+    expect(body).toContain('0.1.0-rc.25')
+    expect(payload.kind).toBe('update')
+
+    expect(pushAppNoticeMock).toHaveBeenCalledTimes(1)
+    const record = pushAppNoticeMock.mock.calls[0][0] as { kind: string, title: string, version: string }
+    expect(record.kind).toBe('update')
+    expect(record.version).toBe('0.1.0-rc.30')
+    expect(record.title).toBe(title)
+  })
+
+  it('同一版本重复检查（手动/启动节流到期）→ 不重复通知（按版本去重）', async () => {
+    fetchLatestReleaseMock.mockResolvedValue({ id: '1', tagName: 'v0.1.0-rc.30', name: 'rc.30' })
+    await checkForUpdate({ currentVersion: '0.1.0-rc.25' })
+    await checkForUpdate({ currentVersion: '0.1.0-rc.25' })
+    await checkForUpdate({ currentVersion: '0.1.0-rc.25' })
+    expect(sendAppSystemNotificationMock).toHaveBeenCalledTimes(1)
+    expect(pushAppNoticeMock).toHaveBeenCalledTimes(1)
+  })
+
+  it('出新版本（rc.30 → rc.31）→ 再次通知', async () => {
+    fetchLatestReleaseMock.mockResolvedValue({ id: '1', tagName: 'v0.1.0-rc.30', name: '' })
+    await checkForUpdate({ currentVersion: '0.1.0-rc.25' })
+    fetchLatestReleaseMock.mockResolvedValue({ id: '2', tagName: 'v0.1.0-rc.31', name: '' })
+    await checkForUpdate({ currentVersion: '0.1.0-rc.25' })
+    expect(sendAppSystemNotificationMock).toHaveBeenCalledTimes(2)
+    expect(pushAppNoticeMock).toHaveBeenCalledTimes(2)
+  })
+
+  it('已是最新 / 无 Release / 检查失败 → 不产生任何通知与记录', async () => {
+    // 已是最新
+    fetchLatestReleaseMock.mockResolvedValue({ id: '1', tagName: 'v0.1.0-rc.25', name: '' })
+    await checkForUpdate({ currentVersion: '0.1.0-rc.25' })
+    // 无 Release（404 归一 null）
+    fetchLatestReleaseMock.mockResolvedValue(null)
+    await checkForUpdate({ currentVersion: '0.1.0-rc.25' })
+    // 检查失败
+    fetchLatestReleaseMock.mockRejectedValue(new Error('network down'))
+    await checkForUpdate({ currentVersion: '0.1.0-rc.25' })
+
+    expect(sendAppSystemNotificationMock).not.toHaveBeenCalled()
+    expect(pushAppNoticeMock).not.toHaveBeenCalled()
   })
 })

@@ -18,12 +18,21 @@
  *   layouts/default.vue 触发），发现新版本由调用方弹 toast；
  * - checkForUpdate()：设置 · 关于页「检查更新」按钮，全量状态落单例 state。
  *
- * 本文件只做数据与判定，不含 UI（toast / i18n 全部在调用方），保证
- * vitest node 环境可直接单测纯函数与检查流程。
+ * 通知双通道（本应用的通知约定：推送本地系统通知的同时在通知面板落记录）：
+ * 发现新版本时经 sendAppSystemNotification 推一条系统通知（点击直达
+ * 「设置 · 关于」），并向 useAppNotices 的应用通知列表 push 一条记录；
+ * 同一版本只通知一次（localStorage 记 lastNotifiedVersion，避免 24h 节流
+ * 到期后每次启动都重复打扰）。
+ *
+ * 文案 i18n：系统通知/面板记录的标题正文在本模块组装（复用全局 i18n 单例，
+ * 与 useCnbBuildWatch 同范式）；toast 仍由调用方负责。
  */
 import { computed, ref } from 'vue'
+import { i18n } from '../i18n'
 import { isLoggedIn } from './useCnbAuth'
+import { pushAppNotice } from './useAppNotices'
 import { fetchLatestRelease, type ReleaseItem } from './useCnbReleases'
+import { sendAppSystemNotification } from './useCnbBuildWatch'
 
 // ---------------------------------------------------------------------------
 // 常量：更新源仓库与节流参数
@@ -45,6 +54,16 @@ export const UPDATE_CHECK_INTERVAL_MS = 24 * 60 * 60 * 1000
 
 /** localStorage 键：上次成功检查的毫秒时间戳 */
 const LAST_CHECK_STORAGE_KEY = 'wocnb.update.lastCheckAt'
+
+/**
+ * localStorage 键：最近一次「已通知过新版本」的版本号。
+ *
+ * 为什么单独存：检查节流（24h）只控制"多久查一次"，不控制"查到同一个
+ * 新版本后要不要再打扰"。没有这个去重的话，版本升级前用户每次启动
+ * （24h 节流到期）都会收到一遍「发现新版本 0.1.0-rc.30」的系统通知。
+ * 记住已通知版本后，同一版本绝不重复通知；出新版本（如 rc.31）才再次通知。
+ */
+const LAST_NOTIFIED_VERSION_KEY = 'wocnb.update.lastNotifiedVersion'
 
 // ---------------------------------------------------------------------------
 // 语义化版本比较（纯函数，单测锁定）
@@ -258,6 +277,104 @@ function writeLastCheckAt(ts: number): void {
 }
 
 /**
+ * 「已通知过的最新版本」内存缓存（null = 尚未从持久层读过）。
+ *
+ * 为什么双层（localStorage + memo）：
+ * - Tauri WebView 里 localStorage 可用，跨启动持久化去重状态；
+ * - vitest node 环境没有 localStorage（读写都会走 catch 分支），若每次
+ *   都直接读 localStorage，去重在测试里永远不生效、无法验证；
+ *   memo 让"写过就能读到"在两个环境里行为一致。
+ */
+let lastNotifiedVersionMemo: string | null = null
+
+/** 读取「已通知过的最新版本」（无记录/脏数据 → 空串；memo 优先） */
+function readLastNotifiedVersion(): string {
+  if (lastNotifiedVersionMemo !== null) {
+    return lastNotifiedVersionMemo
+  }
+  try {
+    const raw = typeof localStorage !== 'undefined'
+      ? localStorage.getItem(LAST_NOTIFIED_VERSION_KEY)
+      : null
+    lastNotifiedVersionMemo = typeof raw === 'string' ? raw : ''
+  }
+  catch {
+    lastNotifiedVersionMemo = ''
+  }
+  return lastNotifiedVersionMemo
+}
+
+/** 记录「已通知过的最新版本」（写 memo + 尽力持久化，写失败可接受） */
+function writeLastNotifiedVersion(version: string): void {
+  lastNotifiedVersionMemo = version
+  try {
+    if (typeof localStorage !== 'undefined') {
+      localStorage.setItem(LAST_NOTIFIED_VERSION_KEY, version)
+    }
+  }
+  catch {
+    // 容器无 localStorage / 隐私模式禁写：静默降级（本次会话内 memo 仍生效）
+  }
+}
+
+/**
+ * 供单测清除「已通知版本」记录（生产代码不应调用）。
+ * 用例之间需要显式复位去重状态，否则同一进程内第二次发现同版本
+ * 会被去重逻辑吞掉，无法验证通知行为。
+ */
+export function resetUpdateNotifyStateForTest(): void {
+  lastNotifiedVersionMemo = null
+  try {
+    if (typeof localStorage !== 'undefined') {
+      localStorage.removeItem(LAST_NOTIFIED_VERSION_KEY)
+    }
+  }
+  catch {
+    // 忽略：测试环境异常不该让用例挂掉
+  }
+}
+
+/**
+ * 发现新版本时的通知编排（系统通知 + 应用通知记录，按版本去重）。
+ *
+ * # 为什么放在数据层而不是调用方
+ *
+ * 「发现新版本 → 通知」的口径必须全局唯一（去重状态、通知文案、载荷
+ * 结构都在这里），若交给 default.vue（启动 toast 处）与 about.vue（手动
+ * 检查处）各自实现，两处口径漂移是迟早的事。checkForUpdate 是两个入口
+ * 的公共必经点，在这里编排天然覆盖两条链路。
+ *
+ * # 去重与副作用边界
+ *
+ * - 同版本已通知过 → 直接 return（检查本身照常执行，关于页状态照常更新）；
+ * - 系统通知 fire-and-forget：发送失败（浏览器 dev / 权限未授权）不影响
+ *   主流程——应用内记录与 toast 是兜底通道；
+ * - 记录先于"发送结果"落盘：即使系统通知没发出去（权限缺失），面板里
+ *   也应有这条记录（用户回到应用时能看到）。
+ *
+ * @param result checkForUpdate 的检查结果（available=false 时为 no-op）
+ */
+function maybeNotifyUpdateAvailable(result: UpdateCheckResult): void {
+  if (!result.available || !result.latestVersion) {
+    return
+  }
+  // 同一版本只通知一次：rc 阶段版本更新频繁但同一版本会伴随多次检查
+  // （启动静默 + 手动），不去重会反复打扰
+  if (readLastNotifiedVersion() === result.latestVersion) {
+    return
+  }
+  writeLastNotifiedVersion(result.latestVersion)
+
+  // 文案与载荷：标题带新版本号（通知中心里一眼可辨），正文带当前版本
+  const title = i18n.global.t('appUpdate.notify.title', { version: result.latestVersion })
+  const body = i18n.global.t('appUpdate.notify.body', { current: result.currentVersion || '—' })
+  // 系统通知：点击直达「设置 · 关于」（extra 带 kind=update，无 repoPath/sn）
+  void sendAppSystemNotification(title, body, { kind: 'update' })
+  // 应用通知记录：通知面板「应用通知」分区展示，点击同样直达关于页
+  pushAppNotice({ kind: 'update', title, body, version: result.latestVersion, time: Date.now() })
+}
+
+/**
  * 执行一次更新检查（手动按钮 / 启动静默共用主流程）。
  *
  * - 失败不抛异常：结果以 error 字段带回（静默场景调用方忽略即可，
@@ -291,6 +408,12 @@ export async function checkForUpdate(opts: { currentVersion?: string } = {}): Pr
       const latestVersion = release.tagName.replace(/^v/, '')
       const available = !!version && isNewerVersion(latestVersion, version)
       status.value = available ? 'available' : 'upToDate'
+      if (available) {
+        // 发现新版本：推系统通知 + 落通知面板记录（内部按版本去重）。
+        // 同步调用、内部无 await 前的分支（发送为 fire-and-forget），
+        // checkForUpdate 返回时通知编排已完成，测试断言时序确定
+        maybeNotifyUpdateAvailable({ available, latestVersion, currentVersion: version, release, error: '' })
+      }
       return { available, latestVersion, currentVersion: version, release, error: '' }
     }
     catch (err) {
