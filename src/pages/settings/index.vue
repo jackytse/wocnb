@@ -22,12 +22,15 @@ import { cnbAvatarUrl, cnbGroupLogoUrl, cnbUser, selectedGroup } from '../../com
 import { CNB_TOKEN_MANAGE_URL } from '../../composables/useCnbAuth'
 import {
   BUILD_NOTIFY_INTERVAL_OPTIONS,
+  BUILD_NOTIFY_SCOPE_OPTIONS,
   buildNotifyEnabled,
   buildNotifyIntervalSec,
   buildNotifyPermissionDenied,
+  buildNotifyScope,
   buildScopeMissingCount,
   buildWatchRepoCount,
   buildWatchTruncated,
+  normalizeScope,
   requestBuildNotificationPermission,
   sendTestBuildNotification,
 } from '../../composables/useCnbBuildWatch'
@@ -106,6 +109,34 @@ const intervalItems = computed<{ label: string, value: number }[]>(() =>
     value: sec,
   })),
 )
+
+/**
+ * 监控范围下拉选项（全部组织 / 当前组织）。
+ *
+ * 顺序把「全部组织」放第一位：它是默认值，也是绝大多数用户需要的口径
+ * （只盯当前组织时，其他组织的流水线结果完全收不到通知）。
+ * 请求量差异在选项说明文案里讲清楚（全部组织 = 每个组织一次仓库列表 +
+ * 每仓库一次 pending 查询，轮询侧有 100 个仓库的全局上限兜底）。
+ */
+const scopeItems = computed<{ label: string, value: 'all' | 'current', description: string }[]>(() =>
+  BUILD_NOTIFY_SCOPE_OPTIONS.map(scope => ({
+    label: t(`buildWatch.settings.scope_${scope}`),
+    value: scope,
+    description: t(`buildWatch.settings.scopeDesc_${scope}`),
+  })),
+)
+
+/**
+ * 监控范围的双向绑定。
+ * 落盘值经 normalizeScope 归一（历史脏值/空值一律按 'all'），
+ * getter 也走同一归一函数，保证"界面显示的就是轮询实际在用的口径"。
+ */
+const scopeModel = computed<'all' | 'current'>({
+  get: () => normalizeScope(buildNotifyScope.value),
+  set: (value: 'all' | 'current') => {
+    buildNotifyScope.value = normalizeScope(value)
+  },
+})
 
 /**
  * 间隔的双向绑定。
@@ -332,6 +363,26 @@ async function onSendTestNotify() {
 
         <USeparator />
 
+        <!-- 监控范围：全部组织（默认）/ 仅当前选中组织 -->
+        <div class="flex items-center gap-4 flex-wrap">
+          <div class="min-w-0 flex-1">
+            <p class="text-sm font-semibold text-highlighted">
+              {{ t('buildWatch.settings.scope') }}
+            </p>
+            <p class="text-xs text-dimmed mt-0.5">
+              {{ t('buildWatch.settings.scopeDesc') }}
+            </p>
+          </div>
+          <USelect
+            v-model="scopeModel"
+            :items="scopeItems"
+            :disabled="!buildNotifyEnabled"
+            class="w-40"
+          />
+        </div>
+
+        <USeparator />
+
         <!-- 轮询间隔 -->
         <div class="flex items-center gap-4 flex-wrap">
           <div class="min-w-0 flex-1">
@@ -350,9 +401,11 @@ async function onSendTestNotify() {
           />
         </div>
 
-        <!-- 说明：跟随侧边栏选中组织 + 应用需保持运行 -->
+        <!-- 说明：关注范围随监控口径变化 + 应用需保持运行 -->
         <p class="text-xs text-muted">
-          {{ t('buildWatch.settings.followGroup', { group: groupName }) }}
+          {{ scopeModel === 'all'
+            ? t('buildWatch.settings.followAllGroups')
+            : t('buildWatch.settings.followGroup', { group: groupName }) }}
         </p>
         <p class="text-xs text-muted">
           {{ t('buildWatch.settings.keepRunning') }}

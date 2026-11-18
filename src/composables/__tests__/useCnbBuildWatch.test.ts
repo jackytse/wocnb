@@ -26,7 +26,9 @@ vi.mock('../useCnbAuth', async () => {
   return {
     cnbToken: ref('test-token'),
     selectedGroup: ref<{ path: string } | null>({ path: 'test-org' }),
+    cnbGroups: ref([]),
     fetchCnbGroupRepos: vi.fn(async () => []),
+    fetchCnbGroups: vi.fn(async () => []),
     CnbApiError: FakeCnbApiError,
   }
 })
@@ -41,6 +43,9 @@ import {
   ensureTrailingSlashFree,
   isForbiddenError,
   isMissingScopeError,
+  isScopeKeyCompatible,
+  normalizeScope,
+  scopeKeyOf,
   shouldNotifyStatus,
   summarizeNotifications,
   truncateText,
@@ -280,5 +285,58 @@ describe('isMissingScopeError（403 的二分：缺 scope vs 风控）', () => {
     expect(isMissingScopeError({ kind: 'network' })).toBe(false)
     expect(isMissingScopeError(new Error('boom'))).toBe(false)
     expect(isMissingScopeError(null)).toBe(false)
+  })
+})
+
+// ---------------------------------------------------------------------------
+// 监控范围标识（全部组织监控改造，2026-11-18）
+// ---------------------------------------------------------------------------
+
+describe('scopeKeyOf（监控范围标识）', () => {
+  it('单组织模式：group: 前缀 + 组织路径', () => {
+    expect(scopeKeyOf('current', ['cnb.cool/foo'])).toBe('group:cnb.cool/foo')
+    // 未选中组织时为空路径 key（与 group: 前缀区分开，不等于空串）
+    expect(scopeKeyOf('current', [])).toBe('group:')
+  })
+
+  it('全部组织模式：组织路径排序后拼接（列表顺序变化不产生不同 key）', () => {
+    expect(scopeKeyOf('all', ['cnb.cool/b', 'cnb.cool/a'])).toBe('all:cnb.cool/a,cnb.cool/b')
+    expect(scopeKeyOf('all', ['cnb.cool/a', 'cnb.cool/b'])).toBe('all:cnb.cool/a,cnb.cool/b')
+  })
+
+  it('两种模式的 key 永不相等（防止跨范围误用快照）', () => {
+    expect(scopeKeyOf('current', ['cnb.cool/a'])).not.toBe(scopeKeyOf('all', ['cnb.cool/a']))
+  })
+})
+
+describe('isScopeKeyCompatible（快照归属兼容）', () => {
+  it('完全相等 → 兼容', () => {
+    expect(isScopeKeyCompatible('all:cnb.cool/a', 'all:cnb.cool/a')).toBe(true)
+    expect(isScopeKeyCompatible('group:cnb.cool/a', 'group:cnb.cool/a')).toBe(true)
+  })
+
+  it('空串（从未记录归属）→ 兼容任何 key（首次启动沿用旧快照）', () => {
+    expect(isScopeKeyCompatible('', 'all:cnb.cool/a')).toBe(true)
+  })
+
+  it('旧版本落盘的裸组织路径 → 按 group: 前缀归一后比较（升级不丢离线补推）', () => {
+    expect(isScopeKeyCompatible('cnb.cool/a', 'group:cnb.cool/a')).toBe(true)
+    expect(isScopeKeyCompatible('cnb.cool/a', 'all:cnb.cool/a')).toBe(false)
+  })
+
+  it('范围不同 → 不兼容（旧快照必须丢弃）', () => {
+    expect(isScopeKeyCompatible('all:cnb.cool/a', 'all:cnb.cool/a,cnb.cool/b')).toBe(false)
+    expect(isScopeKeyCompatible('group:cnb.cool/a', 'group:cnb.cool/b')).toBe(false)
+  })
+})
+
+describe('normalizeScope（范围归一）', () => {
+  it('只认 current，其余一律 all（含历史脏值）', () => {
+    expect(normalizeScope('current')).toBe('current')
+    expect(normalizeScope('all')).toBe('all')
+    expect(normalizeScope('')).toBe('all')
+    expect(normalizeScope(undefined)).toBe('all')
+    expect(normalizeScope('garbage')).toBe('all')
+    expect(normalizeScope(123)).toBe('all')
   })
 })

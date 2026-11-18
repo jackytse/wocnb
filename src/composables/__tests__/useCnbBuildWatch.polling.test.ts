@@ -43,7 +43,11 @@ vi.mock('../useCnbAuth', async () => {
   return {
     cnbToken: ref(''),
     selectedGroup: ref<{ path: string } | null>(null),
+    // 全部组织模式（默认）的组织集合：置空数组 → runTick 回退到 selectedGroup，
+    // 与本轮改造前的行为等价（用例仍可用 selectedGroup 驱动关注范围）
+    cnbGroups: ref([]),
     fetchCnbGroupRepos: vi.fn(async () => []),
+    fetchCnbGroups: vi.fn(async () => []),
     logout: vi.fn(),
     CnbApiError: FakeCnbApiError,
   }
@@ -153,13 +157,21 @@ interface Scenario {
   resolveOf?: (repoPath: string, sn: string) => FakeLog[] | Error
   /** 预置快照（模拟上一会话持久化的 pending 快照） */
   seedSnapshot?: Record<string, Record<string, unknown>>
+  /** 监控范围（默认 all：与模块默认值一致；'current' 用于验证单组织模式） */
+  scope?: 'all' | 'current'
+  /** 全部组织模式下的组织路径集合（cnbGroups 内容） */
+  groups?: string[]
+  /** 这些组织的仓库列表拉取会失败（验证失败隔离） */
+  listFailsFor?: string[]
 }
 
 interface Harness {
   auth: {
     cnbToken: { value: string }
     selectedGroup: { value: { path: string } | null }
+    cnbGroups: { value: Array<{ path: string }> }
     fetchCnbGroupRepos: Mock
+    fetchCnbGroups: Mock
     logout: Mock
   }
   repo: { fetchBuildLogs: Mock }
@@ -232,9 +244,18 @@ async function begin(scenario: Scenario): Promise<Harness> {
 
   const repos = scenario.repos ?? []
   h.auth.fetchCnbGroupRepos.mockReset()
-  h.auth.fetchCnbGroupRepos.mockImplementation(async () => {
-    if (scenario.listFails) {
+  h.auth.fetchCnbGroupRepos.mockImplementation(async (groupPath: string) => {
+    if (scenario.listFails && scenario.listFailsFor === undefined) {
       throw new Error('repo list down')
+    }
+    // 失败隔离场景：只让指定组织的列表失败，其余组织正常返回
+    if (scenario.listFailsFor?.includes(groupPath)) {
+      throw new Error(`repo list down for ${groupPath}`)
+    }
+    // 多组织场景按组织前缀过滤：真实接口只返回该组织名下（含子组织）的仓库。
+    // 未声明 groups 的老用例保持"返回整批 repos"的原行为，避免影响既有断言
+    if (scenario.groups) {
+      return repos.filter(item => String(item.path).startsWith(`${groupPath}/`))
     }
     return repos
   })
@@ -260,12 +281,17 @@ async function begin(scenario: Scenario): Promise<Harness> {
   h.watch.markBuildNoticesRead()
   h.watch.buildNotifyEnabled.value = true
   h.watch.buildNotifyIntervalSec.value = 60
+  h.watch.buildNotifyScope.value = scenario.scope ?? 'all'
   h.watch.buildSnapshot.value = {}
 
-  // —— 借组织切换重置模块私有状态（快照 / 缓存 / 缺权限 / 基线标记）——
+  // —— 借范围切换重置模块私有状态（快照 / 缓存 / 缺权限 / 基线标记）——
+  // 先落到垫片范围（组织集合 = 垫片组织），再切到目标范围：
+  // 两次 scopeKey 必然不同，触发 restartWatcher 的重置分支
   h.auth.cnbToken.value = scenario.token ?? 'test-token'
+  h.auth.cnbGroups.value = [{ path: SCAFFOLD_GROUP }]
   h.auth.selectedGroup.value = { path: SCAFFOLD_GROUP }
   await nextTick()
+  h.auth.cnbGroups.value = (scenario.groups ?? []).map(path => ({ path }))
   h.auth.selectedGroup.value = scenario.group ? { path: scenario.group } : null
   await nextTick()
 
@@ -1041,5 +1067,89 @@ describe('e) 风控 403：不永久跳过，按普通失败重试', () => {
     await advance(DEFAULT_INTERVAL + TICK_PAD)
     expect(countCalls(h, 'pending')).toBe(3)
     expect(h.watch.buildScopeMissingCount.value).toBe(0)
+  })
+})
+
+// ---------------------------------------------------------------------------
+// g) 监控全部组织（2026-11-18 改造：默认 scope = all）
+// ---------------------------------------------------------------------------
+
+describe('g) 全部组织模式：跨组织轮询与失败隔离', () => {
+  it('两个组织的仓库都会被轮询（含子组织仓库），快照按仓库路径分键', async () => {
+    const h = await begin({
+      group: 'orgA',
+      tauri: false,
+      groups: ['orgA', 'orgB'],
+      repos: [repo('orgA/api'), repo('orgB/web')],
+      pendingOf: repoPath => (repoPath.endsWith('/api') ? [pendingLog('1')] : [pendingLog('2')]),
+    })
+
+    await advance(FIRST_TICK_DELAY + TICK_PAD)
+
+    // 两个组织的仓库都被查询（ascendant=1 的列表里已包含子组织仓库）
+    const polled = h.repo.fetchBuildLogs.mock.calls.map(([repoPath]) => repoPath as string).sort()
+    expect(polled).toEqual(['orgA/api', 'orgB/web'])
+    // 快照同时覆盖两个组织
+    expect(Object.keys(h.watch.buildSnapshot.value).sort()).toEqual(['orgA/api', 'orgB/web'])
+    // 关注仓库数 = 跨组织总数
+    expect(h.watch.buildWatchRepoCount.value).toBe(2)
+  })
+
+  it('单组织模式（scope=current）只轮询选中组织，不碰其他组织', async () => {
+    const h = await begin({
+      group: 'orgA',
+      scope: 'current',
+      groups: ['orgA', 'orgB'],
+      repos: [repo('orgA/api'), repo('orgB/web')],
+      pendingOf: () => [],
+    })
+
+    await advance(FIRST_TICK_DELAY + TICK_PAD)
+
+    const polled = h.repo.fetchBuildLogs.mock.calls.map(([repoPath]) => repoPath as string)
+    expect(polled).toEqual(['orgA/api'])
+  })
+
+  it('某组织仓库列表失败：其他组织照常轮询，失败组织的 pending 不被误报"已结束"', async () => {
+    const h = await begin({
+      group: 'orgA',
+      tauri: true,
+      groups: ['orgA', 'orgB'],
+      repos: [repo('orgA/api')],
+      listFailsFor: ['orgB'],
+      pendingOf: () => [],
+      // 上一会话遗留：orgB 有个 pending 构建（orgB 的列表本轮拉不到）
+      seedSnapshot: { 'orgB/web': { '9': { sn: '9', status: 'pending' } } },
+    })
+
+    // 首轮（基线）：orgB 的快照被原样并入 → 不能因为「列表没拉到」就判它结束
+    await advance(FIRST_TICK_DELAY + TICK_PAD)
+    expect(h.notify.sendNotification).not.toHaveBeenCalled()
+    expect(h.watch.buildNoticeFeed.value).toHaveLength(0)
+    expect(h.watch.buildSnapshot.value['orgB/web']?.['9']).toBeDefined()
+
+    // 稳定态再跑一轮：仍不误报
+    await advance(DEFAULT_INTERVAL + TICK_PAD)
+    expect(h.notify.sendNotification).not.toHaveBeenCalled()
+    expect(h.watch.buildSnapshot.value['orgB/web']?.['9']).toBeDefined()
+    // 成功的组织（orgA）仍在轮询
+    expect(
+      h.repo.fetchBuildLogs.mock.calls.some(([repoPath]) => repoPath === 'orgA/api'),
+    ).toBe(true)
+  })
+
+  it('全部组织的列表都失败 → 本轮跳过且不动快照（保留已有 pending，不误报）', async () => {
+    const h = await begin({
+      group: 'orgA',
+      tauri: true,
+      groups: ['orgA', 'orgB'],
+      listFails: true,
+      seedSnapshot: { 'orgA/api': { '5': { sn: '5', status: 'pending' } } },
+    })
+
+    await advance(FIRST_TICK_DELAY + TICK_PAD)
+
+    expect(h.notify.sendNotification).not.toHaveBeenCalled()
+    expect(h.watch.buildSnapshot.value['orgA/api']?.['5']).toBeDefined()
   })
 })

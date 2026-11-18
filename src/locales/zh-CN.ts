@@ -183,9 +183,16 @@ export default {
     // 设置页「构建通知」卡片
     settings: {
       title: '构建通知',
-      desc: '定时检查当前组织的构建状态，构建结束时发送系统通知并记录到通知面板。',
+      desc: '定时检查构建状态，构建结束时发送系统通知并记录到通知面板。',
       enable: '启用构建结果通知',
       enableDesc: '构建从运行中变为成功 / 失败 / 取消时通知你。',
+      scope: '监控范围',
+      scopeDesc: '决定哪些组织的流水线结果会发通知。',
+      scope_all: '全部组织',
+      scope_current: '仅当前组织',
+      scopeDesc_all: '你所在的所有组织（含子组织），按最近更新取前 100 个仓库。',
+      scopeDesc_current: '只监控侧边栏当前选中的组织。',
+      followAllGroups: '正在监控你所在全部组织的流水线（每轮最多 100 个最近更新的仓库）。',
       interval: '检查间隔',
       intervalDesc: '间隔越短越及时，网络与接口消耗也越大。',
       intervalSec: '{sec} 秒',

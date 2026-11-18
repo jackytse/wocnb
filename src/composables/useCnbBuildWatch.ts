@@ -1,6 +1,16 @@
 /**
  * 构建结果通知（轮询 → 系统通知 + 应用内通知面板）。
  *
+ * # 监控范围（2026-11-18）
+ *
+ * 默认监控**账号所在全部组织**（GET /user/groups 的顶层组织，各组织按
+ * descendant=1 含子组织仓库）；设置页可切回「仅当前选中组织」。
+ * CNB 没有组织级构建查询端点（swagger 核实：构建日志只有仓库级
+ * `GET /{repo}/-/build/logs`），全部组织模式因此是"逐组织拉仓库列表 +
+ * 逐仓库查 pending"，必须靠全局仓库上限（MAX_WATCH_REPOS_TOTAL）与既有
+ * 并发/错峰约束控制请求量；组织切换不再重置基线（范围标识见 scopeKeyOf），
+ * 单组织模式行为与原实现一致。
+ *
  * # 为什么是轮询
  *
  * CNB OpenAPI 的 199 个端点里**没有任何推送通道**：没有 SSE、没有 Webhook
@@ -40,8 +50,10 @@ import { useStorage } from '@vueuse/core'
 import { i18n } from '../i18n'
 import {
   CnbApiError,
+  cnbGroups,
   cnbToken,
   fetchCnbGroupRepos,
+  fetchCnbGroups,
   selectedGroup,
   type CnbRepo,
 } from './useCnbAuth'
@@ -383,6 +395,27 @@ export function clearBuildNotices(): void {
 export const buildNotifyEnabled = useStorage<boolean>('cnb-build-notify-enabled', true)
 
 /**
+ * 监控范围：'current' = 只监控侧边栏当前选中的组织；
+ * 'all' = 监控当前账号所在**全部组织**（GET /user/groups 的顶层组织，
+ * 每个组织按 descendant=1 含其子组织的仓库）。
+ *
+ * 默认 'all'：用户在"当前组织"之外的组织里跑流水线时同样需要被通知，
+ * 只盯当前组织会漏掉绝大部分构建。设置页可切回 'current' 控制请求量。
+ */
+export const buildNotifyScope = useStorage<'current' | 'all'>('cnb-build-notify-scope', 'all')
+
+/** 监控范围可选值（设置页下拉与轮询侧校验共用同一份常量） */
+export const BUILD_NOTIFY_SCOPE_OPTIONS = ['all', 'current'] as const
+
+/**
+ * 监控范围归一：只接受 'current'，其余（含历史脏值/空值）一律按 'all'。
+ * 与 normalizeIntervalSec 同范式：轮询侧的判断永远不依赖落盘值的合法性。
+ */
+export function normalizeScope(value: unknown): 'current' | 'all' {
+  return value === 'current' ? 'current' : 'all'
+}
+
+/**
  * 轮询间隔（秒），可选 30 / 60 / 120，默认 60。
  * 存储为 number；非法值在 readIntervalSec() 里归一为默认值。
  */
@@ -454,13 +487,53 @@ export const buildSnapshot = useStorage<BuildSnapshot>('cnb-build-snapshot', {},
 })
 
 /**
- * 快照所属的组织路径。
+ * 快照所属的**监控范围标识**（scope key）。
  *
- * 为什么需要单独存：selectedGroup 不持久化（每次启动默认选中组织列表第一项），
- * 若用户在 A 组织时退出、下次启动默认落在 B 组织，把 A 的快照当 B 的基线用
- * 就会误报"一批构建已结束"。记录归属后，组织不一致时直接丢弃旧快照。
+ * 为什么需要单独存：快照是按 scope 维度的"上一轮 pending 集合"。若监控范围
+ * 变了（切组织 / 切到全部组织 / 全部组织集合变动），把旧 scope 的快照当新
+ * scope 的基线用就会误报"一批构建已结束"。记录归属后，scope 不一致时直接
+ * 丢弃旧快照。
+ *
+ * 取值格式（2026-11-18 监控全部组织改造）：
+ * - `group:<path>` —— 只监控单个组织（原语义，仅为路径加前缀）；
+ * - `all:<p1,p2,...>` —— 监控全部组织（组织路径排序后拼接，加入/退出组织
+ *   时 key 变化 → 快照自动失效重建基线，宁可漏一次补推也不误报）。
+ *
+ * 兼容旧数据：改造前落盘的是裸组织路径（如 `cnb.cool/foo`），读取时按
+ * `group:` 前缀归一（见 isScopeKeyCompatible），避免升级后把用户"应用未
+ * 运行期间结束的构建"的补推能力误伤掉。
  */
 const buildSnapshotGroup = useStorage<string>('cnb-build-snapshot-group', '')
+
+/**
+ * 计算监控范围标识（纯函数，快照归属 / 重启判定共用）。
+ * @param scope 监控范围
+ * @param groupPaths 参与监控的组织路径（调用方保证已去尾斜杠）
+ */
+export function scopeKeyOf(scope: 'current' | 'all', groupPaths: string[]): string {
+  if (scope === 'current') {
+    return `group:${groupPaths[0] ?? ''}`
+  }
+  // 排序：组织列表顺序可能随接口返回变化，不排序会导致同一集合产生不同 key
+  return `all:${[...groupPaths].sort().join(',')}`
+}
+
+/**
+ * 持久化 scope key 与当前 scope key 是否可兼容（决定离线补推能否沿用旧快照）。
+ *
+ * 规则：完全相等 → 兼容；旧版本落盘的裸组织路径（无 `group:`/`all:` 前缀）
+ * 视为 `group:<路径>`，与当前 `group:` key 比较。空串表示"从未记录过归属"，
+ * 兼容任何 key（首次启动）。
+ */
+export function isScopeKeyCompatible(persistedKey: string, currentKey: string): boolean {
+  if (persistedKey === '') {
+    return true
+  }
+  const normalized = persistedKey.startsWith('group:') || persistedKey.startsWith('all:')
+    ? persistedKey
+    : `group:${persistedKey}`
+  return normalized === currentKey
+}
 
 // ---------------------------------------------------------------------------
 // 副作用：定时器 / 网络 / 系统通知
@@ -475,8 +548,23 @@ const BUILD_WATCH_STAGGER_MS = 150
 /** 仓库列表缓存有效期：5 分钟（仓库增删不频繁，避免每轮都拉列表） */
 const REPO_LIST_CACHE_TTL_MS = 5 * 60 * 1000
 
-/** 单组织最多关注的仓库数（按最近更新时间取前 N 个） */
+/**
+ * 单个组织最多关注的仓库数（拉列表时的页大小，按最近更新时间取前 N 个）。
+ * descendant=1，含子组织仓库。
+ */
 const MAX_WATCH_REPOS = 100
+
+/**
+ * **全部组织**场景下的关注仓库总数上限（跨组织按 updatedAt 全局排序后截断）。
+ *
+ * 为什么必须有全局上限：CNB 没有组织级构建查询端点（`GET /{repo}/-/build/logs`
+ * 是仓库级，swagger 已核实），监控 N 个组织 = 每轮 N 组「组织仓库列表 +
+ * 每仓库一次 pending 查询」。仓库总数不设上限时，几个大组织就能让一轮 tick
+ * 超过几分钟、并打爆网关风控（403）。
+ * 上限取 100：与单组织上限相同 —— 改造前后最坏情况的请求量不变，
+ * 「最近更新的仓库更可能产生构建」的取舍也一致。
+ */
+const MAX_WATCH_REPOS_TOTAL = 100
 
 /** 失败退避上限：5 分钟 */
 const MAX_BACKOFF_MS = 5 * 60 * 1000
@@ -508,11 +596,18 @@ let failedRounds = 0
 /** 本次会话内缺权限、已跳过轮询的仓库集合（Set 便于 O(1) 判断，ref 数组给界面） */
 const scopeMissing = new Set<string>()
 
-/** 当前轮询生效的组织路径（用于识别组织切换） */
-let activeGroupPath = ''
+/**
+ * 当前轮询生效的监控范围标识（用于识别"范围变化"并重置快照）。
+ * 取值见 scopeKeyOf；空串 = 尚未确定过范围（启动早期）。
+ */
+let activeScopeKey = ''
 
-/** 仓库列表缓存（单条，按组织路径 + 时间戳失效） */
-let repoCache: { groupPath: string, repos: CnbRepo[], truncated: boolean, fetchedAt: number } | null = null
+/**
+ * 仓库列表缓存（单条，按 scope key + 时间戳失效）。
+ * 只在**全部组织都拉取成功**时写入：部分失败的列表若被缓存 5 分钟，
+ * 失败组织的仓库会连续几轮"消失"，其 pending 会被误判成已结束（假警报）。
+ */
+let repoCache: { scopeKey: string, repos: CnbRepo[], truncated: boolean, fetchedAt: number } | null = null
 
 /** 系统通知权限缓存：null = 尚未询问过 */
 let notificationGranted: boolean | null = null
@@ -554,9 +649,17 @@ function currentIntervalMs(): number {
   return Math.min(baseMs * factor, MAX_BACKOFF_MS)
 }
 
-/** 当前是否应处于运行态（登录 + 已选组织 + 开关打开） */
+/**
+ * 当前是否应处于运行态。
+ *
+ * 全部组织模式下不依赖 selectedGroup（组织集合来自 cnbGroups）；
+ * 单组织模式保持原口径：必须先选中组织。
+ */
 function isActive(): boolean {
-  return !!cnbToken.value && !!selectedGroup.value?.path && buildNotifyEnabled.value === true
+  if (!cnbToken.value || buildNotifyEnabled.value !== true) {
+    return false
+  }
+  return normalizeScope(buildNotifyScope.value) === 'all' || !!selectedGroup.value?.path
 }
 
 /** 标记某仓库缺少构建读取权限（本次会话内跳过） */
@@ -621,38 +724,83 @@ async function runWithLimit(tasks: (() => Promise<void>)[], limit: number, stagg
 }
 
 /**
- * 拉取（并缓存 5 分钟）组织仓库列表。
- * 超过 100 个仓库时按 updatedAt 倒序截断到 100（最近更新的仓库更可能产生构建）。
+ * 拉取（并缓存 5 分钟）**一组组织**的仓库列表。
+ *
+ * - 单组织模式：groupPaths 只有一个元素，与原实现等价；
+ * - 全部组织模式：逐个组织拉取（每个组织一页，descendant=1 含子组织仓库），
+ *   合并后按 updatedAt 倒序全局截断到 MAX_WATCH_REPOS_TOTAL。
+ *
+ * 失败隔离：某个组织的列表拉取失败**不影响其他组织**（否则一个缺权限/被
+ * 风控的组织会让整个通知功能静默）。失败的组织路径通过 failedGroups 返回，
+ * 由 runTick 把它们的上一轮快照原样并入（防止 pending「凭空消失」被误判成
+ * 已结束）。部分失败时**不写缓存**，下一轮重试。
+ *
+ * @param scopeKey 监控范围标识（缓存键；范围变化即失效）
+ * @param groupPaths 参与监控的组织路径（已去尾斜杠）
  */
-async function loadRepoList(groupPath: string): Promise<{ repos: CnbRepo[], truncated: boolean }> {
+async function loadRepoList(
+  scopeKey: string,
+  groupPaths: string[],
+): Promise<{ repos: CnbRepo[], truncated: boolean, failedGroups: string[] }> {
   const now = Date.now()
-  if (repoCache && repoCache.groupPath === groupPath && now - repoCache.fetchedAt < REPO_LIST_CACHE_TTL_MS) {
-    return { repos: repoCache.repos, truncated: repoCache.truncated }
+  if (repoCache && repoCache.scopeKey === scopeKey && now - repoCache.fetchedAt < REPO_LIST_CACHE_TTL_MS) {
+    return { repos: repoCache.repos, truncated: repoCache.truncated, failedGroups: [] }
   }
-  const raw = await fetchCnbGroupRepos(groupPath, 1, MAX_WATCH_REPOS)
   // updatedAt 解析失败（空串/非法）时按 0 处理，保证排序稳定（NaN 会让比较失效）
   const timeOf = (value: string): number => {
     const parsed = Date.parse(value || '')
     return Number.isNaN(parsed) ? 0 : parsed
   }
-  const sorted = [...raw].sort((a, b) => timeOf(b.updatedAt) - timeOf(a.updatedAt))
-  // 是否被截断：列表接口单页上限 100，拉满一页时**不能直接断定"超过 100"**
-  // （恰好 100 个仓库是很常见的边界，QA 缺陷 #5）。改用一次极轻量的探测请求
-  // （第 2 页、每页 1 条）确认是否真的还有更多仓库；探测失败不影响主流程，
-  // 按"未截断"处理（宁可少报，也不要给用户看错误的警示）。
+  const failedGroups: string[] = []
+  const merged: CnbRepo[] = []
   let truncated = false
-  if (sorted.length >= MAX_WATCH_REPOS) {
+  for (const groupPath of groupPaths) {
     try {
-      const probe = await fetchCnbGroupRepos(groupPath, 2, 1)
-      truncated = Array.isArray(probe) && probe.length > 0
+      const raw = await fetchCnbGroupRepos(groupPath, 1, MAX_WATCH_REPOS)
+      // 是否被截断：单页拉满 100 时**不能直接断定"超过 100"**（恰好 100 个
+      // 仓库是常见边界，QA 缺陷 #5）。用一次极轻量的探测请求（第 2 页、
+      // 每页 1 条）确认；探测失败按"未截断"处理（宁可少报，不误导用户）
+      if (Array.isArray(raw) && raw.length >= MAX_WATCH_REPOS) {
+        try {
+          const probe = await fetchCnbGroupRepos(groupPath, 2, 1)
+          if (Array.isArray(probe) && probe.length > 0) {
+            truncated = true
+          }
+        }
+        catch {
+          // 探测失败：保持未截断口径
+        }
+      }
+      if (Array.isArray(raw)) {
+        merged.push(...raw)
+      }
     }
-    catch {
-      truncated = false
+    catch (err) {
+      failedGroups.push(groupPath)
+      console.warn(`[build-watch] 组织 ${groupPath} 的仓库列表拉取失败：`, err)
     }
   }
-  const repos = sorted.slice(0, MAX_WATCH_REPOS).filter(repo => !!repo.path)
-  repoCache = { groupPath, repos, truncated, fetchedAt: now }
-  return { repos, truncated }
+  // 跨组织合并后按 path 去重：顶层组织之间理论上不重叠，但"重复监控同一
+  // 仓库"会让同一构建被轮询两次、并可能重复通知；去重成本 O(n) 而收益明确
+  const byPath = new Map<string, CnbRepo>()
+  for (const repo of merged) {
+    const path = ensureTrailingSlashFree(repo.path || '')
+    if (path) {
+      byPath.set(path, { ...repo, path })
+    }
+  }
+  const sorted = [...byPath.values()].sort((a, b) => timeOf(b.updatedAt) - timeOf(a.updatedAt))
+  const repos = sorted.slice(0, MAX_WATCH_REPOS_TOTAL)
+  // 跨组织总量超过上限同样算截断（设置页提示"仅关注最近更新的 N 个"）
+  if (sorted.length > MAX_WATCH_REPOS_TOTAL) {
+    truncated = true
+  }
+  // 只有全部成功才缓存：部分失败的结果缓存 5 分钟会让失败组织的仓库
+  // 连续几轮"消失"，pending 被误判成已结束
+  if (failedGroups.length === 0) {
+    repoCache = { scopeKey, repos, truncated, fetchedAt: now }
+  }
+  return { repos, truncated, failedGroups }
 }
 
 /** 仓库名解析器：优先用列表里的 name，取不到时回退路径末段 */
@@ -1160,10 +1308,43 @@ async function runTick(): Promise<void> {
     // 上一轮还没结束（网络极慢）：跳过本轮，下一轮再来，避免请求堆叠
     return
   }
-  const groupPath = ensureTrailingSlashFree(selectedGroup.value?.path ?? '')
-  if (!cnbToken.value || !groupPath || buildNotifyEnabled.value !== true) {
+  if (!cnbToken.value || buildNotifyEnabled.value !== true) {
     return
   }
+  const scope = normalizeScope(buildNotifyScope.value)
+  // —— 确定本轮监控的组织集合 ——
+  let groupPaths: string[] = []
+  if (scope === 'all') {
+    // 优化：全部组织模式优先用共享组织列表（侧边栏 GroupsMenu 会写入）。
+    // 若尚未加载（构建监控先于侧边栏挂载启动），主动拉一次 —— 与
+    // GroupsMenu 共用同一份共享状态，不会产生第二份组织列表。
+    if (!cnbGroups.value) {
+      try {
+        await fetchCnbGroups()
+      }
+      catch {
+        // 拉取失败走下面的回退分支（不阻断轮询）
+      }
+    }
+    groupPaths = (cnbGroups.value ?? [])
+      .map(group => ensureTrailingSlashFree(group.path || ''))
+      .filter(Boolean)
+    // 组织列表不可用（接口失败 / 账号未加入任何组织）时回退到当前选中组织，
+    // 避免"切到全部组织后反而一条通知都收不到"
+    if (groupPaths.length === 0) {
+      const fallback = ensureTrailingSlashFree(selectedGroup.value?.path ?? '')
+      groupPaths = fallback ? [fallback] : []
+    }
+  }
+  else {
+    const single = ensureTrailingSlashFree(selectedGroup.value?.path ?? '')
+    groupPaths = single ? [single] : []
+  }
+  // 没有可监控的组织：本轮无事可做（与"未登录/开关关闭"同口径，不动快照）
+  if (groupPaths.length === 0) {
+    return
+  }
+  const scopeKey = scopeKeyOf(scope === 'all' ? 'all' : 'current', groupPaths)
   tickRunning = true
   // 记录本轮开始时间：窗口可见补跑用它对冷却做判断（见 visibilitychange 监听）
   lastTickAt = Date.now()
@@ -1171,10 +1352,12 @@ async function runTick(): Promise<void> {
     let repos: CnbRepo[] = []
     let truncated = false
     let listFailed = false
+    let failedGroups: string[] = []
     try {
-      const result = await loadRepoList(groupPath)
+      const result = await loadRepoList(scopeKey, groupPaths)
       repos = result.repos
       truncated = result.truncated
+      failedGroups = result.failedGroups
     }
     catch (err) {
       listFailed = true
@@ -1182,8 +1365,9 @@ async function runTick(): Promise<void> {
     }
     buildWatchTruncated.value = truncated
 
-    // 仓库列表拉不到时**不动快照**：拿空 next 去比对会把所有 pending 判成已结束
-    if (listFailed) {
+    // 仓库列表拉不到时**不动快照**：拿空 next 去比对会把所有 pending 判成已结束。
+    // 全部组织的列表都失败也按"本轮失败"处理（部分失败则继续跑成功的那些）
+    if (listFailed || (groupPaths.length > 0 && failedGroups.length === groupPaths.length)) {
       failedRounds += 1
       return
     }
@@ -1263,22 +1447,35 @@ async function runTick(): Promise<void> {
         next[repoPath] = { ...prevRepo, ...(next[repoPath] ?? {}) }
       }
     }
+    // 列表拉取失败的组织：其名下所有仓库（前缀 = 组织路径 + '/'，含子组织
+    // 的仓库）的上一轮快照同样原样并入 —— 该组织的仓库本轮没被枚举到，
+    // 绝不能因此把它的 pending 判成"已结束"（假警报红线）
+    if (failedGroups.length > 0) {
+      const failedPrefixes = failedGroups.map(groupPath => `${groupPath}/`)
+      for (const [repoPath, prevRepo] of Object.entries(prevSnapshot)) {
+        if (failedPrefixes.some(prefix => repoPath.startsWith(prefix))) {
+          next[repoPath] = { ...prevRepo, ...(next[repoPath] ?? {}) }
+        }
+      }
+    }
 
     if (!baselineReady) {
       // —— 首次基线 ——
       // 只建快照、不发通知：否则启动瞬间会把所有历史 pending 当成"刚结束"。
       // 例外：持久化快照里已有 pending 且它们已不在本轮 pending 中，
       // 说明是"应用未运行期间结束的构建" → 补推一条摘要（只做一次）。
-      const persistedGroup = buildSnapshotGroup.value
+      const persistedScopeKey = buildSnapshotGroup.value
       const persisted = prevSnapshot
+      // 归属兼容：旧版本落盘的裸组织路径按 group: 前缀归一（见
+      // isScopeKeyCompatible），升级后离线补推能力不丢失
       const persistedUsable = Object.keys(persisted).length > 0
-        && (persistedGroup === '' || persistedGroup === groupPath)
+        && isScopeKeyCompatible(persistedScopeKey, scopeKey)
       if (persistedUsable) {
         const { finished } = diffBuildSnapshot(persisted, next)
         await emitLeftoverNotices(finished, nameOf)
       }
       buildSnapshot.value = next
-      buildSnapshotGroup.value = groupPath
+      buildSnapshotGroup.value = scopeKey
       baselineReady = true
     }
     else {
@@ -1288,7 +1485,7 @@ async function runTick(): Promise<void> {
         await emitResolvedNotices(resolved, nameOf)
       }
       buildSnapshot.value = next
-      buildSnapshotGroup.value = groupPath
+      buildSnapshotGroup.value = scopeKey
     }
 
     failedRounds = failedCount > 0 ? failedRounds + 1 : 0
@@ -1338,22 +1535,43 @@ function scheduleNextTick(delayMs?: number): void {
 }
 
 /**
- * 重建轮询计划（登录态 / 组织 / 开关 / 间隔任一变化时调用）。
- * 组织变化会丢弃旧快照（不同组织的仓库完全无关），并清空缺权限记录。
+ * 计算当前生效的监控范围标识（必须与 runTick 的组织集合选择逻辑保持一致，
+ * 否则"切换组织/组织列表变化"的快照重置判定会与真实轮询范围脱节）。
+ */
+function currentScopeKey(): string {
+  if (normalizeScope(buildNotifyScope.value) === 'current') {
+    const single = ensureTrailingSlashFree(selectedGroup.value?.path ?? '')
+    return scopeKeyOf('current', single ? [single] : [])
+  }
+  const paths = (cnbGroups.value ?? [])
+    .map(group => ensureTrailingSlashFree(group.path || ''))
+    .filter(Boolean)
+  if (paths.length === 0) {
+    // 与 runTick 的回退口径一致：组织列表不可用时按当前选中组织算
+    const fallback = ensureTrailingSlashFree(selectedGroup.value?.path ?? '')
+    return scopeKeyOf('all', fallback ? [fallback] : [])
+  }
+  return scopeKeyOf('all', paths)
+}
+
+/**
+ * 重建轮询计划（登录态 / 监控范围 / 组织集合 / 开关 / 间隔任一变化时调用）。
+ * 监控范围变化会丢弃旧快照（不同范围的仓库集合无关，沿用会误报"已结束"），
+ * 并清空缺权限记录。
  */
 function restartWatcher(): void {
   clearTickTimer()
-  const groupPath = ensureTrailingSlashFree(selectedGroup.value?.path ?? '')
-  const previousGroupPath = activeGroupPath
+  const scopeKey = currentScopeKey()
+  const previousScopeKey = activeScopeKey
 
-  if (groupPath !== previousGroupPath) {
-    // 组织变化：旧快照属于另一个组织的仓库，留着会把它的 pending 误判成"已结束"。
-    // 但**首次确定组织**（previousGroupPath 为空，即启动早期 selectedGroup 尚未
-    // 就绪）必须保留持久化快照 —— 否则"离线补推"永远失效（快照在启动瞬间被清掉）。
-    if (previousGroupPath) {
-      resetSnapshot(groupPath)
+  if (scopeKey !== previousScopeKey) {
+    // 范围变化：旧快照属于另一个范围的仓库，留着会把它的 pending 误判成"已结束"。
+    // 但**首次确定范围**（previousScopeKey 为空，即启动早期组织尚未就绪）必须
+    // 保留持久化快照 —— 否则"离线补推"永远失效（快照在启动瞬间被清掉）。
+    if (previousScopeKey) {
+      resetSnapshot(scopeKey)
     }
-    activeGroupPath = groupPath
+    activeScopeKey = scopeKey
     scopeMissing.clear()
     scopeMissingPaths.value = []
     repoCache = null
@@ -1369,8 +1587,8 @@ function restartWatcher(): void {
       resetSnapshot('')
     }
     if (!cnbToken.value) {
-      // 退出登录：清掉上一个账号的通知与组织归属，避免串号
-      activeGroupPath = ''
+      // 退出登录：清掉上一个账号的通知与范围归属，避免串号
+      activeScopeKey = ''
       clearBuildNotices()
       buildNotifyPermissionDenied.value = false
     }
@@ -1393,12 +1611,15 @@ export function initBuildWatcher(): void {
   }
   watcherReady = true
 
-  // 四个输入共同决定轮询是否运行 / 间隔多少：
-  // 令牌（登录态）、选中组织（关注范围）、开关、间隔
+  // 输入共同决定轮询是否运行 / 间隔多少 / 关注哪些组织：
+  // 令牌（登录态）、选中组织（单组织模式的关注范围）、监控范围、
+  // 组织列表（全部组织模式的关注范围）、开关、间隔
   watch(
     () => [
       cnbToken.value,
       selectedGroup.value?.path ?? '',
+      normalizeScope(buildNotifyScope.value),
+      (cnbGroups.value ?? []).map(group => group.path).join(','),
       buildNotifyEnabled.value,
       normalizeIntervalSec(buildNotifyIntervalSec.value),
     ] as const,

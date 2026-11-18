@@ -186,9 +186,16 @@ export default {
     // Settings page "Build notifications" card
     settings: {
       title: 'Build notifications',
-      desc: 'Periodically checks build status for the selected group and notifies you when a build finishes.',
+      desc: 'Periodically checks build status and notifies you when a build finishes.',
       enable: 'Enable build result notifications',
       enableDesc: 'Notify when a build leaves the running state for success / failure / cancel.',
+      scope: 'Scope',
+      scopeDesc: 'Which organizations\' pipelines trigger notifications.',
+      scope_all: 'All organizations',
+      scope_current: 'Current organization only',
+      scopeDesc_all: 'All organizations you belong to (including sub-organizations), watching up to 100 recently updated repositories.',
+      scopeDesc_current: 'Only watch the organization selected in the sidebar.',
+      followAllGroups: 'Watching pipelines across all your organizations (up to 100 recently updated repositories per round).',
       interval: 'Check interval',
       intervalDesc: 'A shorter interval is more timely but uses more network and API quota.',
       intervalSec: '{sec} s',

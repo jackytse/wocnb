@@ -22,7 +22,11 @@ vi.mock('../useCnbAuth', async () => {
   return {
     cnbToken: ref(''),
     selectedGroup: ref<{ path: string } | null>(null),
+    // 全部组织模式（默认）的组织集合：置空数组 → runTick 回退到 selectedGroup，
+    // 与本轮改造前的行为等价（用例仍可用 selectedGroup 驱动关注范围）
+    cnbGroups: ref([]),
     fetchCnbGroupRepos: vi.fn(async () => []),
+    fetchCnbGroups: vi.fn(async () => []),
     logout: vi.fn(),
     CnbApiError: class extends Error {},
   }

@@ -181,9 +181,16 @@ export default {
     // 設定頁「建置通知」卡片
     settings: {
       title: '建置通知',
-      desc: '定時檢查目前組織的建置狀態，建置結束時發送系統通知並記錄到通知面板。',
+      desc: '定時檢查建置狀態，建置結束時發送系統通知並記錄到通知面板。',
       enable: '啟用建置結果通知',
       enableDesc: '建置從執行中變為成功 / 失敗 / 取消時通知你。',
+      scope: '監控範圍',
+      scopeDesc: '決定哪些組織的流水線結果會發通知。',
+      scope_all: '全部組織',
+      scope_current: '僅目前組織',
+      scopeDesc_all: '你所在的所有組織（含子組織），依最近更新取前 100 個倉庫。',
+      scopeDesc_current: '只監控側邊欄目前選中的組織。',
+      followAllGroups: '正在監控你所在全部組織的流水線（每輪最多 100 個最近更新的倉庫）。',
       interval: '檢查間隔',
       intervalDesc: '間隔越短越即時，網路與介面消耗也越大。',
       intervalSec: '{sec} 秒',
