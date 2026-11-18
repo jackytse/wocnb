@@ -787,10 +787,21 @@ v*:
               exit 1
             }
             # corepack 可选：新 Node 自带；没有（精简版/被裁剪）就直接 npm 全局装 pnpm
+            # rc.26 实测坑：corepack enable 只建 shim 就返回成功，**不等于 pnpm
+            # 可用** —— shim 指向 corepack 缓存（...\node\corepack\v1\pnpm\<版本>），
+            # 缓存缺失时非交互环境（无 TTY）不会触发自动下载，`pnpm -v` 直接
+            # MODULE_NOT_FOUND（本次 NODE 环境 + corepack 缓存双双漂移）。
+            # 所以 enable 之后必须实测一次 pnpm -v，不可用就 npm 全局装兜底
+            # （与本文件 Linux 线 install 的 `pnpm -v || npm i -g` 同一范式）。
+            $env:COREPACK_ENABLE_DOWNLOAD_PROMPT = '0'
             if (Get-Command corepack -ErrorAction SilentlyContinue) {
               corepack enable
-              if ($LASTEXITCODE) { npm i -g pnpm@12.14.0 --force; if ($LASTEXITCODE) { exit $LASTEXITCODE } }
-            } else {
+              if ($LASTEXITCODE) { Write-Output "[wocnb-ci] corepack enable 失败（忽略，走 npm 兜底）" }
+            }
+            # 实测 pnpm：shim 坏了/缓存缺失在这里暴露，而不是到 pnpm install 才炸
+            pnpm -v *> $null
+            if ($LASTEXITCODE) {
+              Write-Output "[wocnb-ci] pnpm shim 不可用（rc.26 corepack 缓存缺失），npm 全局安装 pnpm@12.14.0 兜底"
               npm i -g pnpm@12.14.0 --force
               if ($LASTEXITCODE) { exit $LASTEXITCODE }
             }
@@ -802,6 +813,7 @@ v*:
               if ($env:PATH -notlike "*$npmPrefix*") { $env:PATH = "$npmPrefix;$env:PATH" }
               Write-Output "[wocnb-ci] npm 全局 bin 已补进 PATH: $npmPrefix"
             }
+            # PATH 补齐后再次实测（npm 兜底路径的 pnpm.cmd 此刻才真正可见）
             pnpm -v
             if ($LASTEXITCODE) { exit $LASTEXITCODE }
             node -v
