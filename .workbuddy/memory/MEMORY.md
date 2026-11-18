@@ -53,6 +53,9 @@
 - **重发只能升版本号**：CNB tag 保护 hook 拒绝删除已推送 tag（`hook declined`，2026-11-18 rc.24 实测），`git push origin :refs/tags/vX` 无效 → 删不掉必然撞 tag already exists。BRANCHING.md §2.3 已改为「升版本重发」
 - **release-windows 是 `allowFailure: true`**：它失败时构建总状态仍是 success → 验收发版必须逐 pipeline 查，只看总状态会把「Windows 缺产物」当成通过（rc.24 实测）
 - **Windows runner 的 node 不在 PATH**（rc.24 实测）：`C:\Users\Administrator\.nvm\versions\node\vX\bin\` 存在但里面没有 node.exe → `Get-Command node` 失败。475f090 起 install 做三级兜底（探测常见安装位 → npmmirror 拉 Node 22.14 到 `C:\ci-tools\node` → 前置 PATH）
+- **PowerShell 探测命令必须包 cmd /c**（rc.26~28 三连教训）：①corepack enable 只建 shim 返回成功 ≠ pnpm 可用（缓存缺失+非交互不下载 → MODULE_NOT_FOUND），必须实测；②pnpm/npm 命令缺失时 CommandNotFoundException 在 `$ErrorActionPreference='Stop'` 下是终止性错误，`*> $null` 救不了 → 一律 `cmd /c "pnpm -v >nul 2>&1"` 看退出码（缺失=9009）；③build-x64 等独立 stage 进程要重探测 node+rust+pnpm 全套（install 的 PATH 修改不跨 stage，临时 node 装在 `C:\ci-tools\node\node-*`）
+- **pipefail 下禁止提前退出的消费者**（rc.28 release-meta pack exit 141 实测）：`生产者 | head -N` / `tar -tzf | grep -q` 会吃 SIGPIPE 返回 141 被 set -e 判死；`tar|grep -q` 更会把「包正常」误判成损坏。统一改 `sed -n '1,Np'`（读到 EOF）/ herestring 喂 grep
+- **cnb CLI 监控流水线**：PATH 里有 cnb（1.18.3，已登录）；脚本化必须加 `-v` 才输出原始 JSON（默认美化文本）；`cnb build get-build-status -v --repo X --sn <sn>` 看 pipelinesStatus 逐流水线状态（总状态含 allowFailure 假 success）；`cnb releases get-release-by-tag -v` 核验附件
 
 ## CNB API 覆盖增量落地约定（2026-11-11 完成后固化）
 
