@@ -83,3 +83,12 @@
 - **切组织清 slug 不能复用 buildQuery**：会把旧 slug 原样写回，`router.replace` 变 no-op，URL 与状态不一致（刷新/分享会回到旧组织）。
 - **组织域不做项**：Logo 上传（`upload_url` 域名动态 + 需 PUT 二进制流）、删除组织（需微信身份票据扫码）、贡献者趋势（`/{slug}/-/contributor/trend` 是 `repo-code:r` 的仓库级端点，组织路径 400）。
 - **枚举实测量**：`organization.SettingValue` 33 个；`api.BranchProtection` 22 字段（id + rule + 21 可写）。设计文档 `docs/design/org-features-design.md` 已勘误。
+
+## API gap 全域覆盖（2026-11-18 批次1+2 完成，QA 两轮通过）
+
+- **覆盖率**：268 端点 97 → **168（62.7%）**；PRD `docs/prd/cnb-api-gap-prd.md`、设计 `docs/design/cnb-api-gap-design.md`（§8.2 写端点通道表是唯一权威：Void 11 + JSON 28）
+- **镜像特例勿混**：`deleteTagAnnotation` 整体编码 `%2F`；`deleteCommitAnnotation` 两段分别编码；`createPullReview`（201 空 body→Void）vs `replyReviewComment`（201 有 body→JSON）通道相反
+- **PR 标签保存范式**：`setPullLabels` PUT 整体覆盖 + `diffLabelSelection` 差分跳过无变化请求（useCnbPullReviews.ts 导出）
+- **深链范式**：评审展开态必须路由驱动（useRepoRoute `review`/`rcomment`），deep-link watch immediate 只读不写 URL；PR 切换 watch 不清路由键（旧 id 自然不匹配即收起）——组件本地 ref 存展开态会让刷新丢失（QA 抓过）
+- **测试基线**：40 文件 614 用例；locales/batch2-keys.qa.test.ts 锁 must-have 键三语齐备防"齐缺假阴性"
+- **观察项**：`repo.pulls.review.state.dismissed` 未本地化（5 态 locale 4 键，回退显示原始值）；IssuePropertiesPanel 空串=不修改【待产品确认】
