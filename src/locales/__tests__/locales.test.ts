@@ -70,6 +70,69 @@ describe('locale 键集合一致性（三语同步，R12）', () => {
 })
 
 /**
+ * 源码引用的 key 必须存在 —— 拦截「页面写了 t('x.y')，语言包却漏加」的问题。
+ *
+ * 背景（2026-11-18 截图报障）：个人资料页的社交区块引用了
+ * `profile.followers / following / starCountLabel / tabMyStars / tabPinnedWall /
+ * starsEmpty / starsEmptyDesc` 七个 key，三语包都没加。vue-i18n 缺键时**不报错**，
+ * 直接把 key 名当文案渲染，UI 上就出现 "profile.followers 0" 这种诡异文本。
+ * 原有的「三语键集合一致」用例只比对三个包彼此是否同步，漏加是「三语一起漏」，
+ * 所以它照样全绿 —— 必须再加一道「代码 → 语言包」的反向校验。
+ *
+ * 局限：只识别 `t('literal')` / `$t('literal')` / `i18n.global.t('literal')` 这类
+ * **静态字符串**；模板字符串拼出来的动态 key（如 `t(\`repo.${x}\`)`）无法静态判定，
+ * 跳过不误报。
+ */
+describe('源码引用的 i18n key 均存在于三语包', () => {
+  /**
+   * 用 vite 的 glob 在构建期把 src 下所有 .vue/.ts 以「纯文本」导入。
+   *
+   * 为什么不用 node:fs：app 的 tsconfig 只引了 vite/client 类型、没装 @types/node，
+   * 而这是浏览器侧代码，不该为一条测试给全局开 node 类型（那会让 app 代码误用
+   * fs/process 也能通过类型检查）。?raw 导入既零依赖，也天然受 include 范围约束。
+   */
+  const sources = import.meta.glob('../../**/*.{vue,ts}', {
+    query: '?raw',
+    import: 'default',
+    eager: true,
+  }) as Record<string, string>
+
+  it('每个 t(\'x.y\') 引用的 key 都能在 en / zh-CN / zh-TW 找到', () => {
+    const keyUse = /(?:^|[^\w$.])\$?t\(\s*['"]([\w.-]+)['"]/gm
+    // key → 首次出现的文件（报错时直接给位置，省得再全局搜一遍）
+    const used = new Map<string, string>()
+    for (const [file, code] of Object.entries(sources)) {
+      // 语言包本身与测试目录不放业务文案引用，跳过（否则注释里的示例会被误判）
+      if (/\/locales\//.test(file) || /__tests__/.test(file) || /\.test\.ts$/.test(file)) {
+        continue
+      }
+      for (const m of code.matchAll(keyUse)) {
+        const key = m[1]
+        // 只要带命名空间的键（`common.save` 这类）；单段字符串多为误匹配
+        if (!key.includes('.')) continue
+        if (!used.has(key)) used.set(key, file.replace('../../', ''))
+      }
+    }
+    // 三语各自建集合，逐语报告缺失项（一次列全，避免改一个跑一次）
+    const dictionaries: Array<[string, string[]]> = [
+      ['en', enKeys],
+      ['zh-CN', zhCNKeys],
+      ['zh-TW', zhTWKeys],
+    ]
+    const problems: string[] = []
+    for (const [locale, keys] of dictionaries) {
+      const set = new Set(keys)
+      for (const [key, file] of used) {
+        if (!set.has(key)) problems.push(`${locale} 缺少 ${key}（引用于 ${file}）`)
+      }
+    }
+    // 兜底：至少扫到一定数量，防止正则失效导致"零引用"假绿
+    expect(used.size).toBeGreaterThan(100)
+    expect(problems).toEqual([])
+  })
+})
+
+/**
  * 消息「可编译」检查 —— 拦截只在运行时才炸的一类 bug。
  *
  * 背景（2026-11-11 组织设置实测踩到）：vue-i18n 的 message 语法把 `@` 当作
