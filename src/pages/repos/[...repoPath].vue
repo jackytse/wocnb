@@ -177,12 +177,17 @@ const invalidNumber = computed(() => {
               :repo-path="repoPath"
               :git-ref="effectiveRef"
               :visibility="detail?.visibility"
+              :can-manage="detail?.canManage"
             />
           </template>
 
-          <!-- 提交页签 -->
+          <!-- 提交页签：canManage 下发到分支管理入口（BUG-04） -->
           <template v-else-if="tab === 'commits'">
-            <RepoCommits :repo-path="repoPath" :git-ref="effectiveRef" />
+            <RepoCommits
+              :repo-path="repoPath"
+              :git-ref="effectiveRef"
+              :can-manage="detail?.canManage"
+            />
           </template>
 
           <!-- Issue 页签：number 非法 → 未找到态；number 合法 → 详情；无 number → 列表 -->
@@ -198,8 +203,9 @@ const invalidNumber = computed(() => {
               v-else-if="number"
               :repo-path="repoPath"
               :number="String(number)"
+              :detail="detail"
             />
-            <RepoIssueList v-else :repo-path="repoPath" />
+            <RepoIssueList v-else :repo-path="repoPath" :detail="detail" />
           </template>
 
           <!-- PR 页签：判定逻辑与 Issue 页签一致 -->
@@ -215,8 +221,9 @@ const invalidNumber = computed(() => {
               v-else-if="number"
               :repo-path="repoPath"
               :number="String(number)"
+              :detail="detail"
             />
-            <RepoPullList v-else :repo-path="repoPath" />
+            <RepoPullList v-else :repo-path="repoPath" :detail="detail" />
           </template>
 
           <!-- 流水线页签：sn 存在 → 详情，否则列表；archived 单向下发禁写入口 -->

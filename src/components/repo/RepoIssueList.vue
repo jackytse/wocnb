@@ -11,19 +11,26 @@ import { useI18n } from 'vue-i18n'
 import {
   fetchRepoIssues,
   repoSiteUrl,
+  type RepoDetail,
   type RepoIssue,
 } from '../../composables/useCnbRepo'
 import { useRepoRoute } from '../../composables/useRepoRoute'
 import { formatRelativeTime } from '../../utils'
 import StateAlert from './StateAlert.vue'
 import NewIssueModal from './NewIssueModal.vue'
+import RepoLabelManager from './RepoLabelManager.vue'
 
 const props = defineProps<{
   repoPath: string
+  /** 仓库详情：标签管理的写入口按 canManage 事前预判（repo-notes:rw） */
+  detail?: RepoDetail | null
 }>()
 
 const { t } = useI18n()
 const { state, keyword, page, setState, setKeyword, setPage, openIssue } = useRepoRoute()
+
+/** 是否有标签管理写权限（Master/Owner 单点预判，403 只作兜底） */
+const canManage = computed(() => !!props.detail?.canManage)
 
 const PAGE_SIZE = 30
 
@@ -98,6 +105,14 @@ const siteUrl = computed(() =>
   repoSiteUrl(props.repoPath,
     `/-/issues?state=${currentState.value}${keyword.value ? `&keyword=${encodeURIComponent(keyword.value)}` : ''}`),
 )
+
+/** 标签管理弹窗开关（REQ-03） */
+const labelManagerOpen = ref(false)
+
+/** 标签变更后重拉 Issue 列表（chip 展示与服务端保持一致） */
+function onLabelsChanged() {
+  void load()
+}
 </script>
 
 <template>
@@ -139,6 +154,16 @@ const siteUrl = computed(() =>
         @keydown.enter="onKeywordEnter"
       />
 
+      <!-- 标签管理入口（REQ-03）：canManage 预判，无 repo-notes:rw 时隐藏 -->
+      <UButton
+        v-if="canManage"
+        size="sm"
+        color="neutral"
+        variant="outline"
+        icon="i-lucide-tags"
+        :label="t('repo.labels.manage')"
+        @click="labelManagerOpen = true"
+      />
       <UButton
         class="ms-auto"
         size="sm"
@@ -245,5 +270,13 @@ const siteUrl = computed(() =>
 
     <!-- 新建 Issue 弹窗 -->
     <NewIssueModal v-model:open="showNewIssue" :repo-path="repoPath" @created="onCreated" />
+
+    <!-- 仓库标签管理弹窗（REQ-03；数据源与 Issue 详情标签选择器共用） -->
+    <RepoLabelManager
+      v-model:open="labelManagerOpen"
+      :repo-path="repoPath"
+      :can-manage="canManage"
+      @changed="onLabelsChanged"
+    />
   </div>
 </template>

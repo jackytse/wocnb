@@ -18,6 +18,7 @@ import {
   canManageRole,
   cnbFetch,
   cnbFetchText,
+  cnbFetchVoid,
   CnbApiError,
   type CnbApiErrorKind,
 } from './useCnbAuth'
@@ -38,8 +39,13 @@ export function normalizeRepoPath(segments: string[] | string): string {
 /**
  * 仓库路径 -> API URL 路径段：多级路径逐段 encodeURIComponent，
  * 保证特殊字符（如仓库名含 . 等）不破坏 URL 结构（'/' 保留为路径分隔符）。
+ *
+ * 导出说明：本轮新增的 useCnbGitRefs / useCnbRepoLabels / useCnbBuildAi 均需拼仓库
+ * 路径，若各自复制一份逐段编码迟早口径漂移（踩坑#4：整体 encode 会把 '/' 压成
+ * %2F 导致 404）。因此把本函数作为**仓库路径编码的单点出口**导出，新 composable
+ * 一律 import 复用，禁止新建第四个编码函数。
  */
-function encodeRepoPath(repoPath: string): string {
+export function encodeRepoPath(repoPath: string): string {
   return repoPath.split('/').map(encodeURIComponent).join('/')
 }
 
@@ -561,6 +567,26 @@ export interface CommitStatusResult {
 }
 
 /**
+ * api.CommitStatuses → CommitStatusResult 归一化（单点实现）。
+ *
+ * 为什么抽出：单提交 CI（GET /git/commit-statuses/{commitish}）与 PR CI
+ * （GET /pulls/{n}/commit-statuses）响应结构完全一致（设计 §2.5），两处共用
+ * 同一归一化 + 同一 commitStatusMeta 六态映射，避免 UI 出现两套口径。
+ */
+function normalizeCommitStatuses(raw: RawCommitStatuses): CommitStatusResult {
+  return {
+    sha: raw?.sha || '',
+    state: raw?.state || '',
+    checks: (Array.isArray(raw?.statuses) ? raw.statuses : []).map(check => ({
+      context: check?.context || '',
+      state: check?.state || '',
+      description: check?.description || '',
+      targetUrl: check?.target_url || '',
+    })),
+  }
+}
+
+/**
  * 提交 CI 状态（GET /{repo}/-/git/commit-statuses/{commitish}，scope repo-code:r）。
  *
  * 懒加载约定（T10 验收 1）：列表渲染时**不**为每行立即调用 —— 由
@@ -575,16 +601,7 @@ export async function fetchCommitStatuses(
   const raw = await cnbFetch<RawCommitStatuses>(
     `/${encodeRepoPath(repoPath)}/-/git/commit-statuses/${encodeURIComponent(commitish)}`,
   )
-  return {
-    sha: raw.sha || '',
-    state: raw.state || '',
-    checks: (Array.isArray(raw.statuses) ? raw.statuses : []).map(check => ({
-      context: check.context || '',
-      state: check.state || '',
-      description: check.description || '',
-      targetUrl: check.target_url || '',
-    })),
-  }
+  return normalizeCommitStatuses(raw)
 }
 
 /**
@@ -792,6 +809,216 @@ export async function updateIssueState(
   })
 }
 
+// ---------------------------------------------------------------------------
+// B+. Issue 处理人 / 标签关联（REQ-04，10 端点）
+// ---------------------------------------------------------------------------
+//
+// ⚠️ 本段是踩坑#3 / 风险 N2 的重灾区：相邻端点通道不同，逐条对照设计 §8.2：
+// - assignees 的 POST/PATCH/DELETE 都返回 api.IssueDetail（**有 body**）→ cnbFetch；
+// - GET assignees/{a} 是探测端点（204 可分配 / 404 不可）→ cnbFetchVoid + 捕获 404；
+// - labels 的 POST/PUT 返回 api.Label（有 body）→ cnbFetch；
+// - **DELETE /labels（集合，带 body）返回 204 空 body → cnbFetchVoid**；
+// - DELETE /labels/{name}（单个）返回 200 api.Label（有 body）→ cnbFetch。
+// 每个函数注释均标注通道选择依据；写后由 RepoIssueDetail 调 load() 重拉详情（§8.4）。
+
+/** api.UserInfo → RepoUser 归一化（复用既有类型，禁止重复定义） */
+function normalizeRepoUser(raw: { username?: string, nickname?: string, avatar?: string }): RepoUser {
+  return {
+    username: raw?.username || '',
+    nickname: raw?.nickname || raw?.username || '',
+    avatar: raw?.avatar || '',
+  }
+}
+
+/** 处理人/标签写端点响应可能是 IssueDetail / Label / Label[]，尽力抽出第一个标签 */
+function normalizeLabelResult(raw: unknown): RepoLabel {
+  if (Array.isArray(raw)) {
+    const first = raw.find(item => !!item && typeof item === 'object' && !!(item as { name?: string }).name)
+    return { name: (first as { name?: string })?.name || '', color: (first as { color?: string })?.color || '' }
+  }
+  if (raw && typeof raw === 'object') {
+    const obj = raw as { name?: string, color?: string }
+    return { name: obj.name || '', color: obj.color || '' }
+  }
+  return { name: '', color: '' }
+}
+
+/** 判断异常是否为 404（探测函数把 404 归一为 false，其余错误继续抛出） */
+function isNotFound(err: unknown): boolean {
+  if (err instanceof CnbApiError) {
+    return err.kind === 'notFound' || err.status === 404
+  }
+  const value = err as { kind?: string, status?: number } | null
+  return !!value && (value.kind === 'notFound' || value.status === 404)
+}
+
+/**
+ * Issue 处理人列表（GET /{repo}/-/issues/{number}/assignees，scope: repo-issue:r）。
+ * **通道选择依据**：200 api.UserInfo[]（有 body）→ cnbFetch。
+ */
+export async function listIssueAssignees(repoPath: string, number: string): Promise<RepoUser[]> {
+  const raw = await cnbFetch<{ username?: string, nickname?: string, avatar?: string }[]>(
+    `/${encodeRepoPath(repoPath)}/-/issues/${encodeURIComponent(number)}/assignees`,
+  )
+  if (!Array.isArray(raw)) {
+    return []
+  }
+  return raw.map(normalizeRepoUser).filter(user => !!user.username)
+}
+
+/**
+ * 用户名是否可被分配给该 Issue（GET /issues/{n}/assignees/{assignee}）。
+ *
+ * **通道选择依据**：该端点只以 HTTP 状态表达结果（204 可分配 / 404 不可），
+ * 无有效 body —— 走 cnbFetchVoid 并用 404 判定 false；500/网络错误继续抛出，
+ * 不能把"服务异常"误判成"不可分配"而静默过滤候选。
+ */
+export async function canAssignIssue(
+  repoPath: string,
+  number: string,
+  username: string,
+): Promise<boolean> {
+  try {
+    await cnbFetchVoid(
+      `/${encodeRepoPath(repoPath)}/-/issues/${encodeURIComponent(number)}/assignees/${encodeURIComponent(username)}`,
+      { method: 'GET' },
+    )
+    return true
+  }
+  catch (err) {
+    if (isNotFound(err)) {
+      return false
+    }
+    throw err
+  }
+}
+
+/**
+ * 新增处理人（POST /issues/{n}/assignees，body {assignees: string[]}）。
+ * **通道选择依据**：201 api.IssueDetail（有 body）→ cnbFetch；UI 不消费返回体，
+ * 写后统一重拉详情（本函数返回 void 与 §5.2 签名一致）。
+ */
+export async function setIssueAssignees(
+  repoPath: string,
+  number: string,
+  usernames: string[],
+): Promise<void> {
+  await cnbFetch(
+    `/${encodeRepoPath(repoPath)}/-/issues/${encodeURIComponent(number)}/assignees`,
+    { method: 'POST', body: JSON.stringify({ assignees: usernames }) },
+  )
+}
+
+/**
+ * 增量变更处理人（PATCH /issues/{n}/assignees）。
+ * **通道选择依据**：200 api.IssueDetail（有 body）→ cnbFetch。
+ */
+export async function updateIssueAssignees(
+  repoPath: string,
+  number: string,
+  usernames: string[],
+): Promise<void> {
+  await cnbFetch(
+    `/${encodeRepoPath(repoPath)}/-/issues/${encodeURIComponent(number)}/assignees`,
+    { method: 'PATCH', body: JSON.stringify({ assignees: usernames }) },
+  )
+}
+
+/**
+ * 移除指定处理人（DELETE /issues/{n}/assignees，body {assignees: string[]}）。
+ * **通道选择依据**：200 api.IssueDetail（有 body）→ cnbFetch（不是 Void）。
+ */
+export async function removeIssueAssignees(
+  repoPath: string,
+  number: string,
+  usernames: string[],
+): Promise<void> {
+  await cnbFetch(
+    `/${encodeRepoPath(repoPath)}/-/issues/${encodeURIComponent(number)}/assignees`,
+    { method: 'DELETE', body: JSON.stringify({ assignees: usernames }) },
+  )
+}
+
+/**
+ * Issue 标签列表（GET /issues/{n}/labels）。
+ * **通道选择依据**：200 api.Label[]（有 body）→ cnbFetch。
+ */
+export async function listIssueLabels(repoPath: string, number: string): Promise<RepoLabel[]> {
+  const raw = await cnbFetch<{ name?: string, color?: string }[]>(
+    `/${encodeRepoPath(repoPath)}/-/issues/${encodeURIComponent(number)}/labels`,
+  )
+  if (!Array.isArray(raw)) {
+    return []
+  }
+  return raw.map(l => ({ name: l?.name || '', color: l?.color || '' })).filter(l => !!l.name)
+}
+
+/**
+ * 新增 Issue 标签（POST /issues/{n}/labels，body {labels: string[]}）。
+ * **通道选择依据**：200 api.Label（有 body）→ cnbFetch。
+ */
+export async function addIssueLabels(
+  repoPath: string,
+  number: string,
+  labels: string[],
+): Promise<RepoLabel> {
+  const raw = await cnbFetch<unknown>(
+    `/${encodeRepoPath(repoPath)}/-/issues/${encodeURIComponent(number)}/labels`,
+    { method: 'POST', body: JSON.stringify({ labels }) },
+  )
+  return normalizeLabelResult(raw)
+}
+
+/**
+ * 全量替换 Issue 标签（PUT /issues/{n}/labels，body {labels: string[]}）。
+ * **通道选择依据**：200 api.Label（有 body）→ cnbFetch。
+ */
+export async function setIssueLabels(
+  repoPath: string,
+  number: string,
+  labels: string[],
+): Promise<RepoLabel> {
+  const raw = await cnbFetch<unknown>(
+    `/${encodeRepoPath(repoPath)}/-/issues/${encodeURIComponent(number)}/labels`,
+    { method: 'PUT', body: JSON.stringify({ labels }) },
+  )
+  return normalizeLabelResult(raw)
+}
+
+/**
+ * 批量移除 Issue 标签（DELETE /issues/{n}/labels，body {labels: string[]}）。
+ *
+ * **通道选择依据（相邻端点不同，最易踩坑）**：集合级 DELETE 返回 **204 空 body**，
+ * 必须走 cnbFetchVoid；但 cnbFetchVoid 仍会正常发送 body（指定要移除的标签）。
+ */
+export async function removeIssueLabels(
+  repoPath: string,
+  number: string,
+  labels: string[],
+): Promise<void> {
+  await cnbFetchVoid(
+    `/${encodeRepoPath(repoPath)}/-/issues/${encodeURIComponent(number)}/labels`,
+    { method: 'DELETE', body: JSON.stringify({ labels }) },
+  )
+}
+
+/**
+ * 移除单个 Issue 标签（DELETE /issues/{n}/labels/{name}）。
+ * **通道选择依据**：单个 DELETE 返回 **200 api.Label（有 body）** → cnbFetch，
+ * 与上面的集合级 DELETE（Void）恰好相反。name 含中文/空格走 encodeURIComponent。
+ */
+export async function removeIssueLabel(
+  repoPath: string,
+  number: string,
+  name: string,
+): Promise<RepoLabel> {
+  const raw = await cnbFetch<unknown>(
+    `/${encodeRepoPath(repoPath)}/-/issues/${encodeURIComponent(number)}/labels/${encodeURIComponent(name)}`,
+    { method: 'DELETE' },
+  )
+  return normalizeLabelResult(raw)
+}
+
 /** 评论条目（api.IssueComment / api.PullRequestComment 共用子集，归一化后） */
 export interface RepoComment {
   id: string
@@ -851,6 +1078,194 @@ export async function createIssueComment(
     `/${encodeRepoPath(repoPath)}/-/issues/${encodeURIComponent(number)}/comments`,
     { method: 'POST', body: JSON.stringify({ body }) },
   )
+}
+
+// ---------------------------------------------------------------------------
+// Issue 评论编辑 + 自定义属性（批次 2 · REQ-09，6 端点）
+// ---------------------------------------------------------------------------
+
+/**
+ * 单条 Issue 评论（GET /{repo}/-/issues/{n}/comments/{commentId}，
+ * scope `repo-notes:r` → api.IssueComment）。
+ *
+ * 为什么编辑前要先 GET：列表里的评论可能是几分钟前的快照，别人可能已改过；
+ * 用最新正文预填编辑框，避免用旧内容覆盖他人修改。
+ */
+export async function fetchIssueComment(
+  repoPath: string,
+  number: string,
+  commentId: string,
+): Promise<RepoComment> {
+  const raw = await cnbFetch<RawComment>(
+    `/${encodeRepoPath(repoPath)}/-/issues/${encodeURIComponent(number)}/comments/${encodeURIComponent(commentId)}`,
+  )
+  return normalizeComment(raw || {})
+}
+
+/**
+ * 编辑 Issue 评论（PATCH …/comments/{commentId}，scope `repo-notes:rw`）
+ * → **200 api.IssueComment（有 body）**，走 `cnbFetch`。
+ *
+ * 与"创建评论"不同：创建返回空 body，编辑返回完整实体 —— 通道不能互换
+ * （设计 §8.2 逐端点表）。
+ */
+export async function updateIssueComment(
+  repoPath: string,
+  number: string,
+  commentId: string,
+  body: string,
+): Promise<RepoComment> {
+  const raw = await cnbFetch<RawComment>(
+    `/${encodeRepoPath(repoPath)}/-/issues/${encodeURIComponent(number)}/comments/${encodeURIComponent(commentId)}`,
+    { method: 'PATCH', body: JSON.stringify({ body }) },
+  )
+  return normalizeComment(raw || {})
+}
+
+/**
+ * Issue 自定义属性的三个值类型（api.IssueProperty.type）。
+ * 表单按 type 选控件：string→文本框、date→日期选择、number→数字框；
+ * 提交时统一转字符串（api.PropertyForm.value 是 string）。
+ */
+export type IssuePropertyType = 'string' | 'date' | 'number'
+
+/** 某条 Issue 上已填写的自定义属性（GET …/issues/{n}/property） */
+export interface IssueProperty {
+  key: string
+  name: string
+  type: IssuePropertyType
+  /** 当前值（字符串；空串表示未填写） */
+  value: string
+}
+
+/** 仓库级属性字典条目（GET /{repo}/-/property[/invisible] → api.RepoProperty） */
+export interface RepoPropertyDef {
+  key: string
+  name: string
+  type: IssuePropertyType
+  /** 是否对所有人可见（false = 仅自己可见） */
+  visible: boolean
+}
+
+/**
+ * 自定义属性更新的结果（api.IssuePropertyUpdateResult）。
+ *
+ * ⚠️ HTTP 200 不代表全部成功：服务端会逐 key 校验，部分 key 可能失败。
+ * UI 必须按 `failedCount` 展示部分失败并列出失败 key，不能只看状态码
+ * 就报"保存成功"（N2 同类的"假成功"陷阱）。
+ */
+export interface PropertyUpdateResult {
+  successCount: number
+  failedCount: number
+  failedKeys: string[]
+}
+
+/** 属性类型归一化（未知值按 string 处理，保证表单有控件可用） */
+function normalizePropertyType(value: unknown): IssuePropertyType {
+  return value === 'date' || value === 'number' ? value : 'string'
+}
+
+/** 读取某条 Issue 已填写的自定义属性（scope `repo-issue:r`） */
+export async function listIssueProperties(
+  repoPath: string,
+  number: string,
+): Promise<IssueProperty[]> {
+  const raw = await cnbFetch<unknown>(
+    `/${encodeRepoPath(repoPath)}/-/issues/${encodeURIComponent(number)}/property`,
+  )
+  if (!Array.isArray(raw)) {
+    return []
+  }
+  return raw
+    .map((item) => {
+      const source = (item && typeof item === 'object' ? item : {}) as {
+        key?: unknown
+        name?: unknown
+        type?: unknown
+        value?: unknown
+      }
+      return {
+        key: typeof source.key === 'string' ? source.key : '',
+        name: typeof source.name === 'string' ? source.name : '',
+        type: normalizePropertyType(source.type),
+        value: typeof source.value === 'string' ? source.value : '',
+      }
+    })
+    .filter(item => item.key !== '')
+}
+
+/**
+ * 批量更新 Issue 自定义属性（PATCH …/issues/{n}/property，scope `repo-issue:rw`）
+ * → 200 `api.IssuePropertyUpdateResult`（有 body），走 `cnbFetch`。
+ *
+ * 请求体：`{ properties: [{ key, value }] }`；值一律字符串。
+ * 返回的失败明细交给 UI 展示（见 PropertyUpdateResult 注释）。
+ */
+export async function updateIssueProperties(
+  repoPath: string,
+  number: string,
+  properties: { key: string, value: string }[],
+): Promise<PropertyUpdateResult> {
+  const raw = await cnbFetch<{
+    success_count?: unknown
+    failed_count?: unknown
+    failed_keys?: unknown
+  }>(
+    `/${encodeRepoPath(repoPath)}/-/issues/${encodeURIComponent(number)}/property`,
+    { method: 'PATCH', body: JSON.stringify({ properties }) },
+  )
+  const failedKeys = Array.isArray(raw?.failed_keys)
+    ? raw.failed_keys.filter((key): key is string => typeof key === 'string')
+    : []
+  return {
+    successCount: Number(raw?.success_count) || 0,
+    failedCount: Number(raw?.failed_count) || failedKeys.length,
+    failedKeys,
+  }
+}
+
+/**
+ * 仓库可见自定义属性字典（GET /{repo}/-/property，scope `repo-issue:r`）。
+ * 用于渲染"可添加哪些属性"的候选项。
+ */
+export async function listRepoProperties(repoPath: string): Promise<RepoPropertyDef[]> {
+  return fetchRepoPropertyList(repoPath, false)
+}
+
+/**
+ * 仓库隐藏自定义属性字典（GET /{repo}/-/property/invisible，scope `repo-issue:r`）。
+ *
+ * 隐藏属性的含义是"仅创建者/有权限者可见"，仍在字典里返回，UI 需标注
+ * "仅你可见"避免误判为公共字段。
+ */
+export async function listRepoInvisibleProperties(repoPath: string): Promise<RepoPropertyDef[]> {
+  return fetchRepoPropertyList(repoPath, true)
+}
+
+/** 属性字典的共用实现（visible / invisible 仅路径后缀不同） */
+async function fetchRepoPropertyList(repoPath: string, invisible: boolean): Promise<RepoPropertyDef[]> {
+  const suffix = invisible ? '/property/invisible' : '/property'
+  const raw = await cnbFetch<unknown>(`/${encodeRepoPath(repoPath)}/-${suffix}`)
+  if (!Array.isArray(raw)) {
+    return []
+  }
+  return raw
+    .map((item) => {
+      const source = (item && typeof item === 'object' ? item : {}) as {
+        key?: unknown
+        name?: unknown
+        type?: unknown
+        visible?: unknown
+      }
+      return {
+        key: typeof source.key === 'string' ? source.key : '',
+        name: typeof source.name === 'string' ? source.name : '',
+        type: normalizePropertyType(source.type),
+        // 隐藏端点返回的条目显式标 false；visible 端点按服务端值兜底为 true
+        visible: invisible ? false : source.visible !== false,
+      }
+    })
+    .filter(item => item.key !== '')
 }
 
 /** Issue 动态条目（GET /-/issues/{number}/activities → api.IssueActivity） */
@@ -928,8 +1343,10 @@ function stripRefsHeads(ref?: string): string {
   return (ref || '').replace(/^refs\/heads\//, '')
 }
 
-/** api.PullRequest / api.Pull 原始结构（两者字段并集，snake_case） */
-interface RawPull {
+/** api.PullRequest / api.Pull 原始结构（两者字段并集，snake_case）。
+ * 导出原因：normalizePull 已导出，其参数类型必须同样可见，否则
+ * 声明生成/类型检查会报「Exported function has or is using private name」。 */
+export interface RawPull {
   number?: string
   title?: string
   state?: string
@@ -948,7 +1365,12 @@ interface RawPull {
   labels?: { name?: string, color?: string }[]
 }
 
-function normalizePull(raw: RawPull): RepoPull {
+/**
+ * api.PullRequest / api.Pull 原始结构 → RepoPull（导出供 useCnbPullReviews 复用：
+ * 评审人增删/标签写端点返回的也是 api.Pull，必须走同一套归一化，
+ * 否则同一条 PR 在列表页与评审区的字段口径会漂移）。
+ */
+export function normalizePull(raw: RawPull): RepoPull {
   return {
     number: raw.number || '',
     title: raw.title || '',
@@ -1121,6 +1543,161 @@ export async function mergePull(
     sha: raw && typeof raw.sha === 'string' ? raw.sha : undefined,
     message: raw && typeof raw.message === 'string' ? raw.message : undefined,
   }
+}
+
+// ---------------------------------------------------------------------------
+// C+. PR 创建 / 编辑 / 处理人 / CI 状态（REQ-05，7 端点）
+// ---------------------------------------------------------------------------
+//
+// 通道约定（设计 §8.2）：POST /pulls（201 api.Pull）、PATCH /pulls/{n}（200 api.Pull）、
+// POST/DELETE pull assignees（201/200 api.Pull）、GET commit-statuses（200 api.CommitStatuses）
+// **全部有 body → cnbFetch**；仅 GET assignees/{a} 探测走 cnbFetchVoid（404→false）。
+// 归一化复用 normalizePull / normalizeCommitStatuses，避免与详情/CI 列表出现两套映射。
+
+/** 新建 PR 表单（UI CreatePullModal → 数据层，字段名 camelCase） */
+export interface CreatePullInput {
+  /** 标题（必填 2~255） */
+  title: string
+  /** 源分支名（不含 refs/heads/） */
+  head: string
+  /** 目标分支名 */
+  base: string
+  /** Markdown 正文（可选） */
+  body?: string
+  /** 跨仓库 PR 的源仓库路径（可选） */
+  headRepo?: string
+}
+
+/**
+ * 新建 PR（POST /{repo}/-/pulls，body api.PullCreationForm，scope: repo-pr:rw）。
+ * **通道选择依据**：201 api.Pull（有 body）→ cnbFetch，复用 normalizePull 返回 RepoPull；
+ * CreatePullModal 拿到 number 后直接跳详情。
+ */
+export async function createPull(repoPath: string, input: CreatePullInput): Promise<RepoPull> {
+  const raw = await cnbFetch<RawPull>(`/${encodeRepoPath(repoPath)}/-/pulls`, {
+    method: 'POST',
+    body: JSON.stringify({
+      title: input.title,
+      head: input.head,
+      base: input.base,
+      ...(input.body ? { body: input.body } : {}),
+      ...(input.headRepo ? { head_repo: input.headRepo } : {}),
+    }),
+  })
+  return normalizePull(raw)
+}
+
+/**
+ * 编辑 PR（PATCH /{repo}/-/pulls/{number}，body api.PatchPullRequest）。
+ * **通道选择依据**：200 api.Pull（有 body）→ cnbFetch。
+ * patch 的 state 可关/开 PR；只提交显式传入的字段，避免清空未改项。
+ */
+export async function updatePull(
+  repoPath: string,
+  number: string,
+  patch: { title?: string, body?: string, state?: string },
+): Promise<RepoPull> {
+  const raw = await cnbFetch<RawPull>(
+    `/${encodeRepoPath(repoPath)}/-/pulls/${encodeURIComponent(number)}`,
+    {
+      method: 'PATCH',
+      body: JSON.stringify({
+        ...(patch.title !== undefined ? { title: patch.title } : {}),
+        ...(patch.body !== undefined ? { body: patch.body } : {}),
+        ...(patch.state !== undefined ? { state: patch.state } : {}),
+      }),
+    },
+  )
+  return normalizePull(raw)
+}
+
+/**
+ * PR 处理人列表（GET /pulls/{n}/assignees，scope: repo-pr:r）。
+ * **通道选择依据**：200 api.UserInfo[]（有 body）→ cnbFetch。
+ */
+export async function listPullAssignees(repoPath: string, number: string): Promise<RepoUser[]> {
+  const raw = await cnbFetch<{ username?: string, nickname?: string, avatar?: string }[]>(
+    `/${encodeRepoPath(repoPath)}/-/pulls/${encodeURIComponent(number)}/assignees`,
+  )
+  if (!Array.isArray(raw)) {
+    return []
+  }
+  return raw.map(normalizeRepoUser).filter(user => !!user.username)
+}
+
+/**
+ * 用户名是否可被分配给该 PR（GET /pulls/{n}/assignees/{assignee}）。
+ * **通道选择依据**：204/404 无有效 body → cnbFetchVoid + 404→false（同 Issue 探测）。
+ */
+export async function canAssignPull(
+  repoPath: string,
+  number: string,
+  username: string,
+): Promise<boolean> {
+  try {
+    await cnbFetchVoid(
+      `/${encodeRepoPath(repoPath)}/-/pulls/${encodeURIComponent(number)}/assignees/${encodeURIComponent(username)}`,
+      { method: 'GET' },
+    )
+    return true
+  }
+  catch (err) {
+    if (isNotFound(err)) {
+      return false
+    }
+    throw err
+  }
+}
+
+/**
+ * 新增 PR 处理人（POST /pulls/{n}/assignees，body {assignees: string[]}）。
+ * **通道选择依据**：201 api.Pull（有 body）→ cnbFetch，复用 normalizePull。
+ */
+export async function setPullAssignees(
+  repoPath: string,
+  number: string,
+  usernames: string[],
+): Promise<RepoPull> {
+  const raw = await cnbFetch<RawPull>(
+    `/${encodeRepoPath(repoPath)}/-/pulls/${encodeURIComponent(number)}/assignees`,
+    { method: 'POST', body: JSON.stringify({ assignees: usernames }) },
+  )
+  return normalizePull(raw)
+}
+
+/**
+ * 移除 PR 处理人（DELETE /pulls/{n}/assignees，body {assignees: string[]}）。
+ * **通道选择依据**：200 api.Pull（有 body）→ cnbFetch（不是 Void）。
+ */
+export async function removePullAssignees(
+  repoPath: string,
+  number: string,
+  usernames: string[],
+): Promise<RepoPull> {
+  const raw = await cnbFetch<RawPull>(
+    `/${encodeRepoPath(repoPath)}/-/pulls/${encodeURIComponent(number)}/assignees`,
+    { method: 'DELETE', body: JSON.stringify({ assignees: usernames }) },
+  )
+  return normalizePull(raw)
+}
+
+/**
+ * PR 维度 CI 状态（GET /{repo}/-/pulls/{number}/commit-statuses，scope: repo-pr:r）。
+ *
+ * **通道选择依据**：200 api.CommitStatuses（有 body）→ cnbFetch；结构与单提交
+ * commit-statuses 完全一致，复用 normalizeCommitStatuses + commitStatusMeta
+ * （GitLab 六态独立映射，未知中性色）—— **禁止复用 useCnbBuildWatch 构建四态**。
+ * 403（缺 repo-pr:r）抛 CnbApiError，由 RepoPullDetail 的 CI 区块 StateAlert 降级，
+ * 不影响 PR 主体。
+ */
+export async function fetchPullCommitStatuses(
+  repoPath: string,
+  number: string,
+): Promise<CommitStatusResult> {
+  const raw = await cnbFetch<RawCommitStatuses>(
+    `/${encodeRepoPath(repoPath)}/-/pulls/${encodeURIComponent(number)}/commit-statuses`,
+  )
+  return normalizeCommitStatuses(raw)
 }
 
 // ---------------------------------------------------------------------------

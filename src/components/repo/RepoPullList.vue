@@ -8,18 +8,36 @@ import { useI18n } from 'vue-i18n'
 import {
   fetchRepoPulls,
   repoSiteUrl,
+  type RepoDetail,
   type RepoPull,
 } from '../../composables/useCnbRepo'
 import { useRepoRoute } from '../../composables/useRepoRoute'
 import { formatRelativeTime } from '../../utils'
 import StateAlert from './StateAlert.vue'
+import CreatePullModal from './CreatePullModal.vue'
 
 const props = defineProps<{
   repoPath: string
+  /** 仓库详情：新建 PR 写入口按 canManage 预判（repo-pr:rw） */
+  detail?: RepoDetail | null
 }>()
 
 const { t } = useI18n()
 const { state, page, setState, setPage, openPull } = useRepoRoute()
+
+/** 是否有新建 PR 权限（Master/Owner 单点预判，403 只作兜底） */
+const canManage = computed(() => !!props.detail?.canManage)
+/** 归档仓库：写入口禁用 */
+const archived = computed(() => !!props.detail?.archived)
+
+/** 新建 PR 弹窗 */
+const createOpen = ref(false)
+
+/** 新建成功：直接跳新 PR 详情（createPull 返回体含 number） */
+function onCreated(pull: RepoPull) {
+  createOpen.value = false
+  openPull(pull.number)
+}
 
 const PAGE_SIZE = 30
 
@@ -81,7 +99,7 @@ const siteUrl = computed(() => repoSiteUrl(props.repoPath, `/-/pulls?state=${cur
 
 <template>
   <div>
-    <!-- 筛选条：state 三段切换 -->
+    <!-- 筛选条：state 三段切换 + 新建 PR 入口（canManage 预判） -->
     <div class="flex items-center gap-2 mb-3">
       <div class="inline-flex rounded-lg border border-default overflow-hidden">
         <button
@@ -100,6 +118,16 @@ const siteUrl = computed(() => repoSiteUrl(props.repoPath, `/-/pulls?state=${cur
           {{ option.label }}
         </button>
       </div>
+      <UButton
+        v-if="canManage"
+        class="ms-auto"
+        size="sm"
+        color="primary"
+        icon="i-lucide-plus"
+        :label="t('repo.pulls.create')"
+        :disabled="archived"
+        @click="createOpen = true"
+      />
     </div>
 
     <!-- 三态 -->
@@ -162,6 +190,14 @@ const siteUrl = computed(() => repoSiteUrl(props.repoPath, `/-/pulls?state=${cur
         </span>
       </button>
     </div>
+
+    <!-- 新建 PR 弹窗 -->
+    <CreatePullModal
+      v-model:open="createOpen"
+      :repo-path="repoPath"
+      default-ref=""
+      @created="onCreated"
+    />
 
     <!-- 分页 -->
     <div

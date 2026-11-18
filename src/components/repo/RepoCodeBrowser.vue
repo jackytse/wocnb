@@ -5,6 +5,10 @@
  * 定位规则（PRD P0-A3/A4）：当前 ?path= 请求 contents，返回 type=tree
  * 渲染目录列表、type=blob 渲染文件查看器（一次请求判定，与 CNB 网页
  * 行为一致）。目录下钻与面包屑回跳均为 push（返回键可用）。
+ *
+ * 分支管理（BUG-04 修复）：工具行挂载 RepoBranchSelect（route 模式，组件内部
+ * switchRef 写 ?ref=），canManage 由仓库页从 detail.canManage 逐层下发 ——
+ * true 时弹层内可见新建/锁定/删除入口，false 时全部隐藏（权限预判前置）。
  */
 import { computed, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
@@ -17,6 +21,7 @@ import { useRepoRoute } from '../../composables/useRepoRoute'
 import { formatBytes } from '../../utils'
 import StateAlert from './StateAlert.vue'
 import RepoFileViewer from './RepoFileViewer.vue'
+import RepoBranchSelect from './RepoBranchSelect.vue'
 import RepoCodeDownloadMenu from './RepoCodeDownloadMenu.vue'
 import MarkdownView from './MarkdownView.vue'
 
@@ -26,6 +31,8 @@ const props = defineProps<{
   gitRef: string
   /** 仓库可见性（大写三值；Secret 时下载入口置灰 —— T12） */
   visibility?: string
+  /** 是否可管理（Master/Owner；控制分支新建/锁定/删除入口显隐） */
+  canManage?: boolean
 }>()
 
 const { t } = useI18n()
@@ -177,6 +184,12 @@ const siteUrl = computed(() =>
     <template v-else-if="entry">
       <!-- 面包屑：仓库根 → 逐级目录（可点回任意层级，push 语义） -->
       <div class="flex items-center gap-1 text-sm flex-wrap mb-3">
+        <!-- 分支/标签选择器（BUG-04）：route 模式写 ?ref=，canManage 时含管理入口 -->
+        <RepoBranchSelect
+          :model-value="gitRef"
+          :repo-path="repoPath"
+          :can-manage="canManage"
+        />
         <button
           type="button"
           class="text-primary hover:underline cursor-pointer font-medium"

@@ -25,6 +25,7 @@ import { useRepoRoute } from '../../composables/useRepoRoute'
 import { formatDuration } from '../../utils'
 import StateAlert from './StateAlert.vue'
 import BuildLogDrawer from './BuildLogDrawer.vue'
+import AiUsagePanel from './AiUsagePanel.vue'
 import ConfirmDialog from '../common/ConfirmDialog.vue'
 
 const props = defineProps<{
@@ -184,6 +185,27 @@ function openStageLog(pipelineId: string, stageId: string, pipelineName: string,
   }
   drawerOpen.value = true
 }
+
+// ---------------------------------------------------------------------------
+// AI 用量子区（REQ-06；主理人 Q2 裁决落实）
+// ---------------------------------------------------------------------------
+
+/**
+ * AI 用量端点的 pipelineId 来源（Q2）：
+ * - **已找到**：fetchBuildStatus 的 pipelinesStatus 被归一为 BuildStatus.pipelines，
+ *   每项 id 即 pipelineId（useCnbRepo.ts:buildStatus 解析 `p.id || key`）。
+ *   每条流水线各挂一个 AiUsagePanel，互不串数据。
+ * - **兜底**：构建状态解析失败（parseOk=false）或无流水线时，用 sn 占位渲染一个
+ *   面板；swagger 的 BuildLog / BuildStatusResult 无独立 pipelineId 顶层字段，
+ *   该兜底**需在真机验证**（用真实构建 sn 调 ai-audit 端点确认能否路由）。
+ *
+ * 该区块独立于构建日志主体：AI 权限缺失（repo-cnb-history:r）由 AiUsagePanel
+ * 内部 StateAlert 降级，不影响上面的 pipeline→stage 树。
+ */
+const aiPipelineIds = computed<string[]>(() => {
+  const ids = (status.value?.pipelines ?? []).map(p => p.id).filter(Boolean)
+  return ids.length > 0 ? ids : (props.sn ? [props.sn] : [])
+})
 </script>
 
 <template>
@@ -320,6 +342,36 @@ function openStageLog(pipelineId: string, stageId: string, pipelineName: string,
         </template>
       </UAlert>
     </template>
+
+    <!-- AI 用量子区（REQ-06）：每条流水线一个面板；无流水线时用 sn 占位（Q2 需真机验证） -->
+    <div
+      v-if="status && aiPipelineIds.length > 0"
+      class="mt-4 border border-default rounded-lg p-4"
+    >
+      <h3 class="text-sm font-semibold text-highlighted mb-3 flex items-center gap-2">
+        <UIcon name="i-lucide-bot" class="size-4 text-muted" />
+        {{ t('repo.build.aiUsage.title') }}
+      </h3>
+      <div class="flex flex-col gap-5">
+        <div
+          v-for="pipelineId in aiPipelineIds"
+          :key="pipelineId"
+          class="flex flex-col gap-2"
+        >
+          <div
+            v-if="status.pipelines.length > 1"
+            class="text-xs text-dimmed font-mono"
+          >
+            {{ t('repo.build.aiUsage.pipeline') }}: {{ pipelineId }}
+          </div>
+          <AiUsagePanel
+            :repo-path="repoPath"
+            :sn="sn"
+            :pipeline-id="pipelineId"
+          />
+        </div>
+      </div>
+    </div>
 
     <!-- 阶段日志抽屉（混合方案的内嵌路径） -->
     <BuildLogDrawer
