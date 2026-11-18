@@ -165,7 +165,7 @@ if [ -z "$VERSION" ] && [ -f "src-tauri/tauri.conf.json" ]; then
       process.stdout.write(String(conf.version || ""));
     ' 2>/dev/null || true)"
   else
-    VERSION="$(sed -n 's/.*"version"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' "src-tauri/tauri.conf.json" | head -1)"
+    VERSION="$(sed -n 's/.*"version"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' "src-tauri/tauri.conf.json" | sed -n '1p')"
   fi
 fi
 
@@ -204,7 +204,10 @@ fi
 
 if printf '%s\n' "$STRIPPED" | grep -Eq '^(node_modules/|dist/|dist-ssr/|src-tauri/target/|\.git/|\.env)'; then
   echo "错误：源码包中出现应为排除项的路径，打包失败：" >&2
-  printf '%s\n' "$STRIPPED" | grep -E '^(node_modules/|dist/|dist-ssr/|src-tauri/target/|\.git/|\.env)' | head -20 >&2
+  # pipefail 安全写法：错误路径里 `grep | head -20` 同样有 SIGPIPE 风险
+  # （head 读完 20 行提前退出 → grep 吃 141 → set -e 在打印完报错前就退出，
+  # 丢失 rm -f 清理）。sed -n '1,20p' 会读完整输入、不提前关管道。
+  printf '%s\n' "$STRIPPED" | sed -n '/^\(node_modules\/\|dist\/\|dist-ssr\/\|src-tauri\/target\/\|\.git\/\|\.env\)/p' | sed -n '1,20p' >&2
   rm -f "$ARCHIVE"
   exit 1
 fi
@@ -219,6 +222,11 @@ SIZE_BYTES="$(wc -c < "$ARCHIVE" | tr -d ' ')"
 echo "==> 完成：${SRC_NAME}（${SIZE_BYTES} 字节）"
 echo "    条目数：$(printf '%s\n' "$LISTING" | wc -l | tr -d ' ')"
 echo "    包内顶层内容（前 10 条）："
-printf '%s\n' "$LISTING" | head -10 | sed 's/^/      /'
+# pipefail 安全写法（rc.28 实测）：`printf | head -10 | sed` 在 pipefail 下
+# head 提前退出，printf/sed 任一吃 SIGPIPE 都会让整条管道返回 141 被
+# set -e 判死（本条就是 rc.28 release-meta pack 阶段 141 退出的直接元凶，
+# 且失败时连 10 行内容都没来得及输出）。sed -n '1,10p' 会读完整输入、
+# 不提前关管道，语义等价且无竞态。
+printf '%s\n' "$LISTING" | sed -n '1,10{s/^/      /p}'
 echo "    校验和：${SUMS_PATH}"
 sed 's/^/      /' "$SUMS_PATH"

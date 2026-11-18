@@ -849,11 +849,60 @@ v*:
                 break
               }
             }
+            # node PATH 兜底（rc.28 实测）：本阶段是独立脚本进程，install 阶段
+            # 对 PATH 的修改（含自动安装的 C:\ci-tools\node）不会带过来 ——
+            # 节点环境漂移时 install 用了兜底 node，本阶段就再也找不到 npm/node，
+            # 后续 `pnpm exec tauri` 全部失效。与 rust 兜底同一思路：先探测
+            # Get-Command node，命中不了再扫常见安装位 + install 阶段的
+            # 规范安装位置（C:\ci-tools\node\node-*，取版本号最新的一份）。
+            # 注意：探测"命令不存在"必须用 Get-Command -ErrorAction
+            # SilentlyContinue，不能用 cmd /c —— 这里是查存在性，不是验退出码。
+            if (-not (Get-Command node -ErrorAction SilentlyContinue)) {
+              function Find-NodeDirBuild {
+                param([string[]]$Roots)
+                foreach ($root in $Roots) {
+                  if (-not $root) { continue }
+                  if (Test-Path (Join-Path $root 'node.exe')) { return $root }
+                  $vers = @(Get-ChildItem $root -Directory -ErrorAction SilentlyContinue |
+                    Sort-Object Name -Descending)
+                  foreach ($v in $vers) {
+                    foreach ($cand in @($v.FullName, (Join-Path $v.FullName 'bin'))) {
+                      if (Test-Path (Join-Path $cand 'node.exe')) { return $cand }
+                    }
+                  }
+                }
+                return $null
+              }
+              $buildNodeRoots = @(
+                'C:\ci-tools\node',
+                "$env:ProgramFiles\nodejs",
+                "$env:LOCALAPPDATA\Programs\nodejs",
+                'C:\nodejs'
+              )
+              foreach ($u in @(Get-ChildItem 'C:\Users' -Directory -ErrorAction SilentlyContinue)) {
+                $buildNodeRoots += (Join-Path $u.FullName '.nvm\versions\node')
+                $buildNodeRoots += (Join-Path $u.FullName 'AppData\Roaming\nvm')
+                $buildNodeRoots += (Join-Path $u.FullName 'AppData\Local\Programs\nodejs')
+              }
+              $buildNodeDir = Find-NodeDirBuild -Roots $buildNodeRoots
+              if ($buildNodeDir) {
+                if ($env:PATH -notlike "*$buildNodeDir*") { $env:PATH = "$buildNodeDir;$env:PATH" }
+                Write-Output "[wocnb-ci] 从兜底路径启用 node: $buildNodeDir"
+              }
+              else {
+                Write-Output "[wocnb-ci] 错误：build-x64 找不到 node（install 阶段应已兜底安装），无法继续"
+                exit 1
+              }
+            }
             # pnpm 兜底：npm 全局 bin（%APPDATA%\npm）可能不在服务账户 PATH
-            # 里（rc.12 实测 install 阶段同坑）；pnpm exec tauri 依赖它
-            $npmPrefix2 = & npm config get prefix
-            if ($npmPrefix2 -and (Test-Path $npmPrefix2) -and ($env:PATH -notlike "*$npmPrefix2*")) {
-              $env:PATH = "$npmPrefix2;$env:PATH"
+            # 里（rc.12 实测 install 阶段同坑）；pnpm exec tauri 依赖它。
+            # npm 命令本身也可能不可见（rc.28 实测），直接调用会抛
+            # CommandNotFoundException 终止性错误 —— 先探存在性再调用。
+            if (Get-Command npm -ErrorAction SilentlyContinue) {
+              $npmPrefix2 = & npm config get prefix
+              if ($npmPrefix2 -and (Test-Path $npmPrefix2) -and ($env:PATH -notlike "*$npmPrefix2*")) {
+                $env:PATH = "$npmPrefix2;$env:PATH"
+              }
             }
             # pnpm 可用性实测（rc.27 教训）：本阶段是独立脚本进程，且 pnpm 命令
             # 不存在时 PS 的 CommandNotFoundException 是终止性错误 —— 直接调用

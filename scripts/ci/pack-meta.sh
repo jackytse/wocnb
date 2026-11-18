@@ -78,7 +78,11 @@ if [ -z "$VERSION" ] && [ -f "src-tauri/tauri.conf.json" ]; then
       process.stdout.write(String(conf.version || ""));
     ' 2>/dev/null || true)"
   else
-    VERSION="$(sed -n 's/.*"version"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' "src-tauri/tauri.conf.json" | head -1)"
+    # pipefail 安全写法（rc.28 实测）：`sed | head -1` 在 pipefail 下 head 提前
+    # 退出会让 sed 吃 SIGPIPE 返回 141，整段被 set -e 判死。改为先全量捕获
+    # 再用参数展开取第一行（version 字段只有一个，这里只是防御多匹配）。
+    VERSION_ALL="$(sed -n 's/.*"version"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' "src-tauri/tauri.conf.json")"
+    VERSION="${VERSION_ALL%%$'\n'*}"
   fi
 fi
 if [ -z "$VERSION" ] && [ "$IS_GIT_REPO" = "true" ]; then
@@ -127,7 +131,13 @@ WEB_PATH="${OUT_ABS}/${WEB_NAME}"
 # 包内不带顶层目录：解压即得到可静态托管的 index.html + assets/
 tar -czf "$WEB_PATH" -C "$DIST_DIR" .
 
-if ! tar -tzf "$WEB_PATH" | grep -qE '^\./index\.html$'; then
+# pipefail 安全写法（rc.28 实测）：`tar -tzf | grep -q` 在 grep 命中提前退出
+# 时 tar 会被 SIGPIPE 杀掉（退出码 141），pipefail 把整条管道判成失败，
+# `!` 又把它翻转成"未找到 index.html"—— 也就是说**包越正常越容易误报**。
+# 先把 listing 全量读进变量（tar 自然跑完），再用 herestring 喂 grep：
+# herestring 内容小、一次性写入管道缓冲区，grep 提前退出不会伤到生产者。
+WEB_LISTING="$(tar -tzf "$WEB_PATH")"
+if ! grep -qE '^\./index\.html$' <<<"$WEB_LISTING"; then
   echo "错误：Web 包中未找到 ./index.html，打包结构异常" >&2
   rm -f "$WEB_PATH"
   exit 1
