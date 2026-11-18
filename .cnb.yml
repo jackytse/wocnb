@@ -666,6 +666,90 @@ v*:
                 break
               }
             }
+            # node PATH 兜底 + 自动安装（rc.24 实测）：该节点由 Administrator 账户
+            # 运行，PATH 里虽然有 C:\Users\Administrator\.nvm\versions\node\v24.14.0\bin\，
+            # 但那个目录下没有 node.exe（nvm 的 unix 布局只放无扩展名的 node 软链，
+            # PowerShell 不会给无扩展名文件补 PATHEXT 去匹配）→ `Get-Command node`
+            # 直接失败，整条 Windows 线在 install 阶段就红，且 build-x64 全被 skip。
+            # 处理分三步，与上面 rust 兜底同一思路：
+            #   ① 探测常见安装位置（官方安装包 / nvm / fnm / scoop / choco）；
+            #   ② 都没有就从 npmmirror（失败再退 nodejs.org）拉一份 Node 22 LTS zip
+            #      解到 C:\ci-tools\node —— 只落在工具目录、不碰系统安装，可重复执行；
+            #   ③ 命中即前置进 PATH，后续 npm/pnpm 都在同一目录，无需再单独处理。
+            function Find-NodeDir {
+              param([string[]]$Roots)
+              foreach ($root in $Roots) {
+                if (-not $root) { continue }
+                if (Test-Path (Join-Path $root 'node.exe')) { return $root }
+                # nvm / fnm 的「版本根目录」：真正的 node.exe 在 vX.Y.Z 或 vX.Y.Z\bin 下
+                $vers = @(Get-ChildItem $root -Directory -ErrorAction SilentlyContinue |
+                  Sort-Object Name -Descending)
+                foreach ($v in $vers) {
+                  foreach ($cand in @($v.FullName, (Join-Path $v.FullName 'bin'))) {
+                    if (Test-Path (Join-Path $cand 'node.exe')) { return $cand }
+                  }
+                }
+              }
+              return $null
+            }
+            $nodeRoots = @(
+              "$env:ProgramFiles\nodejs",
+              "${env:ProgramFiles(x86)}\nodejs",
+              "$env:LOCALAPPDATA\Programs\nodejs",
+              'C:\ProgramData\chocolatey\bin',
+              'C:\nodejs'
+            )
+            foreach ($u in @(Get-ChildItem 'C:\Users' -Directory -ErrorAction SilentlyContinue)) {
+              $nodeRoots += (Join-Path $u.FullName '.nvm\versions\node')
+              $nodeRoots += (Join-Path $u.FullName 'AppData\Roaming\nvm')
+              $nodeRoots += (Join-Path $u.FullName 'AppData\Local\Programs\nodejs')
+              $nodeRoots += (Join-Path $u.FullName 'scoop\apps\nodejs\current')
+            }
+            $nodeDir = $null
+            if (-not (Get-Command node -ErrorAction SilentlyContinue)) {
+              $nodeDir = Find-NodeDir -Roots $nodeRoots
+            }
+            if (-not $nodeDir -and -not (Get-Command node -ErrorAction SilentlyContinue)) {
+              # 22.14.0 满足 rolldown 的 >=22.12 要求；x64 对应本节点 amd64
+              $nodeVerWanted = 'v22.14.0'
+              $installRoot = 'C:\ci-tools\node'
+              $nodeDir = Join-Path $installRoot "node-$nodeVerWanted-win-x64"
+              if (-not (Test-Path (Join-Path $nodeDir 'node.exe'))) {
+                $zip = Join-Path $env:TEMP "node-$nodeVerWanted-win-x64.zip"
+                $urls = @(
+                  "https://npmmirror.com/mirrors/node/$nodeVerWanted/node-$nodeVerWanted-win-x64.zip",
+                  "https://nodejs.org/dist/$nodeVerWanted/node-$nodeVerWanted-win-x64.zip"
+                )
+                $downloaded = $false
+                foreach ($nodeUrl in $urls) {
+                  try {
+                    [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
+                    Invoke-WebRequest -Uri $nodeUrl -OutFile $zip -UseBasicParsing -TimeoutSec 300
+                    Write-Output "[wocnb-ci] 已下载 Node: $nodeUrl"
+                    $downloaded = $true
+                    break
+                  } catch {
+                    Write-Output "[wocnb-ci] Node 下载失败（$nodeUrl）：$($_.Exception.Message)"
+                  }
+                }
+                if ($downloaded) {
+                  try {
+                    New-Item -ItemType Directory -Force -Path $installRoot | Out-Null
+                    Expand-Archive -Path $zip -DestinationPath $installRoot -Force
+                    Remove-Item $zip -Force -ErrorAction SilentlyContinue
+                  } catch {
+                    Write-Output "[wocnb-ci] Node 解压失败：$($_.Exception.Message)"
+                    $nodeDir = $null
+                  }
+                } else {
+                  $nodeDir = $null
+                }
+              }
+            }
+            if ($nodeDir -and (Test-Path (Join-Path $nodeDir 'node.exe'))) {
+              if ($env:PATH -notlike "*$nodeDir*") { $env:PATH = "$nodeDir;$env:PATH" }
+              Write-Output "[wocnb-ci] 启用 node: $nodeDir"
+            }
             # 环境预检：一次性列出缺失工具。rc.8 实测节点缺 corepack（node 可能
             # 整个没装），逐个试探会一关一关撞、来回发版浪费版本号，先报全。
             $missing = @()
@@ -676,6 +760,8 @@ v*:
               Write-Output "[wocnb-ci] 节点缺少工具: $($missing -join ', ')"
               Write-Output '[wocnb-ci] 安装指引: git https://git-scm.com ; Node.js LTS(含 npm+corepack) https://nodejs.org ; rustc https://rustup.rs (默认选项即可)'
               Write-Output '[wocnb-ci] 装完请重启 runner 进程（或重启机器），确保新 PATH 对 runner 生效'
+              # 把探测过的 node 候选路径一并打出来，下次再红时不用靠猜
+              Write-Output "[wocnb-ci] 已探测的 node 候选路径: $($nodeRoots -join ' | ')"
               Write-Output "[wocnb-ci] 当前 PATH=$env:PATH"
               exit 1
             }
