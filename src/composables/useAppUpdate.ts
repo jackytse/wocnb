@@ -9,9 +9,14 @@
  * 因此本模块的定位是「检测 + 引导」：发现新版本后提示用户，跳转到
  * CNB Release 页手动下载。等正式版固定 NSIS/MSI 产物并补齐签名后再演进。
  *
- * 检测通道：复用 Releases 数据层 fetchLatestRelease（GET
- * /{repo}/-/releases/latest，scope repo-release:r），走 useCnbAuth 统一
- * 请求链路（Rust cnb_http_request 直连，规避网关 TLS 风控）。
+ * 检测通道：复用 Releases 数据层 fetchReleases（GET /{repo}/-/releases，
+ * scope repo-release:r），走 useCnbAuth 统一请求链路（Rust cnb_http_request
+ * 直连，规避网关 TLS 风控）。
+ *
+ * ⚠️ 为什么不用 GET /{repo}/-/releases/latest：swagger 明确它「仅返回标记为
+ * latest 的**正式版本**」，而本项目 rc 阶段所有 Release 都是 prerelease=true、
+ * is_latest=false → latest 恒 404，客户端会永远显示"已是最新"（rc.30 实测
+ * 发现的功能性缺陷，详见 pickLatestRelease 注释）。
  *
  * 两个使用入口：
  * - maybeAutoCheckOnStartup()：登录后启动 4 秒静默检查（24h 节流，由
@@ -31,7 +36,7 @@ import { computed, ref } from 'vue'
 import { i18n } from '../i18n'
 import { isLoggedIn } from './useCnbAuth'
 import { pushAppNotice } from './useAppNotices'
-import { fetchLatestRelease, type ReleaseItem } from './useCnbReleases'
+import { fetchReleases, type ReleaseItem } from './useCnbReleases'
 import { sendAppSystemNotification } from './useCnbBuildWatch'
 
 // ---------------------------------------------------------------------------
@@ -54,6 +59,15 @@ export const UPDATE_CHECK_INTERVAL_MS = 24 * 60 * 60 * 1000
 
 /** localStorage 键：上次成功检查的毫秒时间戳 */
 const LAST_CHECK_STORAGE_KEY = 'wocnb.update.lastCheckAt'
+
+/**
+ * 检查更新时拉取的 Release 条数。
+ *
+ * 列表接口按 created_at 倒序，最新版本必在前几条；取 30 条足以覆盖
+ * 「连续补发多个版本」的场景，同时把响应体控制在几十 KB（每个 Release
+ * 带 body 与 assets 元数据）。
+ */
+const RELEASE_SCAN_PAGE_SIZE = 30
 
 /**
  * localStorage 键：最近一次「已通知过新版本」的版本号。
@@ -188,6 +202,40 @@ export function compareVersions(a: string, b: string): number | null {
 export function isNewerVersion(candidate: string, current: string): boolean {
   const cmp = compareVersions(candidate, current)
   return cmp !== null && cmp > 0
+}
+
+/**
+ * 从 Release 列表里挑出「最新的可用版本」。
+ *
+ * 为什么不用 GET /{repo}/-/releases/latest —— 这是踩过的坑：
+ * swagger 对该端点的描述是「获取指定仓库中最新的**正式版本**发布。仅返回
+ * 标记为最新（latest）的版本」，而本项目 rc 阶段所有 Release 都是
+ * prerelease=true、is_latest=false，于是 latest 恒 404 → 客户端（rc.30）
+ * 点「检查更新」永远显示"已是最新"，功能实际失效。
+ *
+ * 选取规则：
+ * - 跳过草稿：draft 未发布，用户在 Releases 页下载不到；
+ * - 在**可解析版本号**的条目里取版本号最大者，而不是取列表第一条 ——
+ *   补发旧版本（例如重发 rc.29）会让第一条不再是最大版本；
+ * - 整列表都不可解析（非 semver tag）时退回第一条非草稿，交给调用方
+ *   isNewerVersion 判定（解析失败一律不误报更新）。
+ */
+export function pickLatestRelease(list: ReleaseItem[] | null | undefined): ReleaseItem | null {
+  const usable = (Array.isArray(list) ? list : []).filter(item => !!item && !item.isDraft)
+  if (usable.length === 0) {
+    return null
+  }
+  let best: ReleaseItem | null = null
+  for (const item of usable) {
+    // tagName 必须是可解析的语义化版本才参与比较（tag 形如 v0.1.0-rc.31）
+    if (!parseVersion(item.tagName || '')) {
+      continue
+    }
+    if (!best || isNewerVersion(item.tagName, best.tagName)) {
+      best = item
+    }
+  }
+  return best ?? usable[0] ?? null
 }
 
 // ---------------------------------------------------------------------------
@@ -394,13 +442,18 @@ export async function checkForUpdate(opts: { currentVersion?: string } = {}): Pr
       // 本地版本号：调用方注入优先（单测），否则 Tauri getVersion
       const version = opts.currentVersion ?? await resolveCurrentVersion()
       currentVersion.value = version
-      // 服务端 404（无任何 Release）已由 fetchLatestRelease 归一为 null
-      const release = await fetchLatestRelease(APP_SOURCE_REPO)
+      // 拉 Release 列表后按版本号挑最新（不能用 latest 端点，见
+      // pickLatestRelease 注释：它只认"标记为 latest 的正式版"，rc 恒 404）
+      const releases = await fetchReleases(APP_SOURCE_REPO, {
+        page: 1,
+        pageSize: RELEASE_SCAN_PAGE_SIZE,
+      })
+      const release = pickLatestRelease(releases)
       latestRelease.value = release
       checkedAt.value = Date.now()
       writeLastCheckAt(Date.now())
       if (!release) {
-        // 仓库还没有 Release：按"已是最新"处理，latestVersion 留空
+        // 仓库还没有任何可用的 Release：按"已是最新"处理，latestVersion 留空
         status.value = 'upToDate'
         return { available: false, latestVersion: '', currentVersion: version, release: null, error: '' }
       }
