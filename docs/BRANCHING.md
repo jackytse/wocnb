@@ -72,7 +72,9 @@ git push origin v0.2.0
 
 - tag **必须打在 `main` 上的提交**（hotfix 打在其 PR 合并后的 `main` 提交上）。
 - **禁止** `git tag -f` 移动已发布的 tag 并强推：用户已下载的产物会对不上。
-- 发布失败需要重发时：先 `git push --delete origin v0.2.0` 删远端 tag，再重新打、重新推。重发时 Release 走「更新」分支（`overlying: true`），**不会清空已上传的其它平台附件**。
+- 发布失败需要重发时：**不要再删 tag 重打同一个版本号** —— CNB 平台的 tag 保护 hook 会拒绝删除已推送的 tag（`! [remote rejected] ... (hook declined)`，2026-11-18 rc.24 实测），删不掉就必然撞「tag already exists」。正确做法是**升版本号重发**（rc.N → rc.N+1 或 patch+1），把失败那一版的 Release 留作历史记录。
+- 重发时若 Release 已存在（同一版本号被「更新」路径复用），`release-update-prerelease` 会走 `overlying: true`，**不会清空已上传的其它平台附件**；但按上一条，实际上很少需要复用。
+- 非 `v*` 的 tag（如 `nightly-20260101`）**不会触发任何流水线**（`.cnb.yml` 刻意没有配 `$: tag_push`）。
 - 非 `v*` 的 tag（如 `nightly-20260101`）**不会触发任何流水线**（`.cnb.yml` 刻意没有配 `$: tag_push`）。
 
 ---
