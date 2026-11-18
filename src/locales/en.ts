@@ -1316,6 +1316,15 @@ export default {
       feedback: 'Feedback',
       license: 'License',
       licenseValue: 'MIT License',
+      // Check-for-update strings (useAppUpdate: manual entry + startup toast)
+      checkUpdate: 'Check for updates',
+      checking: 'Checking…',
+      upToDate: 'You are up to date',
+      newVersionFound: 'New version {version} available',
+      goDownload: 'Download',
+      checkFailed: 'Update check failed',
+      autoCheckHint: 'Checked automatically every 24 hours on startup',
+      autoCheckDesc: 'Current version {current}. Visit the Releases page to download.',
     },
   },
 }

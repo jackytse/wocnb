@@ -1331,6 +1331,15 @@ export default {
       feedback: '问题反馈',
       license: '许可证',
       licenseValue: 'MIT License',
+      // 检查更新（useAppUpdate：手动检查入口 + 启动静默检查 toast 文案）
+      checkUpdate: '检查更新',
+      checking: '正在检查…',
+      upToDate: '已是最新版本',
+      newVersionFound: '发现新版本 {version}',
+      goDownload: '前往下载',
+      checkFailed: '检查更新失败',
+      autoCheckHint: '启动时每 24 小时自动检查一次',
+      autoCheckDesc: '当前版本 {current}，请前往 Releases 页下载',
     },
   },
 }

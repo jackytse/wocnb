@@ -1306,6 +1306,15 @@ export default {
       feedback: '問題回饋',
       license: '授權條款',
       licenseValue: 'MIT License',
+      // 檢查更新（useAppUpdate：手動檢查入口 + 啟動靜默檢查 toast 文案）
+      checkUpdate: '檢查更新',
+      checking: '正在檢查…',
+      upToDate: '已是最新版本',
+      newVersionFound: '發現新版本 {version}',
+      goDownload: '前往下載',
+      checkFailed: '檢查更新失敗',
+      autoCheckHint: '啟動時每 24 小時自動檢查一次',
+      autoCheckDesc: '當前版本 {current}，請前往 Releases 頁下載',
     },
   },
 }

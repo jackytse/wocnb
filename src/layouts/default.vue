@@ -1,13 +1,37 @@
 <script setup lang="ts">
-import { computed, ref, watch } from 'vue'
+import { computed, onMounted, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { useRouter } from 'vue-router'
 import type { NavigationMenuItem, CommandPaletteItem } from '@nuxt/ui'
 import { useOverlayUnlockGuard } from '../composables/useOverlayUnlockGuard'
+import { maybeAutoCheckOnStartup } from '../composables/useAppUpdate'
 
 // 侧边栏导航文案随语言切换（computed 依赖 t 的响应式 locale）
 const { t } = useI18n()
 const router = useRouter()
+const toast = useToast()
+
+/**
+ * 启动自动检查更新（延迟 4 秒，避开首屏 GroupsMenu/用量等 API 请求高峰）。
+ *
+ * 前置条件与节流都在 maybeAutoCheckOnStartup 内部（Tauri 环境 + 已登录 +
+ * 距上次成功检查 ≥ 24h），不满足时返回 null 不发请求。
+ * 只有真的发现新版本才弹 toast（upToDate / 失败静默，不骚扰用户）。
+ */
+onMounted(() => {
+  window.setTimeout(() => {
+    void maybeAutoCheckOnStartup().then((result) => {
+      if (result?.available) {
+        toast.add({
+          title: t('settings.about.newVersionFound', { version: result.latestVersion }),
+          description: t('settings.about.autoCheckDesc', { current: result.currentVersion }),
+          color: 'primary',
+          duration: 8000,
+        })
+      }
+    })
+  }, 4000)
+})
 
 const open = ref(false)
 
