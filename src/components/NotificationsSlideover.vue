@@ -1,6 +1,8 @@
 <script setup lang="ts">
 /**
- * 通知面板（Home 页右上角铃铛图标点击打开）。
+ * 通知面板（侧边栏左下角铃铛 / 快捷键 N 打开）。
+ * 铃铛入口见 components/NotificationsButton.vue（2026-11-18 从首页 header
+ * 迁到用户名旁，所有页面常驻；侧边栏折叠时隐藏，快捷键仍可用）。
  *
  * 两个分区（自上而下）：
  * 1. **构建结果**：本应用自己的构建通知（useCnbBuildWatch 轮询产出）。

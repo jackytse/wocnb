@@ -13,24 +13,17 @@
 import { computed, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import type { DropdownMenuItem, TabsItem } from '@nuxt/ui'
-import { useDashboard } from '../composables/useDashboard'
 import {
   fetchCnbActivities,
   cnbUser,
   selectedGroup,
   type CnbActivityItem,
 } from '../composables/useCnbAuth'
-import { unreadBuildCount } from '../composables/useCnbBuildWatch'
-import { unreadAppNoticeCount } from '../composables/useAppNotices'
 
-const { isNotificationsSlideoverOpen } = useDashboard()
+// 通知入口（铃铛 + 未读徽标）已从本页 header 移到侧边栏左下角用户名旁
+// （components/NotificationsButton.vue）—— 通知是全局能力，不该只在首页
+// 露出。本页不再引用未读状态与面板开关。
 
-/**
- * 铃铛徽标数字：未读通知总数 = 未读构建通知（useCnbBuildWatch 轮询产出）
- * + 未读应用通知（更新检测等应用级事件）。
- * 0 时不渲染徽标（UChip 的 show 属性），避免常驻一个 0 的圆点。
- */
-const bellBadgeCount = computed(() => unreadBuildCount.value + unreadAppNoticeCount.value)
 // 页面文案随语言切换（computed 包裹保证热切换生效）
 const { t } = useI18n()
 
@@ -136,24 +129,6 @@ watch(active, (value) => {
         </template>
 
         <template #right>
-          <UTooltip :text="t('home.notifications')" :shortcuts="['N']">
-            <UButton
-              color="neutral"
-              variant="ghost"
-              square
-              @click="isNotificationsSlideoverOpen = true"
-            >
-              <UChip
-                color="error"
-                inset
-                :show="bellBadgeCount > 0"
-                :text="bellBadgeCount > 99 ? '99+' : bellBadgeCount"
-              >
-                <UIcon name="i-lucide-bell" class="size-5 shrink-0" />
-              </UChip>
-            </UButton>
-          </UTooltip>
-
           <UDropdownMenu :items="items">
             <UButton icon="i-lucide-plus" size="md" class="rounded-full" />
           </UDropdownMenu>

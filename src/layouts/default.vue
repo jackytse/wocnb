@@ -308,7 +308,14 @@ const groups = computed(() => [{
       </template>
 
       <template #footer="{ collapsed }">
-        <UserMenu :collapsed="collapsed" />
+        <!-- 通知入口 + 用户菜单并排：通知按钮在左侧头像方按钮旁常驻，
+             折叠态由组件内部隐藏（见 NotificationsButton 头注释） -->
+        <div class="flex w-full min-w-0 items-center gap-1">
+          <div class="min-w-0 flex-1">
+            <UserMenu :collapsed="collapsed" />
+          </div>
+          <NotificationsButton :collapsed="collapsed" class="shrink-0" />
+        </div>
       </template>
     </UDashboardSidebar>
 

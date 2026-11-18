@@ -20,7 +20,8 @@
  * - 产生方：useAppUpdate 在发现新版本时 pushAppNotice（未来其他应用级
  *   事件可扩展 kind 枚举接入）；
  * - 消费方：NotificationsSlideover 渲染「应用通知」分区 + 打开面板时
- *   markAppNoticesRead 清未读；首页铃铛徽标累加 unreadAppNoticeCount。
+ *   markAppNoticesRead 清未读；侧边栏底部铃铛（NotificationsButton）
+ *   徽标累加 unreadAppNoticeCount。
  */
 import { ref } from 'vue'
 
