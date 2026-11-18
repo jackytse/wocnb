@@ -22,6 +22,8 @@ import { cnbAuthMethod, cnbTokenExpiresAt, logoutCliSide } from '../composables/
 import { localePref, type LocalePref } from '../composables/useAppLocale'
 // 图片内存缓存：用户头像转 data URL 后绘制，菜单重新挂载不再闪动
 import { cachedImageSrc, ensureCnbImage } from '../composables/useCnbImages'
+// 检查更新：菜单里提供全局可达的手动入口（与「设置 · 关于」共享同一单例）
+import { useAppUpdate } from '../composables/useAppUpdate'
 
 defineProps<{
   collapsed?: boolean
@@ -32,6 +34,8 @@ const colorMode = useColorMode()
 const toast = useToast()
 // 组件内翻译函数：t 在 computed 中调用，语言切换时依赖响应式 locale 自动重算
 const { t } = useI18n()
+// 检查更新动作（单例状态与关于页共享；这里只用 checkForUpdate）
+const { checkForUpdate } = useAppUpdate()
 
 /** 显示名：昵称优先，兜底用户名；极端情况（无用户数据）显示「未登录」（随语言切换） */
 const displayName = computed(() => {
@@ -68,6 +72,46 @@ async function openExternal(url: string) {
   else {
     window.open(url, '_blank')
   }
+}
+
+/**
+ * 手动检查更新（菜单入口）。
+ *
+ * 为什么放在用户菜单里：关于页的按钮要三级点击才够得着（设置 → 关于），
+ * 而"我想看看有没有新版"是典型的随手动作，菜单里一项直达更符合预期。
+ * 与关于页/启动检查共享 useAppUpdate 的单例状态：这里查到的结果，随后
+ * 打开关于页能看到同一份状态（status / latestRelease 已回填）。
+ *
+ * 结果用 toast 呈现（菜单点击后立即收起，没有行内区域可渲染）：
+ * - 发现新版本 → 主色 toast（复用启动静默检查的同一套文案）；
+ * - 已是最新 → 中性 toast，3s 自动消失，不打扰；
+ * - 失败 → 错误色 toast 带服务端原文（403 缺 scope 时用户能直接看到）。
+ */
+async function handleCheckUpdate() {
+  const result = await checkForUpdate()
+  if (result.error) {
+    toast.add({
+      title: t('settings.about.checkFailed'),
+      description: result.error,
+      color: 'error',
+      duration: 6000,
+    })
+    return
+  }
+  if (result.available) {
+    toast.add({
+      title: t('settings.about.newVersionFound', { version: result.latestVersion }),
+      description: t('settings.about.autoCheckDesc', { current: result.currentVersion }),
+      color: 'primary',
+      duration: 8000,
+    })
+    return
+  }
+  toast.add({
+    title: t('settings.about.upToDate'),
+    color: 'neutral',
+    duration: 3000,
+  })
 }
 
 /** 退出登录：清空本地令牌与用户信息，回登录页并给出操作反馈（文案随语言切换） */
@@ -153,6 +197,13 @@ const items = computed<DropdownMenuItem[][]>(() => ([[{
   label: t('menu.settings'),
   icon: 'i-lucide-settings',
   to: '/settings'
+}, {
+  // 手动检查更新：随手可用的入口（详细状态与更新通道在「设置 · 关于」）
+  label: t('settings.about.checkUpdate'),
+  icon: 'i-lucide-refresh-cw',
+  onSelect: () => {
+    void handleCheckUpdate()
+  }
 }], [{
   label: t('menu.theme'),
   icon: 'i-lucide-palette',

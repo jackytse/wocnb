@@ -1334,6 +1334,16 @@ export default {
       checkFailed: '檢查更新失敗',
       autoCheckHint: '啟動時每 24 小時自動檢查一次',
       autoCheckDesc: '當前版本 {current}，請前往 Releases 頁下載',
+      // 更新通道（release / prerelease）與手動檢查
+      updateChannel: '更新通道',
+      channel_prerelease: '預發行版',
+      channel_release: '正式版',
+      channelDesc_prerelease: '包含預發行版本（rc），可第一時間取得新功能',
+      channelDesc_release: '僅推送正式發佈版本，更穩定',
+      checkNow: '立即檢查',
+      lastChecked: '上次檢查：{time}',
+      neverChecked: '尚未檢查過',
+      localeTag: 'zh-TW',
     },
   },
 }

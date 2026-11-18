@@ -237,6 +237,18 @@ const groups = computed(() => [{
       searchOpen.value = false
       void router.push('/explore')
     }
+  }, {
+    // 「检查更新」入口：只做跳转，**不在面板内发起请求**。
+    // R14 红线：命令面板是受控弹层，任何异步远程操作都可能让弹层在关闭
+    // 途中有未完成的副作用（useOverlayUnlockGuard 兜的就是这类残留）。
+    // 跳转到关于页后由用户点按钮 / 启动静默检查承担请求。
+    id: 'check-update',
+    label: t('settings.about.checkUpdate'),
+    icon: 'i-lucide-refresh-cw',
+    onSelect: () => {
+      searchOpen.value = false
+      void router.push('/settings/about')
+    }
   }]
 }, {
   id: 'code',

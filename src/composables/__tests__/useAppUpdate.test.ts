@@ -50,14 +50,17 @@ import type { ReleaseItem } from '../useCnbReleases'
 import {
   APP_RELEASES_PAGE_URL,
   APP_SOURCE_REPO,
+  DEFAULT_UPDATE_CHANNEL,
   checkForUpdate,
   compareVersions,
   isAutoCheckDue,
   isNewerVersion,
   maybeAutoCheckOnStartup,
+  normalizeUpdateChannel,
   parseVersion,
   pickLatestRelease,
   resetUpdateNotifyStateForTest,
+  setUpdateChannel,
   useAppUpdate,
 } from '../useAppUpdate'
 
@@ -69,6 +72,8 @@ beforeEach(() => {
   pushAppNoticeMock.mockClear()
   // 复位「已通知版本」去重状态：通知编排用例之间互不串扰
   resetUpdateNotifyStateForTest()
+  // 复位更新通道（用例可能切到 release；切回默认会顺带清检查状态）
+  setUpdateChannel(DEFAULT_UPDATE_CHANNEL)
   // 复位模块级单例（vi.resetModules 成本高，这里直接驱动状态复位：
   // 跑一次置 error 的检查即可覆盖 checking → error；available/upToDate
   // 由各用例自身的断言顺序保证独立性）
@@ -380,5 +385,134 @@ describe('pickLatestRelease', () => {
     const result = await checkForUpdate({ currentVersion: '0.1.0-rc.30' })
     expect(result.available).toBe(true)
     expect(result.latestVersion).toBe('0.1.0-rc.31')
+  })
+})
+
+// ---------------------------------------------------------------------------
+// 更新通道（release / prerelease）
+//
+// 口径：prerelease 通道参与比较的是"全部非草稿 Release"（含正式版）；
+// release 通道只看 prerelease === false 的正式版，绝不提示 rc。
+// ---------------------------------------------------------------------------
+
+describe('normalizeUpdateChannel', () => {
+  it('合法值原样返回', () => {
+    expect(normalizeUpdateChannel('release')).toBe('release')
+    expect(normalizeUpdateChannel('prerelease')).toBe('prerelease')
+  })
+
+  it('脏值 / 空值 / undefined → 默认通道（不能让非法值落盘后静默不检查）', () => {
+    expect(normalizeUpdateChannel('')).toBe(DEFAULT_UPDATE_CHANNEL)
+    expect(normalizeUpdateChannel('beta')).toBe(DEFAULT_UPDATE_CHANNEL)
+    expect(normalizeUpdateChannel(undefined)).toBe(DEFAULT_UPDATE_CHANNEL)
+    expect(normalizeUpdateChannel(null)).toBe(DEFAULT_UPDATE_CHANNEL)
+    expect(normalizeUpdateChannel(123)).toBe(DEFAULT_UPDATE_CHANNEL)
+  })
+
+  it('默认通道是 prerelease（rc 阶段若默认 release 会永远检测不到更新）', () => {
+    expect(DEFAULT_UPDATE_CHANNEL).toBe('prerelease')
+  })
+})
+
+describe('pickLatestRelease · 通道过滤', () => {
+  it('release 通道只挑正式版，跳过更新的 rc', () => {
+    const picked = pickLatestRelease([
+      rel('v0.1.0-rc.32', { isPrerelease: true }),
+      rel('v0.1.0-rc.31', { isPrerelease: true }),
+      rel('v0.1.0', { isPrerelease: false }),
+    ], 'release')
+    expect(picked?.tagName).toBe('v0.1.0')
+  })
+
+  it('release 通道下全是 rc → null（不能"降级"把 rc 当成正式版）', () => {
+    expect(pickLatestRelease([
+      rel('v0.1.0-rc.32', { isPrerelease: true }),
+      rel('v0.1.0-rc.31', { isPrerelease: true }),
+    ], 'release')).toBeNull()
+  })
+
+  it('release 通道下 isPrerelease 缺失 → 视为预发布并排除（保守优先）', () => {
+    expect(pickLatestRelease([rel('v0.1.0')], 'release')).toBeNull()
+  })
+
+  it('prerelease 通道不过滤：rc 与正式版同场竞争，正式版更大（semver）', () => {
+    const picked = pickLatestRelease([
+      rel('v0.1.0-rc.32', { isPrerelease: true }),
+      rel('v0.1.0', { isPrerelease: false }),
+    ], 'prerelease')
+    expect(picked?.tagName).toBe('v0.1.0')
+  })
+
+  it('release 通道的空结果是"无可用版本"，不会回退到草稿/rc', () => {
+    expect(pickLatestRelease([
+      rel('v0.2.0', { isDraft: true, isPrerelease: false }),
+      rel('v0.1.0-rc.32', { isPrerelease: true }),
+    ], 'release')).toBeNull()
+  })
+})
+
+describe('checkForUpdate · 通道生效', () => {
+  it('release 通道：只有 rc 可挑 → 已是最新（不提示 rc），且结果标注通道', async () => {
+    setUpdateChannel('release')
+    fetchReleasesMock.mockResolvedValue([
+      { id: '1', tagName: 'v0.1.0-rc.32', isPrerelease: true, isDraft: false },
+    ])
+    const result = await checkForUpdate({ currentVersion: '0.1.0-rc.31' })
+    expect(result.channel).toBe('release')
+    expect(result.available).toBe(false)
+    expect(result.latestVersion).toBe('')
+    expect(useAppUpdate().status.value).toBe('upToDate')
+  })
+
+  it('同一批数据切到 prerelease 通道 → 检出 rc.32', async () => {
+    setUpdateChannel('prerelease')
+    fetchReleasesMock.mockResolvedValue([
+      { id: '1', tagName: 'v0.1.0-rc.32', isPrerelease: true, isDraft: false },
+    ])
+    const result = await checkForUpdate({ currentVersion: '0.1.0-rc.31' })
+    expect(result.channel).toBe('prerelease')
+    expect(result.available).toBe(true)
+    expect(result.latestVersion).toBe('0.1.0-rc.32')
+  })
+
+  it('切通道会重置检查状态与上次结果（旧通道结论不能留在新通道界面）', async () => {
+    fetchReleasesMock.mockResolvedValue([{ id: '1', tagName: 'v0.1.0-rc.32', isPrerelease: true }])
+    await checkForUpdate({ currentVersion: '0.1.0-rc.31' })
+    const state = useAppUpdate()
+    expect(state.status.value).toBe('available')
+    expect(state.latestRelease.value?.tagName).toBe('v0.1.0-rc.32')
+
+    setUpdateChannel('release')
+    expect(state.updateChannel.value).toBe('release')
+    expect(state.status.value).toBe('idle')
+    expect(state.latestRelease.value).toBeNull()
+    expect(state.checkedAt.value).toBe(0)
+  })
+
+  it('切到相同通道是 no-op（不清结果，避免无谓的界面闪烁）', async () => {
+    fetchReleasesMock.mockResolvedValue([{ id: '1', tagName: 'v0.1.0-rc.32', isPrerelease: true }])
+    await checkForUpdate({ currentVersion: '0.1.0-rc.31' })
+    setUpdateChannel(DEFAULT_UPDATE_CHANNEL)
+    expect(useAppUpdate().status.value).toBe('available')
+  })
+})
+
+describe('通知去重按通道隔离', () => {
+  it('同一个正式版在两个通道各通知一次（切通道不因去重而静默）', async () => {
+    // 两个通道都能看到 v0.1.0（正式版在 prerelease 通道同样可见）
+    fetchReleasesMock.mockResolvedValue([
+      { id: '1', tagName: 'v0.1.0', isPrerelease: false, isDraft: false },
+    ])
+    setUpdateChannel('prerelease')
+    await checkForUpdate({ currentVersion: '0.1.0-rc.31' })
+    expect(sendAppSystemNotificationMock).toHaveBeenCalledTimes(1)
+
+    setUpdateChannel('release')
+    await checkForUpdate({ currentVersion: '0.1.0-rc.31' })
+    expect(sendAppSystemNotificationMock).toHaveBeenCalledTimes(2)
+
+    // 同通道重复检查仍然只通知一次
+    await checkForUpdate({ currentVersion: '0.1.0-rc.31' })
+    expect(sendAppSystemNotificationMock).toHaveBeenCalledTimes(2)
   })
 })

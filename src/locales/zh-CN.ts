@@ -1359,6 +1359,17 @@ export default {
       checkFailed: '检查更新失败',
       autoCheckHint: '启动时每 24 小时自动检查一次',
       autoCheckDesc: '当前版本 {current}，请前往 Releases 页下载',
+      // 更新通道（release / prerelease）与手动检查
+      updateChannel: '更新通道',
+      channel_prerelease: '预发布版',
+      channel_release: '正式版',
+      channelDesc_prerelease: '包含预发布版本（rc），可第一时间拿到新功能',
+      channelDesc_release: '仅推送正式发布版本，更稳定',
+      checkNow: '立即检查',
+      lastChecked: '上次检查：{time}',
+      neverChecked: '尚未检查过',
+      // 时间本地化标签（toLocaleString 用；缺失会让时间退回 ISO 格式）
+      localeTag: 'zh-CN',
     },
   },
 }

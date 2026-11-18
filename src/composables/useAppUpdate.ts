@@ -21,7 +21,13 @@
  * 两个使用入口：
  * - maybeAutoCheckOnStartup()：登录后启动 4 秒静默检查（24h 节流，由
  *   layouts/default.vue 触发），发现新版本由调用方弹 toast；
- * - checkForUpdate()：设置 · 关于页「检查更新」按钮，全量状态落单例 state。
+ * - checkForUpdate()：设置 · 关于页「立即检查」按钮与侧边栏用户菜单
+ *   「检查更新」动作，全量状态落单例 state。
+ *
+ * 更新通道（release / prerelease）：用户可在「设置 · 关于」选择只看正式版
+ * 还是连预发布版一起看（默认 prerelease —— 本项目 rc 阶段只有预发布版）。
+ * 通道持久化在 localStorage，参与 pickLatestRelease 过滤，并按通道分别维护
+ * 「已通知版本」去重记录。
  *
  * 通知双通道（本应用的通知约定：推送本地系统通知的同时在通知面板落记录）：
  * 发现新版本时经 sendAppSystemNotification 推一条系统通知（点击直达
@@ -59,6 +65,47 @@ export const UPDATE_CHECK_INTERVAL_MS = 24 * 60 * 60 * 1000
 
 /** localStorage 键：上次成功检查的毫秒时间戳 */
 const LAST_CHECK_STORAGE_KEY = 'wocnb.update.lastCheckAt'
+
+// ---------------------------------------------------------------------------
+// 更新通道（release / prerelease）
+// ---------------------------------------------------------------------------
+
+/**
+ * 更新通道：
+ * - `prerelease`（预发布通道）：非草稿的**全部** Release 参与挑选，含 rc 与
+ *   正式版。正式版版本号天然大于同号 rc（semver §11.4），所以这个通道不会
+ *   "被旧 rc 卡住"，是功能最全的口径；
+ * - `release`（正式版通道）：只看 `prerelease === false` 的 Release，绝不提示
+ *   rc —— 给"只想稳"的用户。
+ */
+export type UpdateChannel = 'prerelease' | 'release'
+
+/** 允许的通道枚举顺序（顺序 = 设置页下拉顺序，预发布在前且为默认） */
+export const UPDATE_CHANNEL_OPTIONS: readonly UpdateChannel[] = ['prerelease', 'release']
+
+/**
+ * 默认通道 = prerelease。
+ *
+ * 为什么不是 release：本项目长期处于 rc 阶段，全部 Release 都是
+ * `prerelease=true`；若默认 release，新安装的用户默认永远检测不到任何更新
+ * （历史上 `/releases/latest` 恒 404 就是这个坑的翻版）。等正式版成为常态后
+ * 再把默认值翻过来即可 —— 只需改这一个常量。
+ */
+export const DEFAULT_UPDATE_CHANNEL: UpdateChannel = 'prerelease'
+
+/** localStorage 键：用户选择的更新通道 */
+export const UPDATE_CHANNEL_STORAGE_KEY = 'wocnb.update.channel'
+
+/**
+ * 归一化任意输入为合法通道（脏值 / 空值 / 旧版本残留一律回落默认通道）。
+ * 与通知监控范围的 normalizeScope 同范式：**读取时**也要归一，保证界面
+ * 显示的就是检查实际在用的口径。
+ */
+export function normalizeUpdateChannel(value: unknown): UpdateChannel {
+  return UPDATE_CHANNEL_OPTIONS.includes(value as UpdateChannel)
+    ? (value as UpdateChannel)
+    : DEFAULT_UPDATE_CHANNEL
+}
 
 /**
  * 检查更新时拉取的 Release 条数。
@@ -215,13 +262,28 @@ export function isNewerVersion(candidate: string, current: string): boolean {
  *
  * 选取规则：
  * - 跳过草稿：draft 未发布，用户在 Releases 页下载不到；
+ * - 按**更新通道**过滤：release 通道只留 `prerelease === false` 的正式版
+ *   （`undefined` 也排除 —— 通道字段缺失时保守当作预发布，绝不把 rc 当成
+ *   正式版推给"只要稳定版"的用户）；prerelease 通道不过滤；
  * - 在**可解析版本号**的条目里取版本号最大者，而不是取列表第一条 ——
  *   补发旧版本（例如重发 rc.29）会让第一条不再是最大版本；
  * - 整列表都不可解析（非 semver tag）时退回第一条非草稿，交给调用方
- *   isNewerVersion 判定（解析失败一律不误报更新）。
+ *   isNewerVersion 判定（解析失败一律不误报更新）。注意这里同样**在通道
+ *   过滤之后**取，否则 release 通道会漏出预发布版。
+ *
+ * @param list    Release 列表（fetchReleases 归一化结果）
+ * @param channel 更新通道（默认 prerelease，与 DEFAULT_UPDATE_CHANNEL 一致；
+ *                显式默认值让老调用点与单测语义不变）
  */
-export function pickLatestRelease(list: ReleaseItem[] | null | undefined): ReleaseItem | null {
-  const usable = (Array.isArray(list) ? list : []).filter(item => !!item && !item.isDraft)
+export function pickLatestRelease(
+  list: ReleaseItem[] | null | undefined,
+  channel: UpdateChannel = DEFAULT_UPDATE_CHANNEL,
+): ReleaseItem | null {
+  const usable = (Array.isArray(list) ? list : []).filter(item =>
+    !!item
+    && !item.isDraft
+    // release 通道：必须是明确的"非预发布"；字段缺失按预发布处理（保守）
+    && (channel === 'release' ? item.isPrerelease === false : true))
   if (usable.length === 0) {
     return null
   }
@@ -255,6 +317,8 @@ export interface UpdateCheckResult {
   currentVersion: string
   /** 最新 Release 归一化条目（服务端 404 = 无任何 Release 时为 null） */
   release: ReleaseItem | null
+  /** 本次检查使用的更新通道（调用方据此提示"通过哪个通道查的"） */
+  channel: UpdateChannel
   /** 检查失败时的用户可读错误信息（成功为空串） */
   error: string
 }
@@ -268,8 +332,79 @@ const lastError = ref('')
 /** 上次完成检查的时间戳（0 = 从未检查；只统计**成功**检查） */
 const checkedAt = ref(0)
 
+/**
+ * 当前更新通道（模块级单例，关于页下拉直接绑它）。
+ *
+ * 初值取默认通道而不是先读 localStorage：模块加载时机可能早于 WebView 的
+ * 存储就绪（也早于 vitest 里 localStorage 的存在），真正的落盘值由
+ * ensureChannelLoaded() 在首次 useAppUpdate()/检查时同步补齐。
+ */
+const updateChannel = ref<UpdateChannel>(DEFAULT_UPDATE_CHANNEL)
+/** 落盘通道是否已读入内存（避免每次读 localStorage） */
+let channelLoaded = false
+
+/** 首次访问时从 localStorage 读一次用户选择（脏值经归一回落默认） */
+function ensureChannelLoaded(): void {
+  if (channelLoaded) {
+    return
+  }
+  channelLoaded = true
+  try {
+    const raw = typeof localStorage !== 'undefined'
+      ? localStorage.getItem(UPDATE_CHANNEL_STORAGE_KEY)
+      : null
+    if (typeof raw === 'string' && raw) {
+      updateChannel.value = normalizeUpdateChannel(raw)
+    }
+  }
+  catch {
+    // 容器无 localStorage / 隐私模式禁读：保持默认通道，功能照常
+  }
+}
+
+/**
+ * 切换更新通道（设置 · 关于页下拉调用）。
+ *
+ * 副作用（刻意为之，三处都必要）：
+ * 1. **重置检查状态**为 idle 并清空上次结果 —— 旧结果属于旧通道，继续展示
+ *    "发现新版本 rc.32" 会让刚切到正式版通道的用户误以为还会收到 rc；
+ * 2. **清空节流时间戳**（内存 + localStorage）—— 通道变了就该立刻重查一次，
+ *    否则用户切完通道要再等 24h 才被自动检查覆盖；
+ * 3. **不动通知去重**：去重记录按通道分键存储（见 readLastNotifiedVersion），
+ *    切走再切回来仍是同一通道，不该重复打扰同一版本。
+ */
+export function setUpdateChannel(channel: UpdateChannel): void {
+  const next = normalizeUpdateChannel(channel)
+  if (next === updateChannel.value) {
+    return
+  }
+  updateChannel.value = next
+  channelLoaded = true
+  try {
+    if (typeof localStorage !== 'undefined') {
+      localStorage.setItem(UPDATE_CHANNEL_STORAGE_KEY, next)
+    }
+  }
+  catch {
+    // 写失败只影响下次启动能否记住选择，不影响本次会话内生效
+  }
+  status.value = 'idle'
+  latestRelease.value = null
+  lastError.value = ''
+  checkedAt.value = 0
+  writeLastCheckAt(0)
+}
+
 /** 进行中的检查（防抖：连点「检查更新」按钮只发一次请求） */
 let inFlight: Promise<UpdateCheckResult> | null = null
+/**
+ * 进行中检查所用的通道。
+ *
+ * 为什么必须记下来：防抖只能复用**同一通道**的请求。用户在请求飞行途中
+ * 切了通道，再点「立即检查」必须真的按新通道查一次 —— 若仍复用旧 Promise，
+ * 界面会显示旧通道的结论（例如"已是最新"，但新通道其实没查过）。
+ */
+let inFlightChannel: UpdateChannel | null = null
 
 /**
  * 读取本地当前版本号（Tauri 环境 getVersion；浏览器 dev 返回空串）。
@@ -332,32 +467,46 @@ function writeLastCheckAt(ts: number): void {
  * - vitest node 环境没有 localStorage（读写都会走 catch 分支），若每次
  *   都直接读 localStorage，去重在测试里永远不生效、无法验证；
  *   memo 让"写过就能读到"在两个环境里行为一致。
+ *
+ * 为什么按通道分键：预发布通道会先通知 rc.32，用户随后切到正式版通道
+ * 又会发现 0.1.0（版本号不同，本不会互相覆盖）。但两个通道可能挑到
+ * **同一个 tag**（例如正式版 0.1.0 在两个通道都可见），若共用一个键，
+ * 后一个通道就会因为"已通知过这个版本"而静默 —— 用户会觉得切通道没用。
+ * 分键后每个通道各自维护自己的去重记录，语义清晰且可预期。
  */
-let lastNotifiedVersionMemo: string | null = null
+const lastNotifiedByChannel = new Map<UpdateChannel, string>()
 
-/** 读取「已通知过的最新版本」（无记录/脏数据 → 空串；memo 优先） */
-function readLastNotifiedVersion(): string {
-  if (lastNotifiedVersionMemo !== null) {
-    return lastNotifiedVersionMemo
-  }
-  try {
-    const raw = typeof localStorage !== 'undefined'
-      ? localStorage.getItem(LAST_NOTIFIED_VERSION_KEY)
-      : null
-    lastNotifiedVersionMemo = typeof raw === 'string' ? raw : ''
-  }
-  catch {
-    lastNotifiedVersionMemo = ''
-  }
-  return lastNotifiedVersionMemo
+/** 去重记录的存储键（按通道隔离） */
+function notifiedStorageKey(channel: UpdateChannel): string {
+  return `${LAST_NOTIFIED_VERSION_KEY}.${channel}`
 }
 
-/** 记录「已通知过的最新版本」（写 memo + 尽力持久化，写失败可接受） */
-function writeLastNotifiedVersion(version: string): void {
-  lastNotifiedVersionMemo = version
+/** 读取指定通道「已通知过的最新版本」（无记录/脏数据 → 空串；memo 优先） */
+function readLastNotifiedVersion(channel: UpdateChannel): string {
+  const memo = lastNotifiedByChannel.get(channel)
+  if (memo !== undefined) {
+    return memo
+  }
+  let value = ''
+  try {
+    const raw = typeof localStorage !== 'undefined'
+      ? localStorage.getItem(notifiedStorageKey(channel))
+      : null
+    value = typeof raw === 'string' ? raw : ''
+  }
+  catch {
+    value = ''
+  }
+  lastNotifiedByChannel.set(channel, value)
+  return value
+}
+
+/** 记录指定通道「已通知过的最新版本」（写 memo + 尽力持久化，写失败可接受） */
+function writeLastNotifiedVersion(channel: UpdateChannel, version: string): void {
+  lastNotifiedByChannel.set(channel, version)
   try {
     if (typeof localStorage !== 'undefined') {
-      localStorage.setItem(LAST_NOTIFIED_VERSION_KEY, version)
+      localStorage.setItem(notifiedStorageKey(channel), version)
     }
   }
   catch {
@@ -371,10 +520,12 @@ function writeLastNotifiedVersion(version: string): void {
  * 会被去重逻辑吞掉，无法验证通知行为。
  */
 export function resetUpdateNotifyStateForTest(): void {
-  lastNotifiedVersionMemo = null
+  lastNotifiedByChannel.clear()
   try {
     if (typeof localStorage !== 'undefined') {
-      localStorage.removeItem(LAST_NOTIFIED_VERSION_KEY)
+      for (const channel of UPDATE_CHANNEL_OPTIONS) {
+        localStorage.removeItem(notifiedStorageKey(channel))
+      }
     }
   }
   catch {
@@ -395,6 +546,7 @@ export function resetUpdateNotifyStateForTest(): void {
  * # 去重与副作用边界
  *
  * - 同版本已通知过 → 直接 return（检查本身照常执行，关于页状态照常更新）；
+ *   去重记录**按通道**存储（同一 tag 在两个通道都可见时各自通知一次）；
  * - 系统通知 fire-and-forget：发送失败（浏览器 dev / 权限未授权）不影响
  *   主流程——应用内记录与 toast 是兜底通道；
  * - 记录先于"发送结果"落盘：即使系统通知没发出去（权限缺失），面板里
@@ -406,12 +558,12 @@ function maybeNotifyUpdateAvailable(result: UpdateCheckResult): void {
   if (!result.available || !result.latestVersion) {
     return
   }
-  // 同一版本只通知一次：rc 阶段版本更新频繁但同一版本会伴随多次检查
-  // （启动静默 + 手动），不去重会反复打扰
-  if (readLastNotifiedVersion() === result.latestVersion) {
+  // 同一通道内同一版本只通知一次：rc 阶段版本更新频繁但同一版本会伴随多次
+  // 检查（启动静默 + 手动），不去重会反复打扰
+  if (readLastNotifiedVersion(result.channel) === result.latestVersion) {
     return
   }
-  writeLastNotifiedVersion(result.latestVersion)
+  writeLastNotifiedVersion(result.channel, result.latestVersion)
 
   // 文案与载荷：标题带新版本号（通知中心里一眼可辨），正文带当前版本
   const title = i18n.global.t('appUpdate.notify.title', { version: result.latestVersion })
@@ -427,61 +579,81 @@ function maybeNotifyUpdateAvailable(result: UpdateCheckResult): void {
  *
  * - 失败不抛异常：结果以 error 字段带回（静默场景调用方忽略即可，
  *   手动场景渲染到关于页），避免 toast 弹两层；
- * - 并发防抖：上一次检查未完成时直接复用其 Promise；
+ * - 并发防抖：**同一通道**上一次检查未完成时直接复用其 Promise；
  * - 任何一次**成功**检查（含 404 无 Release）都记录 checkedAt 与
- *   localStorage 时间戳 —— 404 属正常业务态，不该导致反复重试。
+ *   localStorage 时间戳 —— 404 属正常业务态，不该导致反复重试；
+ * - 检查期间通道被切换 → 本次结果整体丢弃（不写状态、不通知），避免旧通道
+ *   的结论污染新通道的界面。
  */
 export async function checkForUpdate(opts: { currentVersion?: string } = {}): Promise<UpdateCheckResult> {
-  if (inFlight) {
+  ensureChannelLoaded()
+  const channel = updateChannel.value
+  // 同通道请求在飞 → 复用（连点按钮只发一次）；跨通道 → 另起一次检查
+  if (inFlight && inFlightChannel === channel) {
     return inFlight
   }
   status.value = 'checking'
   lastError.value = ''
-  inFlight = (async (): Promise<UpdateCheckResult> => {
+  const task = (async (): Promise<UpdateCheckResult> => {
     try {
       // 本地版本号：调用方注入优先（单测），否则 Tauri getVersion
       const version = opts.currentVersion ?? await resolveCurrentVersion()
       currentVersion.value = version
-      // 拉 Release 列表后按版本号挑最新（不能用 latest 端点，见
+      // 拉 Release 列表后按版本号 + 通道挑最新（不能用 latest 端点，见
       // pickLatestRelease 注释：它只认"标记为 latest 的正式版"，rc 恒 404）
       const releases = await fetchReleases(APP_SOURCE_REPO, {
         page: 1,
         pageSize: RELEASE_SCAN_PAGE_SIZE,
       })
-      const release = pickLatestRelease(releases)
+      // 等待期间用户切了通道：这次结果已无意义（当前界面属于新通道），
+      // 直接以"无更新"的形式返回且不写任何共享状态
+      if (updateChannel.value !== channel) {
+        return { available: false, latestVersion: '', currentVersion: version, release: null, channel, error: '' }
+      }
+      const release = pickLatestRelease(releases, channel)
       latestRelease.value = release
       checkedAt.value = Date.now()
       writeLastCheckAt(Date.now())
       if (!release) {
-        // 仓库还没有任何可用的 Release：按"已是最新"处理，latestVersion 留空
+        // 该通道下没有任何可用 Release：按"已是最新"处理，latestVersion 留空
         status.value = 'upToDate'
-        return { available: false, latestVersion: '', currentVersion: version, release: null, error: '' }
+        return { available: false, latestVersion: '', currentVersion: version, release: null, channel, error: '' }
       }
       // tag 去前导 v 后比较（tag 形如 v0.1.0-rc.25，本地版本 0.1.0-rc.25）
       const latestVersion = release.tagName.replace(/^v/, '')
       const available = !!version && isNewerVersion(latestVersion, version)
       status.value = available ? 'available' : 'upToDate'
       if (available) {
-        // 发现新版本：推系统通知 + 落通知面板记录（内部按版本去重）。
+        // 发现新版本：推系统通知 + 落通知面板记录（内部按通道+版本去重）。
         // 同步调用、内部无 await 前的分支（发送为 fire-and-forget），
         // checkForUpdate 返回时通知编排已完成，测试断言时序确定
-        maybeNotifyUpdateAvailable({ available, latestVersion, currentVersion: version, release, error: '' })
+        maybeNotifyUpdateAvailable({ available, latestVersion, currentVersion: version, release, channel, error: '' })
       }
-      return { available, latestVersion, currentVersion: version, release, error: '' }
+      return { available, latestVersion, currentVersion: version, release, channel, error: '' }
     }
     catch (err) {
       // 401 已由全局拦截器登出（这里只负责把错误落到状态里）；
       // 403（令牌缺 repo-release:r）/ 网络异常 → 关于页展示原始信息
       const message = err instanceof Error ? err.message : String(err)
-      lastError.value = message
-      status.value = 'error'
-      return { available: false, latestVersion: '', currentVersion: currentVersion.value, release: null, error: message }
-    }
-    finally {
-      inFlight = null
+      // 通道已变则不把旧通道的失败写进新通道界面
+      if (updateChannel.value === channel) {
+        lastError.value = message
+        status.value = 'error'
+      }
+      return { available: false, latestVersion: '', currentVersion: currentVersion.value, release: null, channel, error: message }
     }
   })()
-  return inFlight
+  inFlight = task
+  inFlightChannel = channel
+  // 只清理自己那次请求的防抖槽位：跨通道并发时旧请求收尾不能把新请求的
+  // 槽位抹掉（否则用户连点会打出第二发请求）
+  void task.finally(() => {
+    if (inFlight === task) {
+      inFlight = null
+      inFlightChannel = null
+    }
+  })
+  return task
 }
 
 /**
@@ -518,6 +690,8 @@ export async function maybeAutoCheckOnStartup(opts: { currentVersion?: string, n
  * 关于页与启动链路共用，保证两处看到同一份检查结果。
  */
 export function useAppUpdate() {
+  // 首次拿到 composable 时把落盘通道读进内存（同步，界面首帧即显示正确值）
+  ensureChannelLoaded()
   return {
     /** 本地当前版本号（检查后回填） */
     currentVersion,
@@ -529,6 +703,10 @@ export function useAppUpdate() {
     lastError,
     /** 上次成功检查时间戳（0 = 从未） */
     checkedAt,
+    /** 当前更新通道（只读展示用，写入请走 setUpdateChannel） */
+    updateChannel,
+    /** 切换更新通道（写 localStorage + 重置检查状态，见函数注释） */
+    setUpdateChannel,
     /** 是否有新版本（derived：status === 'available'） */
     updateAvailable: computed(() => status.value === 'available'),
     checkForUpdate,

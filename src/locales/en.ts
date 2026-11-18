@@ -1344,6 +1344,16 @@ export default {
       checkFailed: 'Update check failed',
       autoCheckHint: 'Checked automatically every 24 hours on startup',
       autoCheckDesc: 'Current version {current}. Visit the Releases page to download.',
+      // Update channel (release / prerelease) + manual check
+      updateChannel: 'Update channel',
+      channel_prerelease: 'Pre-release',
+      channel_release: 'Stable',
+      channelDesc_prerelease: 'Includes pre-releases (rc): get new features first',
+      channelDesc_release: 'Stable releases only: more predictable',
+      checkNow: 'Check now',
+      lastChecked: 'Last checked: {time}',
+      neverChecked: 'Never checked yet',
+      localeTag: 'en-US',
     },
   },
 }
