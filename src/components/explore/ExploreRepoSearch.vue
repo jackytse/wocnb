@@ -118,7 +118,10 @@ function openRepo(path: string) {
       />
     </div>
 
-    <!-- 搜索行：关键词全宽（回车立即搜索，绕过 300ms 防抖等待） -->
+    <!-- 搜索行：关键词全宽（回车立即搜索，绕过 300ms 防抖等待）。
+         autofocus：弹窗打开即挂载本组件，挂载后自动聚焦输入框（用户要求
+         "弹窗激活后文本框获取焦点"）；略微延迟等待 UModal 的 portal 完成
+         渲染，避免焦点被 reka-ui 的初始聚焦抢占 -->
     <UInput
       v-model="keyword"
       variant="soft"
@@ -126,6 +129,8 @@ function openRepo(path: string) {
       :placeholder="t('explore.search.placeholder')"
       class="w-full"
       autocomplete="off"
+      autofocus
+      :autofocus-delay="60"
       @keydown.enter="runSearch"
     />
 

@@ -27,17 +27,22 @@ const initialQuery = computed(() =>
 const searchOpen = ref(!!initialQuery.value)
 
 /**
- * Enter 键快捷打开搜索弹窗（入口按钮右侧徽标承诺的交互）。
- * 输入框/文本域聚焦时不接管 —— 让表单里的回车保持原语义。
+ * 斜线（/）快捷打开搜索弹窗（入口按钮右侧徽标承诺的交互）。
+ * 输入框/文本域聚焦时不接管 —— 正在输入的"/"保持原语义（比如在
+ * 排行榜筛选、搜索框里打字不会误触弹窗）。
+ * 为什么不用 Enter：Enter 语义太泛（页面任意位置回车都弹窗，容易误触），
+ * "/" 是代码搜索的通用惯例（GitHub / GitLab / Jira 同款），误触率低。
  */
 function onGlobalKeydown(e: KeyboardEvent) {
-  if (e.key !== 'Enter') {
+  if (e.key !== '/') {
     return
   }
   const target = e.target as HTMLElement | null
   if (target && (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA' || target.isContentEditable)) {
     return
   }
+  // preventDefault：拦下浏览器默认行为（Firefox 的快速查找），
+  // 避免按 / 时同时弹出浏览器的查找栏
   e.preventDefault()
   searchOpen.value = true
 }
@@ -59,7 +64,7 @@ onBeforeUnmount(() => window.removeEventListener('keydown', onGlobalKeydown))
     <template #body>
       <div class="flex flex-col gap-4">
         <!-- 搜索入口在文档流中：仿真输入框样式（全宽、placeholder 文案、
-             右侧 ⌘K 风格的 Enter 提示），点击打开搜索弹窗 —— 比孤立按钮
+             右侧 kbd 风格的斜线提示），点击打开搜索弹窗 —— 比孤立按钮
              更贴合"搜索"的视觉预期 -->
         <button
           type="button"
@@ -74,7 +79,7 @@ onBeforeUnmount(() => window.removeEventListener('keydown', onGlobalKeydown))
             variant="subtle"
             size="sm"
             class="font-mono shrink-0"
-            label="Enter"
+            label="/"
           />
         </button>
 
