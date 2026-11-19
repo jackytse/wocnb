@@ -1149,6 +1149,86 @@ v*:
               }
             }
             Write-Output "[wocnb-ci] NSIS 路径: $nsisPath"
+            # —— 64 位 makensis 装配（2026-11-19，Windows 热更新链路的解锁点）——
+            #
+            # 背景：tauri zip 的 makensis 是 32 位（Bin\makensis.exe + 根目录
+            # 2560 字节启动器桩），而 Windows Server 容器禁用 WoW64，32 位进程
+            # 一律 0xC0000135（rc.17~rc.19 三轮实测，依赖补齐也无效）→ rc 阶段
+            # 只能 --no-bundle 出裸 exe → 无签名产物 → Windows 进不了 updater
+            # 清单（热更新长期缺席，rc.36~rc.38 的 latest.json 只有 darwin 条目）。
+            #
+            # 解法：MSYS2 的 mingw-w64-x86_64-nsis 3.13 包 —— 与 tauri zip **同
+            # 版本** 3.13；纯静态链接、零运行时依赖（官方包信息确认）；x64
+            # host 进程在容器里正常跑。只替换编译器二进制，Stubs/Include/
+            # Plugins 资源全部保留 tauri zip 的 3.13 原版（版本严格一致）。
+            #
+            # 为什么替换是安全的：tauri bundler（cli 2.12.4 内嵌）对 NSIS 缓存
+            # 目录只校验 NSIS.exe 与 nsis_tauri_utils.dll 的哈希，**不校验
+            # makensis.exe**；且调用路径就是 <NSIS 目录>\makensis.exe（源码
+            # L706），与我们的落点吻合。Stubs/Include 在编译器同目录，资源
+            # 加载无需任何额外参数。
+            #
+            # 下载源三选一（TUNA / 中科大 / 官方，均为 msys2 仓库直链）；包
+            # 落盘持久缓存（解包好的 mingw64\bin\makensis.exe 存在即跳过）。
+            $nsis64Dir = Join-Path $toolsPath 'NSIS64'
+            $pkg64File = Join-Path $nsis64Dir 'mingw-w64-x86_64-nsis-3.13-2-any.pkg.tar.zst'
+            $exe64File = Join-Path (Join-Path $nsis64Dir 'mingw64') 'bin\makensis.exe'
+            if (-not ((Test-Path $exe64File) -and (Get-Item $exe64File).Length -gt 500KB)) {
+              New-Item -ItemType Directory -Force -Path $nsis64Dir | Out-Null
+              $pkg64Ok = $false
+              foreach ($u in @(
+                'https://mirrors.tuna.tsinghua.edu.cn/msys2/mingw/mingw64/mingw-w64-x86_64-nsis-3.13-2-any.pkg.tar.zst',
+                'https://mirrors.ustc.edu.cn/msys2/mingw/mingw64/mingw-w64-x86_64-nsis-3.13-2-any.pkg.tar.zst',
+                'https://repo.msys2.org/mingw/mingw64/mingw-w64-x86_64-nsis-3.13-2-any.pkg.tar.zst'
+              )) {
+                Write-Output "[wocnb-ci] 下载 64 位 NSIS 编译器 (MSYS2): $u"
+                curl.exe -sSL --retry 2 --connect-timeout 15 --max-time 300 -o $pkg64File $u
+                if ($LASTEXITCODE -eq 0 -and (Test-Path $pkg64File) -and (Get-Item $pkg64File).Length -gt 500KB) { $pkg64Ok = $true; break }
+                Write-Output '[wocnb-ci]   该源失败，换下一个'
+              }
+              if ($pkg64Ok) {
+                # zstd 解包：优先 Windows 内置 tar.exe（libarchive，新版本支持
+                # zstd 直解）；不支持时下载 zstd.exe 解成 .tar 再二次解包。
+                Remove-Item (Join-Path $nsis64Dir 'mingw64') -Recurse -Force -ErrorAction SilentlyContinue
+                tar.exe -xf $pkg64File -C $nsis64Dir 2>$null
+                if (-not (Test-Path $exe64File)) {
+                  Write-Output '[wocnb-ci] 内置 tar 不支持 zstd，改走 zstd.exe 兜底解包'
+                  $zstdZip = Join-Path $nsis64Dir 'zstd-win64.zip'
+                  foreach ($u in @(
+                    'https://ghfast.top/https://github.com/facebook/zstd/releases/download/v1.5.6/zstd-v1.5.6-win64.zip',
+                    'https://github.com/facebook/zstd/releases/download/v1.5.6/zstd-v1.5.6-win64.zip'
+                  )) {
+                    curl.exe -sSL --retry 2 --connect-timeout 15 -o $zstdZip $u
+                    if ($LASTEXITCODE -eq 0 -and (Test-Path $zstdZip) -and (Get-Item $zstdZip).Length -gt 100KB) { break }
+                  }
+                  if (Test-Path $zstdZip) {
+                    $zstdDir = Join-Path $nsis64Dir 'zstd'
+                    Expand-Archive -Path $zstdZip -DestinationPath $zstdDir -Force
+                    $zstdExe = Get-ChildItem $zstdDir -Filter 'zstd.exe' -Recurse -ErrorAction SilentlyContinue | Select-Object -First 1
+                    if ($zstdExe) {
+                      $tarOut = Join-Path $nsis64Dir 'nsis-pkg.tar'
+                      & $zstdExe.FullName -d -f -q -o $tarOut $pkg64File
+                      if ($LASTEXITCODE -eq 0) {
+                        tar.exe -xf $tarOut -C $nsis64Dir
+                      }
+                    }
+                  }
+                }
+              }
+              else {
+                Write-Output '[wocnb-ci] 警告: 64 位 NSIS 编译器全部下载源失败，维持 32 位链路（打包走降级）'
+              }
+            }
+            # 装配：64 位 makensis.exe 覆盖 NSIS 根目录的 32 位启动器桩。
+            # 门槛「>500KB」防坏文件顶掉缓存里的可用产物（32 位真编译器也
+            # 469KB，桩才 2560B —— 装配目标是桩的位置，坏文件不会误伤 Bin\）。
+            if ((Test-Path $exe64File) -and (Get-Item $exe64File).Length -gt 500KB) {
+              Copy-Item $exe64File $rootExe -Force
+              Write-Output ("[wocnb-ci] 64 位 makensis 装配完成（" + (Get-Item $exe64File).Length + " 字节，进程架构 x64）")
+            }
+            else {
+              Write-Output '[wocnb-ci] 64 位 makensis 未就绪，makensis 试跑按 32 位链路验证'
+            }
             # makensis.exe 是 32 位老程序，导入表里有 MSVCP60.dll（VC6 运行库）
             # 等 10 个系统 DLL；精简/容器化 Windows 镜像可能缺 32 位版本，
             # 表现为启动即 0xC0000135（STATUS_DLL_NOT_FOUND，rc.17/rc.18 实测）。
@@ -1203,14 +1283,20 @@ v*:
             #   3) 预发布版且 makensis 不可用 → --no-bundle 只出裸 exe：
             #      WiX 拒绝非纯数字的预发布标识（0.1.0-rc.N 里的 rc 会被拒），
             #      所以 rc 阶段先用绿色链路 + 可执行产物保证链路验证完整。
+            #
+            # ⚠️ nsis/msi 分支必须带 --config src-tauri/tauri.updater.conf.json：
+            # 该文件开 createUpdaterArtifacts=true（主配置里刻意关着，避免本地
+            # 无私钥构建报错）。不带它就不会生成 .sig 签名文件 —— Windows
+            # 永远进不了 updater 清单（2026-11-19 排查时发现的隐藏前提，
+            # 与 macOS build-arm64 的口径对齐）。
             $appVer = (Get-Content 'src-tauri\tauri.conf.json' -Raw | ConvertFrom-Json).version
             $isPreRelease = ("$appVer" -match '-')
             if ($nsisOk) {
-              Write-Output '[wocnb-ci] 使用 NSIS 打包'
-              pnpm exec tauri build --target x86_64-pc-windows-msvc --bundles nsis
+              Write-Output '[wocnb-ci] 使用 NSIS 打包（含热更新产物签名）'
+              pnpm exec tauri build --target x86_64-pc-windows-msvc --bundles nsis --config src-tauri/tauri.updater.conf.json
             } elseif (-not $isPreRelease) {
               Write-Output '[wocnb-ci] 警告: makensis 不可用，正式版改用 MSI(WiX) 打包'
-              pnpm exec tauri build --target x86_64-pc-windows-msvc --bundles msi
+              pnpm exec tauri build --target x86_64-pc-windows-msvc --bundles msi --config src-tauri/tauri.updater.conf.json
             } else {
               Write-Output '[wocnb-ci] 警告: makensis 不可用且当前为预发布版（WiX 不支持非数字预发布标识），只产出裸 exe'
               pnpm exec tauri build --target x86_64-pc-windows-msvc --no-bundle
@@ -1241,4 +1327,14 @@ v*:
           script: |
             $ErrorActionPreference = 'Stop'
             powershell -NoProfile -File scripts/ci/release-upload.ps1 -Dir ./release
+            if ($LASTEXITCODE) { exit $LASTEXITCODE }
+    #
+        # 热更新清单合并（Windows 侧条目）：把 windows-x64（NSIS setup.exe +
+        # .sig）写进 updater-manifest Release 的 latest.json（与 macOS 的
+        # publish-manifest 对称合并，机制见 scripts/ci/publish-manifest-windows.ps1
+        # 头注释）。签名缺失（三级降级到裸 exe）时脚本正常退出不发布。
+        - name: publish-manifest
+          script: |
+            $ErrorActionPreference = 'Stop'
+            powershell -NoProfile -File scripts/ci/publish-manifest-windows.ps1 -Dir ./release
             if ($LASTEXITCODE) { exit $LASTEXITCODE }

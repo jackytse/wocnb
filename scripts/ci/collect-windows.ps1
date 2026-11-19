@@ -122,6 +122,25 @@ try {
     $size = (Get-Item $destPath).Length
     Write-Host "==> 收集安装包：$($srcFile.FullName)"
     Write-Host "    -> $destPath（$size 字节）"
+
+    # ------------------------------------------------------------------
+    # 4) 收集热更新签名（NSIS + createUpdaterArtifacts 时产生 *.sig）
+    #    Windows 热更新链路（2026-11-19）：setup.exe 进 updater 清单的
+    #    windows-x64 条目必须带 .sig（minisign 签名），缺失时客户端验签
+    #    必失败。裸 exe / msi 路径没有 sig（不参与热更新），静默跳过。
+    # ------------------------------------------------------------------
+    if ($srcFile.Directory.Name -eq 'nsis') {
+        $sigFile = Join-Path $srcFile.FullName ($srcFile.Name + '.sig')
+        if (Test-Path $sigFile) {
+            $destSig = Join-Path $outPath "$destName.sig"
+            Copy-Item -Path $sigFile -Destination $destSig -Force
+            Write-Host "==> 收集热更新签名：$sigFile"
+            Write-Host "    -> $destSig（$((Get-Item $destSig).Length) 字节）"
+        }
+        else {
+            Write-Host "警告：NSIS 签名缺失（$sigFile）——热更新清单将缺 windows 条目" -ForegroundColor Yellow
+        }
+    }
 }
 finally {
     Pop-Location

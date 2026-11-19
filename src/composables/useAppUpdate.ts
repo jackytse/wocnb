@@ -11,10 +11,15 @@
  *   tauri.conf.json plugins.updater），更新包由 CI 打包时签名、客户端内置
  *   公钥验签。
  *
- * 为什么 Windows 不参与热更新：更新器必须依赖 NSIS/MSI 安装器产物替换，
- * 而当前 Windows 节点 makensis 起不来（32 位程序跑不起来，rc 版只能出
- * 裸 exe，见 .cnb.yml 注释）→ Windows check() 缺平台条目会失败，
- * installUpdate 捕获后降级为「前往 Releases 手动下载」。
+ * 为什么 Windows 历史上不参与热更新（2026-11-19 已解锁）：
+ * 更新器必须依赖 NSIS/MSI 安装器产物替换，而 Windows 构建节点曾因
+ * **32 位 makensis 在容器里起不来**（Windows Server 容器禁用 WoW64，
+ * 0xC0000135）只能出裸 exe → 无签名产物 → 进不了 updater 清单。
+ * 现已改用 MSYS2 的 64 位 makensis（与 tauri 同版本 3.13、静态链接）装配，
+ * Windows 出 NSIS 安装包 + .sig 并写入清单 windows-x64 条目（见 .cnb.yml
+ * build-x64 与 scripts/ci/publish-manifest-windows.ps1）。
+ * ⚠️ 旧版本客户端 / CI 降级链路仍可能遇到清单缺 windows 条目的情况，
+ * installUpdate 捕获后降级为「前往 Releases 手动下载」的兜底逻辑**保留**。
  *
  * 检测通道：复用 Releases 数据层 fetchReleases（GET /{repo}/-/releases，
  * scope repo-release:r），走 useCnbAuth 统一请求链路（Rust cnb_http_request
@@ -48,9 +53,10 @@
  * update.version 必须等于当前通道检测出的 latestVersion，不等则拒绝安装
  * 并引导手动下载。
  *
- * Windows 端降级：清单目前只有 darwin-aarch64 条目（Windows 只出 portable
- * exe，更新器必须依赖 NSIS/MSI 安装器产物），Windows check() 会失败 /
- * 缺条目，installUpdate 捕获后走 failed 分支，UI 引导手动下载。
+ * Windows 端降级（兜底保留）：自 2026-11-19 起清单含 windows-x64 条目
+ * （NSIS setup.exe + .sig），Windows 与 macOS 一样走应用内更新；仅当
+ * 清单缺条目（旧版清单 / CI 降级链路出裸 exe）时 check() 失败或找不到
+ * 平台项，installUpdate 捕获后走 failed 分支，UI 引导手动下载。
  *
  * 通知双通道（本应用的通知约定：推送本地系统通知的同时在通知面板落记录）：
  * 发现新版本时经 sendAppSystemNotification 推一条系统通知（点击直达
@@ -823,7 +829,8 @@ export async function installUpdate(): Promise<UpdateInstallOutcome> {
     return 'ready'
   }
   catch (err) {
-    // Windows 缺平台条目 / 网络异常 / 验签失败都进这里：原文展示 + 手动下载兜底
+    // 清单缺平台条目（旧版清单/CI 降级裸 exe）/ 网络异常 / 验签失败都进这里：
+    // 原文展示 + 手动下载兜底
     installError.value = err instanceof Error ? err.message : String(err)
     installStatus.value = 'failed'
     return 'failed'
