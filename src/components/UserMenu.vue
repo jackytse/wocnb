@@ -210,38 +210,33 @@ const items = computed<DropdownMenuItem[][]>(() => ([[{
   children: [{
     // 跟随系统 = useColorMode 的 'auto'（VueUse 存储的合法值只有
     // auto/light/dark；'system' 写进去是非法值，不会命中任何模式）。
-    // index.html 内联脚本首屏判定读的也是 'auto'，两处口径一致
+    // index.html 内联脚本首屏判定读的也是 'auto'，两处口径一致。
+    // ⚠️ onSelect 不调用 preventDefault —— reka-ui 里 preventDefault 会
+    // 阻止 checkbox 内部选中状态翻转，表现为"点了没反应/不可选中"
+    // （与下方语言子菜单同一范式：checked 受 colorMode 受控，
+    // 让 reka 的默认勾选与菜单收起行为生效）
     label: t('menu.system'),
     icon: 'i-lucide-monitor',
-    type: 'checkbox',
+    type: 'checkbox' as const,
     checked: colorMode.value === 'auto',
-    onSelect(e: Event) {
-      e.preventDefault()
-
+    onSelect() {
       colorMode.value = 'auto'
     }
   }, {
     label: t('menu.light'),
     icon: 'i-lucide-sun',
-    type: 'checkbox',
+    type: 'checkbox' as const,
     checked: colorMode.value === 'light',
-    onSelect(e: Event) {
-      e.preventDefault()
-
+    onSelect() {
       colorMode.value = 'light'
     }
   }, {
     label: t('menu.dark'),
     icon: 'i-lucide-moon',
-    type: 'checkbox',
+    type: 'checkbox' as const,
     checked: colorMode.value === 'dark',
-    onUpdateChecked(checked: boolean) {
-      if (checked) {
-        colorMode.value = 'dark'
-      }
-    },
-    onSelect(e: Event) {
-      e.preventDefault()
+    onSelect() {
+      colorMode.value = 'dark'
     }
   }]
 }], [{
