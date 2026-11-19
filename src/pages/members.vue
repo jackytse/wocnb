@@ -855,8 +855,14 @@ const searchPlaceholder = computed(() =>
   tab.value === 'outsiders' ? t('members.searchOutsidersPlaceholder') : t('members.searchPlaceholder'),
 )
 
-/** 成员管理外跳（成员页 → 组织主页成员区；贡献者页 → 组织主页） */
-const manageUrl = computed(() => selectedGroup.value ? cnbGroupUrl(selectedGroup.value.path) : 'https://cnb.cool')
+/**
+ * 成员管理外跳 URL：CNB 网页端组织导航的成员页是 /{group}/-/members
+ * （组织设置页是 /{group}/-/settings，见 cnb.cool 前端路由 JUMP_MEMBERS）。
+ * 此前误开组织主页 https://cnb.cool/{path}，用户还得再点一层导航。
+ */
+const manageUrl = computed(() =>
+  selectedGroup.value ? `${cnbGroupUrl(selectedGroup.value.path)}/-/members` : 'https://cnb.cool',
+)
 
 function openManage() {
   if ('__TAURI_INTERNALS__' in window) {
