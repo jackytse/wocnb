@@ -170,22 +170,16 @@ const links = computed((): NavigationMenuItem[][] => [[{
     }
   }]
 }], [{
-  // 以下链接均指向 CNB 官方资源，经 main.ts 全局外链拦截器在系统浏览器打开。
+  // 以下链接均指向外部站点，经 main.ts 全局外链拦截器在系统浏览器打开。
   //
   // 外链标识（红线，勿删 target）：UNavigationMenu 只在条目
   // `target === '_blank'` 时于标签后自动渲染 ↗ 图标
   // （appConfig.ui.icons.external）。删掉 target 不仅会让链接改在应用内
   // 导航（Webview 白屏/无返回入口），外链标识也会随之消失。
-  label: t('layout.feedback'),
-  icon: 'i-lucide-message-circle',
-  // 本仓库「新建 Issue」页：反馈直达，不再经过 CNB 官方 feedback 仓库中转
-  to: 'https://cnb.cool/jackytse/wocnb/-/issues/new',
-  target: '_blank'
-}, {
-  label: t('layout.helpSupport'),
-  icon: 'i-lucide-book-open',
-  // CNB 官方文档站
-  to: 'https://docs.cnb.cool/zh/',
+  label: t('layout.repo'),
+  icon: 'i-cnb-logo',
+  // 本应用源码仓库（CNB 平台自身的客户端，logo 用官方 CNB 图标）
+  to: 'https://cnb.cool/jackytse/wocnb',
   target: '_blank'
 }, {
   label: t('layout.bestPractices'),
@@ -218,7 +212,7 @@ const groups = computed(() => [{
   // UDashboardSearch 的 groups 要求 CommandPaletteItem[]；导航条目类型
   // NavigationMenuItem 与其结构兼容但字段联合类型更宽，显式收窄以通过类型检查。
   // 这里额外为外链条目补 suffix：侧边栏由框架自动加图标，命令面板没有该能力，
-  // 不补的话用户在 ⌘K 里搜到"使用反馈/帮助支持"时无法预知会跳到浏览器。
+  // 不补的话用户在 ⌘K 里搜到"代码仓库/最佳实践"等外链时无法预知会跳到浏览器。
   items: links.value.flat().map(item => (isExternalItem(item)
     ? { ...item, suffix: EXTERNAL_SUFFIX }
     : item)) as CommandPaletteItem[]

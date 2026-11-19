@@ -3,7 +3,8 @@
  * 动态列表（通用组件）。
  *
  * 数据由调用方传入（fetchCnbActivities 的归一化结果），本组件只负责
- * 展示与交互：骨架屏 / 失败重试 / 空态 / 点击在系统浏览器打开对应页面。
+ * 展示与交互：骨架屏 / 失败重试 / 空态 / 点击在**应用内**跳转对应页面
+ * （仓库动态 → 仓库详情 /repos/<path>；加组织动态 → 组织页 /group?slug=）。
  *
  * 复用方：NotificationsSlideover（通知面板）、index.vue（Home「动态」选项卡）。
  * 图标与动作文案的映射原来只在通知面板内使用，现提取至此共享。
@@ -11,8 +12,9 @@
 import { computed } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { formatTimeAgo } from '@vueuse/core'
-import { openUrl } from '@tauri-apps/plugin-opener'
+import { useRouter } from 'vue-router'
 import type { CnbActivityItem, CnbActivityKind } from '../composables/useCnbAuth'
+import { encodeRepoPathForRoute } from '../utils'
 
 /** 组件属性：列表数据 + 加载状态（数据拉取逻辑留在调用方，便于按需触发） */
 const props = defineProps<{
@@ -61,17 +63,28 @@ function kindText(item: CnbActivityItem): string {
 /** 是否有可展示的动态 */
 const hasItems = computed(() => props.items.length > 0)
 
-/** 在系统浏览器打开动态对应的仓库/组织页面（非 Tauri 环境兜底 window.open） */
-function openTarget(path: string) {
+const router = useRouter()
+
+/**
+ * 应用内跳转动态对应的页面（不走系统浏览器）。
+ *
+ * - join_group 的 targetPath 是组织路径 → /group?slug=<path>
+ *   （与 group.vue / SubGroupGrid 的下钻语义一致，query 对象形式由
+ *   vue-router 自动编码）；
+ * - 其余类型（commit/PR/issue/评审/建仓）targetPath 都是仓库路径
+ *   → /repos/<path>（逐段编码，共享 encodeRepoPathForRoute 实现，
+ *   与构建通知点击跳转同口径）。
+ */
+function openTarget(item: CnbActivityItem) {
+  const path = item.targetPath
   if (!path) {
     return
   }
-  const url = `https://cnb.cool/${path}`
-  if ('__TAURI_INTERNALS__' in window) {
-    void openUrl(url)
+  if (item.kind === 'join_group') {
+    void router.push({ path: '/group', query: { slug: path } })
   }
   else {
-    window.open(url, '_blank')
+    void router.push(`/repos/${encodeRepoPathForRoute(path)}`)
   }
 }
 </script>
@@ -115,14 +128,14 @@ function openTarget(path: string) {
     </p>
   </div>
 
-  <!-- 动态列表：点击在系统浏览器打开对应仓库/组织页 -->
+  <!-- 动态列表：点击在应用内跳转对应仓库详情/组织页 -->
   <div v-else class="flex flex-col gap-1">
     <button
       v-for="(item, index) in items"
       :key="`${item.kind}-${item.targetPath}-${index}`"
       type="button"
       class="w-full text-left px-3 py-2.5 rounded-md hover:bg-elevated/50 flex items-center gap-3 relative -mx-3 cursor-pointer"
-      @click="openTarget(item.targetPath)"
+      @click="openTarget(item)"
     >
       <span class="size-8 shrink-0 rounded-full bg-elevated flex items-center justify-center">
         <UIcon :name="kindIcon[item.kind]" class="size-4 text-muted" />

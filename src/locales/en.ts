@@ -277,8 +277,7 @@ export default {
     shortcuts: 'Shortcuts',
     token: 'Access Token',
     about: 'About',
-    feedback: 'Feedback',
-    helpSupport: 'Help & Support',
+    repo: 'Code repository',
     bestPractices: 'Best Practices',
   },
   repo: {

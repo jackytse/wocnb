@@ -74,7 +74,7 @@ import { sendAppSystemNotification } from './useCnbBuildWatch'
 
 /**
  * 本应用自身的发版仓库（CNB）。改仓库地址时只需改这里 ——
- * 检测、「前往下载」与 ⌘K 的「使用反馈」都指向它。
+ * 检测、「前往下载」与侧边栏「代码仓库」外链都指向它。
  */
 export const APP_SOURCE_REPO = 'jackytse/wocnb'
 

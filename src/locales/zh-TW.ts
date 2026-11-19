@@ -269,8 +269,7 @@ export default {
     shortcuts: '快速鍵',
     token: '存取權杖',
     about: '關於',
-    feedback: '使用意見',
-    helpSupport: '幫助與支援',
+    repo: '程式碼倉庫',
     bestPractices: '最佳實踐',
   },
   repo: {

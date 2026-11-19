@@ -17,6 +17,12 @@ import { i18n } from './i18n'
 import { LEGACY_ORG_ROUTE_NAME, legacyOrgRedirect } from './router/legacy-org'
 import ui from '@nuxt/ui/vue-plugin'
 
+// CNB 官方图标（cnb:logo）注册为 Iconify 本地集合 —— 侧边栏/菜单/⌘K
+// 里的 `i-cnb-logo` 都依赖这次全局注册，必须在应用挂载前执行
+import { registerCnbIcons } from './utils/cnbIcon'
+
+registerCnbIcons()
+
 import App from './App.vue'
 
 /**

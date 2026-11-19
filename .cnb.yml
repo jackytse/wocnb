@@ -498,11 +498,12 @@ v*:
           - mac
           - arm64
       # 热更新签名私钥（TAURI_SIGNING_PRIVATE_KEY）：存放在密钥仓库
-      # jackytse/secrets 的 wocnb/tauri-updater.yml（该仓库私有，仅构建
-      # 流水线可读）。构建机缺失该变量时 build 阶段还有一层固定路径回退
+      # jackytse/secrets 的 wocnb.yaml（该仓库私有，仅构建流水线可读，
+      # 值为 tauri signer 生成的密钥文件原文，密码为空）。
+      # 构建机缺失该变量时 build 阶段还有一层固定路径回退
       # （~/.tauri/wocnb-updater.key），两层都拿不到则 build 直接失败 ——
       # 热更新产物必须签名，绝不发无签名更新包。
-      imports: https://cnb.cool/jackytse/secrets/-/blob/main/wocnb/tauri-updater.yml
+      imports: https://cnb.cool/jackytse/secrets/-/blob/main/wocnb.yaml
       env:
         CI: "true"
         COREPACK_ENABLE_DOWNLOAD_PROMPT: "0"
@@ -628,7 +629,7 @@ v*:
             fi
             if [ -z "${TAURI_SIGNING_PRIVATE_KEY:-}" ]; then
               echo "错误：缺少热更新签名私钥 TAURI_SIGNING_PRIVATE_KEY" >&2
-              echo "      请在密钥仓库 jackytse/secrets 的 wocnb/tauri-updater.yml 里配置，" >&2
+              echo "      请在密钥仓库 jackytse/secrets 的 wocnb.yaml 里配置，" >&2
               echo "      或把私钥文件放到构建机 ~/.tauri/wocnb-updater.key" >&2
               exit 1
             fi

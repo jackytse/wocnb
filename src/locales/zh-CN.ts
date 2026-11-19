@@ -271,8 +271,7 @@ export default {
     shortcuts: '快捷键',
     token: '访问令牌',
     about: '关于',
-    feedback: '使用反馈',
-    helpSupport: '帮助与支持',
+    repo: '代码仓库',
     bestPractices: '最佳实践',
   },
   // ---------------------------------------------------------------------------
