@@ -717,6 +717,8 @@ export default {
       inheritTitle: '繼承來源',
       inheritEmpty: '尚無繼承成員',
       effectiveTitle: '有效成員（含繼承）',
+      // 切換倉庫成功提示（組織成員面板 / 外部貢獻者頁籤共用）
+      repoSwitched: '已切換到倉庫：{repo}',
     },
   },
   issues: {

@@ -726,6 +726,8 @@ export default {
       inheritTitle: 'Inherited from',
       inheritEmpty: 'No inherited members',
       effectiveTitle: 'Effective members (incl. inherited)',
+      // Toast shown after switching repository (shared by org members panel / outsiders tab)
+      repoSwitched: 'Switched to repository: {repo}',
     },
   },
   issues: {
