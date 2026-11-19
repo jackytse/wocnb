@@ -1295,6 +1295,10 @@ fn toggle_tray_panel(
     position_tray_panel(app, &panel, cursor_x, cursor_y, icon_x, icon_y, icon_w, icon_h);
     let _ = panel.show();
     let _ = panel.set_focus();
+    // 通知面板页刷新数据（最近项目列表在主窗口里更新，面板是独立
+    // WebView 且长期隐藏，仅靠 window focus 事件在部分 WebView 上
+    // 不一定触发；这里显式发一次，面板页收到即重新读盘）
+    let _ = app.emit_to(TRAY_PANEL_LABEL, "cnb://tray-panel-shown", ());
 }
 
 /// 隐藏托盘面板（面板页 Esc 键 / 失焦由窗口事件自动处理）。

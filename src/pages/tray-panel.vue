@@ -151,10 +151,25 @@ function onWindowFocus(): void {
   checkState.value = 'idle'
 }
 
+/** Rust 侧显示面板后 emit 的显式刷新信号（比 window focus 更可靠） */
+function onPanelShown(): void {
+  loadRecentRepos()
+  checkState.value = 'idle'
+}
+
 onMounted(() => {
   loadRecentRepos()
   window.addEventListener('focus', onWindowFocus)
   window.addEventListener('keydown', onKeydown)
+  // 主窗口更新了最近项目后，面板每次弹出都会收到该事件（见 Rust
+  // toggle_tray_panel）；浏览器 dev 无 Tauri runtime 时跳过
+  if ('__TAURI_INTERNALS__' in window) {
+    import('@tauri-apps/api/event')
+      .then(({ listen }) => listen('cnb://tray-panel-shown', onPanelShown))
+      .catch((err) => {
+        console.warn('[wocnb] 注册面板刷新事件失败:', err)
+      })
+  }
 })
 
 onBeforeUnmount(() => {
