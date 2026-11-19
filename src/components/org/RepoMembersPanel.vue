@@ -102,15 +102,6 @@ function onRepoSelect(value: unknown) {
   const path = typeof value === 'string'
     ? value
     : (value as { value?: string } | null)?.value || ''
-  // 切换仓库成功后 toast 告知用户：仅在实际变更时提示，避免默认选中 /
-  // 重复点击同仓库时弹无意义的通知（列表重载由 selectedRepo watch 驱动）
-  if (path && path !== selectedRepo.value) {
-    toast.add({
-      title: t('repo.members.repoSwitched', { repo: path }),
-      color: 'success',
-      duration: 2500,
-    })
-  }
   selectedRepo.value = path // 写入后由 selectedRepo watch 驱动成员区重载
 }
 
