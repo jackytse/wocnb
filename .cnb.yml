@@ -1241,8 +1241,35 @@ v*:
                 Copy-Item $share64Src $share64Dst -Recurse -Force
                 Write-Output '[wocnb-ci] 已复制 msys2 NSIS 资源到 share\nsis'
               }
-              # 强制 32 位安装器目标（与 tauri 官方 32 位 makensis 产物一致）
-              Set-Content -Path (Join-Path $nsisPath 'nsisconf.nsh') -Value 'Target x86-unicode' -Encoding ascii
+              # 强制 32 位安装器目标（与 tauri 官方 32 位 makensis 产物一致）。
+              # tauri 模板不含 Target 指令、完全依赖 makensis 默认值，而 msys2
+              # 的 x64 构建默认 amd64-unicode → 插件（只有 32 位 x86-unicode
+              # 变体）找不到，报 "Plugin not found, cannot call nsis_tauri_utils"
+              # （rc.40 实测）。nsisconf.nsh 由 makensis 自动 include，但查找
+              # 位置随 NSISDIR 语义而变：
+              #   · 官方 zip：NSISDIR = exe 目录 → 写 $nsisPath
+              #   · msys2：NSISDIR = <exe 上级>\share\nsis → 写 share\nsis
+              #   · per-user：%APPDATA%\NSIS\nsisconf.nsh（文档 §3.1.3）
+              # 三处都写，任一命中即生效（内容幂等，无副作用）。
+              $nsisConfBody = 'Target x86-unicode'
+              $confTargets = @(
+                (Join-Path $nsisPath 'nsisconf.nsh'),
+                (Join-Path $share64Dst 'nsisconf.nsh'),
+                (Join-Path (Join-Path $env:APPDATA 'NSIS') 'nsisconf.nsh')
+              )
+              foreach ($c in $confTargets) {
+                $cDir = Split-Path $c
+                if (-not (Test-Path $cDir)) { New-Item -ItemType Directory -Force -Path $cDir | Out-Null }
+                Set-Content -Path $c -Value $nsisConfBody -Encoding ascii
+              }
+              Write-Output ("[wocnb-ci] 已写入 nsisconf.nsh（Target x86-unicode）: " + ($confTargets -join ' | '))
+              # /HDRINFO 打印编译器构建信息与 NSISDIR/NSISCONFDIR（排障用）
+              $hdrOut = $null
+              $prevEap2 = $ErrorActionPreference
+              $ErrorActionPreference = 'Continue'
+              try { $hdrOut = & $rootExe /HDRINFO 2>&1 } catch { $hdrOut = @() }
+              $ErrorActionPreference = $prevEap2
+              if ($hdrOut) { Write-Output ("[wocnb-ci] makensis /HDRINFO -> " + (($hdrOut | Select-Object -First 12) -join ' ')) }
               Write-Output ("[wocnb-ci] 64 位 makensis 装配完成（" + (Get-Item $exe64File).Length + " 字节，进程架构 x64，target 已锁 x86-unicode）")
             }
             else {
