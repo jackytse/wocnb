@@ -186,8 +186,10 @@ async function doChangeState() {
           size="sm"
           :label="`${t('issues.priority')}: ${issue.priority}`"
         />
-        <!-- 关闭/重开按钮（按当前状态二选一，弹二次确认） -->
+        <!-- 关闭/重开（按当前状态二选一，弹二次确认）：canManage 事前预判
+             （repo-issue:rw），无权限时不渲染而非事后 403 -->
         <UButton
+          v-if="canManage"
           class="ms-auto"
           size="xs"
           :color="issue.state === 'open' ? 'neutral' : 'success'"
@@ -262,7 +264,7 @@ async function doChangeState() {
 
       <!-- 评论区（局部自管加载与发表） -->
       <div class="mt-6">
-        <CommentSection :repo-path="repoPath" :number="number" kind="issues" />
+        <CommentSection :repo-path="repoPath" :number="number" kind="issues" :can-manage="canManage" />
       </div>
     </template>
 

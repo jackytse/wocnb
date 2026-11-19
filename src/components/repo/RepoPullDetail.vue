@@ -396,9 +396,14 @@ async function saveLabels() {
 
 const showMergeModal = ref(false)
 
-/** 是否可合并（仅 open 且非 WIP 时给入口；服务端仍会校验冲突） */
+/**
+ * 是否可合并：open 且非 WIP **且 canManage**。
+ * canManage 是后补的（repo-pr:rw 事前预判）：合并是写操作，原来只判状态，
+ * 任何访客都能看到合并按钮、点了就 403 —— 与本页其他写入口红线统一。
+ * 服务端冲突校验仍然兜底（canManage ≠ 一定能合并）。
+ */
 const canMerge = computed(() =>
-  pull.value?.state === 'open' && !pull.value.isWip,
+  canManage.value && pull.value?.state === 'open' && !pull.value.isWip,
 )
 
 /** 合并成功：关闭弹窗 + 重载详情（状态变 merged、动态刷新） */
@@ -642,7 +647,7 @@ function onMerged() {
 
       <!-- 评论区（Issue/PR 共用组件；加载成功的评论由组件内刷新，这里传入服务端初始数据无必要） -->
       <div class="mt-6">
-        <CommentSection :repo-path="repoPath" :number="number" kind="pulls" />
+        <CommentSection :repo-path="repoPath" :number="number" kind="pulls" :can-manage="canManage" />
       </div>
 
       <!-- 合并确认弹窗（P1） -->

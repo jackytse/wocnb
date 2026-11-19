@@ -745,6 +745,7 @@ export default {
     createdBy: 'Created by {name} at {time}',
     closedBy: 'Closed by {name} at {time}',
     commentPlaceholder: 'Leave a comment, Markdown supported',
+    commentNoPerm: 'Your token lacks comment permission. Comment on cnb.cool or update token scopes.',
     send: 'Comment',
     sending: 'Posting...',
     sendSuccess: 'Comment posted',

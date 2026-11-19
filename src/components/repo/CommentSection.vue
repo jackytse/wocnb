@@ -34,6 +34,12 @@ const props = defineProps<{
   number: string
   /** 资源类型（决定调用哪组端点） */
   kind: 'issues' | 'pulls'
+  /**
+   * 是否可发表评论（canManage 预判）：评论是写操作（repo-notes:rw），
+   * 令牌缺授权范围时提交必 403 —— 无权限时不渲染输入框，改为说明文案
+   * 引导到 CNB 网页端（读评论不受影响，列表照常展示）。
+   */
+  canManage?: boolean
 }>()
 
 const { t } = useI18n()
@@ -314,8 +320,10 @@ async function saveEdit(comment: RepoComment) {
       </article>
     </div>
 
-    <!-- 发表输入：失败保留草稿（draft 不清空），空内容禁用 -->
-    <div class="border border-default rounded-lg p-3">
+    <!-- 发表输入：失败保留草稿（draft 不清空），空内容禁用。
+         canManage 事前预判：无权限（令牌缺 repo-notes:rw）时不渲染输入框，
+         改为说明文案引导网页端 —— 点了提交才吃 403 的体验不可接受 -->
+    <div v-if="canManage" class="border border-default rounded-lg p-3">
       <UTextarea
         v-model="draft"
         :rows="3"
@@ -335,5 +343,9 @@ async function saveEdit(comment: RepoComment) {
         />
       </div>
     </div>
+    <p v-else class="flex items-center gap-1.5 text-xs text-dimmed px-1">
+      <UIcon name="i-lucide-lock" class="size-3.5 shrink-0" />
+      {{ t('issues.commentNoPerm') }}
+    </p>
   </section>
 </template>

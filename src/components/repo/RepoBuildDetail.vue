@@ -36,6 +36,9 @@ const props = defineProps<{
   eventUrl?: string
   /** 归档仓库：写入口（停止构建）禁用 */
   archived?: boolean
+  /** 管理权限预判：停止构建/删除日志是写操作（repo-cnb-trigger:rw），
+      无权限隐藏入口，防止点了才吃 403 */
+  canManage?: boolean
 }>()
 
 const { t } = useI18n()
@@ -236,7 +239,7 @@ const aiPipelineIds = computed<string[]>(() => {
       />
       <!-- 停止按钮：仅运行中显示；归档仓库禁用（写入口统一禁用） -->
       <UButton
-        v-if="isRunning"
+        v-if="canManage && isRunning"
         size="xs"
         color="error"
         variant="soft"
@@ -375,6 +378,7 @@ const aiPipelineIds = computed<string[]>(() => {
 
     <!-- 阶段日志抽屉（混合方案的内嵌路径） -->
     <BuildLogDrawer
+      :can-manage="canManage"
       v-if="activeStage"
       v-model:open="drawerOpen"
       :title="activeStage.title"

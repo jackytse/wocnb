@@ -28,6 +28,9 @@ const props = defineProps<{
   externalLogUrl?: string
   /** 归档仓库：删除日志入口禁用 */
   archived?: boolean
+  /** 管理权限预判：删除构建日志是写操作（repo-cnb-trigger:rw），
+      无权限隐藏入口（父级 RepoBuildDetail 已下发 canManage） */
+  canManage?: boolean
 }>()
 
 const emit = defineEmits<{
@@ -191,6 +194,7 @@ async function doDeleteLogs() {
             size="xs"
             color="error"
             variant="ghost"
+            v-if="canManage"
             icon="i-lucide-trash-2"
             :label="t('builds.deleteLogs')"
             :disabled="archived"

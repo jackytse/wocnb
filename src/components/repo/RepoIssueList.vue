@@ -164,7 +164,10 @@ function onLabelsChanged() {
         :label="t('repo.labels.manage')"
         @click="labelManagerOpen = true"
       />
+      <!-- 新建 Issue：canManage 事前预判（repo-issue:rw），令牌缺 scope 时
+           免得点了才吃 403 —— 与本组件标签管理入口同一红线口径 -->
       <UButton
+        v-if="canManage"
         class="ms-auto"
         size="sm"
         icon="i-lucide-plus"

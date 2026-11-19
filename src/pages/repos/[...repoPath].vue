@@ -233,11 +233,13 @@ const invalidNumber = computed(() => {
               :repo-path="repoPath"
               :sn="sn"
               :archived="detail?.archived"
+              :can-manage="detail?.canManage"
             />
             <RepoBuildList
               v-else
               :repo-path="repoPath"
               :archived="detail?.archived"
+              :can-manage="detail?.canManage"
             />
           </template>
 

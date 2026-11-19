@@ -22,6 +22,8 @@ const props = defineProps<{
   repoPath: string
   /** 归档仓库：写入口（触发构建）禁用 */
   archived?: boolean
+  /** 管理权限预判：触发构建是写操作（repo-cnb-trigger:rw），无权限隐藏入口 */
+  canManage?: boolean
 }>()
 
 const { t } = useI18n()
@@ -167,8 +169,10 @@ async function onTriggered(sn: string) {
       <span v-if="total && !loading" class="text-xs text-dimmed">
         {{ total }}
       </span>
-      <!-- 触发构建：归档仓库禁用（archived 单向下发） -->
+      <!-- 触发构建：归档仓库禁用（archived 单向下发）+ canManage 事前预判
+           （repo-cnb-trigger:rw，写操作无权限不渲染，与其他写入口红线统一） -->
       <UButton
+        v-if="canManage"
         class="ms-auto"
         size="sm"
         color="primary"

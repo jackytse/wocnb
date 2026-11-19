@@ -745,6 +745,7 @@ export default {
     closedBy: '{name} 关闭于 {time}',
     // —— 评论 ——
     commentPlaceholder: '输入评论，支持 Markdown',
+    commentNoPerm: '当前访问令牌缺少评论权限，可到 CNB 网页端评论，或调整令牌授权范围。',
     send: '发表评论',
     sending: '发表中...',
     sendSuccess: '评论已发表',

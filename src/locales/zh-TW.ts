@@ -736,6 +736,7 @@ export default {
     createdBy: '{name} 建立於 {time}',
     closedBy: '{name} 關閉於 {time}',
     commentPlaceholder: '輸入留言，支援 Markdown',
+    commentNoPerm: '目前存取權杖缺少評論權限，可到 CNB 網頁端評論，或調整權杖授權範圍。',
     send: '發表留言',
     sending: '發表中...',
     sendSuccess: '留言已發表',
