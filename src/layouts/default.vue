@@ -178,8 +178,8 @@ const links = computed((): NavigationMenuItem[][] => [[{
   // 导航（Webview 白屏/无返回入口），外链标识也会随之消失。
   label: t('layout.feedback'),
   icon: 'i-lucide-message-circle',
-  // CNB 官方使用反馈仓库（Issue 提交使用问题与建议）
-  to: 'https://cnb.cool/cnb/feedback',
+  // 本仓库「新建 Issue」页：反馈直达，不再经过 CNB 官方 feedback 仓库中转
+  to: 'https://cnb.cool/jackytse/wocnb/-/issues/new',
   target: '_blank'
 }, {
   label: t('layout.helpSupport'),

@@ -1321,8 +1321,6 @@ export default {
     about: {
       title: '關於',
       version: '版本',
-      repo: '開源倉庫',
-      feedback: '問題回饋',
       license: '授權條款',
       licenseValue: 'MIT License',
       // 檢查更新（useAppUpdate：手動檢查入口 + 啟動靜默檢查 toast 文案）

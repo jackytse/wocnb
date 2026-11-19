@@ -1331,8 +1331,6 @@ export default {
     about: {
       title: 'About',
       version: 'Version',
-      repo: 'Source repository',
-      feedback: 'Feedback',
       license: 'License',
       licenseValue: 'MIT License',
       // Check-for-update strings (useAppUpdate: manual entry + startup toast)

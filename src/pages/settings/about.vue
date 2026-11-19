@@ -54,11 +54,6 @@ onMounted(async () => {
 /** 最新 Release 的 tag（供"发现新版本 vX"展示；无 Release 时显示 '-'） */
 const latestTag = computed(() => latestRelease.value?.tagName || '-')
 
-/** 本项目源码仓库（与侧边栏"View page source"一致） */
-const repoUrl = 'https://cnb.cool/jackytse/wocnb'
-/** CNB 官方反馈仓库 */
-const feedbackUrl = 'https://cnb.cool/cnb/feedback'
-
 /**
  * 更新通道下拉选项。
  *
@@ -222,28 +217,6 @@ function onManualCheck() {
     <div class="flex items-center justify-between py-1">
       <span class="text-sm text-muted">{{ t('settings.about.license') }}</span>
       <span class="text-sm text-highlighted">{{ t('settings.about.licenseValue') }}</span>
-    </div>
-  </UPageCard>
-
-  <!-- 开源仓库 / 反馈入口 -->
-  <UPageCard variant="subtle">
-    <div class="flex flex-col gap-3">
-      <UButton
-        block
-        color="neutral"
-        variant="outline"
-        icon="i-lucide-github"
-        :label="t('settings.about.repo')"
-        @click="openExternal(repoUrl)"
-      />
-      <UButton
-        block
-        color="neutral"
-        variant="outline"
-        icon="i-lucide-message-circle"
-        :label="t('settings.about.feedback')"
-        @click="openExternal(feedbackUrl)"
-      />
     </div>
   </UPageCard>
 </template>

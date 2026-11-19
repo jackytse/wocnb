@@ -1346,8 +1346,6 @@ export default {
     about: {
       title: '关于',
       version: '版本',
-      repo: '开源仓库',
-      feedback: '问题反馈',
       license: '许可证',
       licenseValue: 'MIT License',
       // 检查更新（useAppUpdate：手动检查入口 + 启动静默检查 toast 文案）
