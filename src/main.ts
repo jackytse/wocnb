@@ -7,7 +7,6 @@ import { routes, handleHotUpdate } from 'vue-router/auto-routes'
 import { setupLayouts } from 'virtual:generated-layouts'
 import { createHead } from '@unhead/vue/client'
 import { invoke } from '@tauri-apps/api/core'
-import { getCurrentWindow } from '@tauri-apps/api/window'
 import { openUrl } from '@tauri-apps/plugin-opener'
 import { restoreSession, cnbToken, setUnauthorizedHandler } from './composables/useCnbAuth'
 import { refreshCliTokenIfNeeded } from './composables/useCnbCliAuth'
@@ -25,16 +24,6 @@ import ui from '@nuxt/ui/vue-plugin'
 import { registerCnbIcons } from './utils/cnbIcon'
 
 registerCnbIcons()
-
-/**
- * 托盘快捷面板窗口标记：同一份 SPA 会加载进所有 Tauri 窗口（主窗口 +
- * 托盘面板 tray-panel），但面板只需要 i18n/路由/页面本身，不该再跑
- * 一份构建轮询、会话恢复、通知持久化等主窗口专属副作用（它们都是
- * 模块级单例，重复跑会双倍轮询/双倍落库）。label 属性读取无需额外
- * 权限（core:window:default 已覆盖）。
- */
-const isTrayPanelWindow
-  = '__TAURI_INTERNALS__' in window && getCurrentWindow().label === 'tray-panel'
 
 import App from './App.vue'
 
@@ -282,8 +271,8 @@ i18n.global.locale.value = resolvedLocale.value
  * （托盘文案是低价值 UI，失败不该打扰用户）。
  */
 function syncTrayLocale(loc: string): void {
-  // 托盘面板窗口不同步（主窗口已同步过，重复 invoke 只是写同一份值）
-  if (!('__TAURI_INTERNALS__' in window) || isTrayPanelWindow) {
+  // 浏览器 dev 无 Tauri 运行时，跳过
+  if (!('__TAURI_INTERNALS__' in window)) {
     return
   }
   invoke('set_tray_locale', { locale: loc }).catch((err) => {
@@ -341,14 +330,10 @@ const router = createRouter({
  * 原始目标路径记录在 redirect 参数中，登录成功后原路返回。
  * 登录态读取统一走 useCnbAuth 的响应式状态（与 localStorage 持久化同一来源）。
  *
- * 例外：/tray-panel（托盘快捷面板）不跳登录页——它是独立小窗口，未登录
- * 时由页面自身渲染空态引导，被重定向到登录页会导致面板窗口加载整个
- * 登录界面（尺寸只有 360x440，观感破碎）。
+ * 说明：托盘快捷面板是独立入口（tray-panel.html → src/tray-panel/），
+ * 不经过本文件的路由，因此这里无需为它开白名单。
  */
 router.beforeEach((to) => {
-  if (to.path === '/tray-panel') {
-    return true
-  }
   if (to.path === '/login') {
     return cnbToken.value ? { path: '/' } : true
   }
@@ -357,15 +342,6 @@ router.beforeEach((to) => {
   }
   return true
 })
-
-/**
- * 托盘面板窗口的启动引导：面板窗口加载的 URL 是 index.html（默认路由
- * "/"），需要在挂载前 replace 到 /tray-panel 让路由渲染面板页。
- * 放在 router 创建后、mount 前，避免闪现主窗口首页。
- */
-if (isTrayPanelWindow) {
-  void router.replace('/tray-panel')
-}
 
 app.use(head)
 app.use(i18n)
@@ -379,11 +355,7 @@ app.mount('#app')
 // OAuth 登录（cnb-cli 设备授权）先做临期续期（<10min 时用 refresh_token
 // 刷新，Rust 侧同步写回 ~/.cnb/token），再恢复用户信息；刷新失败会清
 // 登录态，由路由守卫引导到登录页重新授权。
-// 托盘面板窗口跳过：面板只读 localStorage 里的令牌/快照展示，不触发
-// 刷新（避免双窗口并发续期写 ~/.cnb/token 产生竞态）。
-if (!isTrayPanelWindow) {
-  refreshCliTokenIfNeeded().then(() => restoreSession())
-}
+refreshCliTokenIfNeeded().then(() => restoreSession())
 
 /**
  * 构建结果通知轮询：登录态恢复之后再启动（轮询首轮会用到 selectedGroup
@@ -397,23 +369,15 @@ if (!isTrayPanelWindow) {
  * （disabled / suspend / throttle），写成布尔 false 会让 cargo build 的
  * 配置校验直接失败（invalid type: boolean，expected string or map），
  * 不要"顺手"改回布尔值。
- *
- * 托盘面板窗口跳过：面板展示的活跃项目数据来自 buildSnapshot（同一
- * localStorage），轮询是主窗口单例职责，双窗口各跑一份会把请求量翻倍。
  */
-if (!isTrayPanelWindow) {
-  initBuildWatcher()
-}
+initBuildWatcher()
 
 /**
  * 通知持久化联动（SQLite）：监听登录用户变化，登录/恢复会话时按账号
  * 回灌历史通知与未读数，登出/换账号时清空内存 feed（数据库默认保留，
  * 登出弹窗勾选「清空数据」才物理删除）。内部对浏览器 dev 环境自动跳过。
- * 托盘面板窗口跳过（通知 UI 不在面板中，落库是主窗口职责）。
  */
-if (!isTrayPanelWindow) {
-  initNoticeDbSync()
-}
+initNoticeDbSync()
 
 /**
  * 系统通知点击处理：Rust 侧 on_action（src-tauri/src/lib.rs）把用户点击
@@ -429,44 +393,36 @@ if (!isTrayPanelWindow) {
  *
  * 浏览器 dev（pnpm dev 直开网页）下 initBuildNotificationActionHandler
  * 会因无 Tauri 运行时直接跳过，不会注册监听也不报错。
- * 托盘面板窗口跳过（面板不做通知动作处理）。
  */
-if (!isTrayPanelWindow) {
-  initBuildNotificationActionHandler({
-    navigate: (target) => router.push(target),
-    openPanel: () => {
-      // 直接置位模块级面板开关 ref（与组件内 useDashboard 返回的是同一份
-      // 单例引用，铃铛面板打开状态自然同步）
-      isNotificationsSlideoverOpen.value = true
-    },
-  }).catch((err) => {
-    // 注册失败只影响"点击直达"这一个入口（通知本身照常弹出），不阻断启动
-    console.warn('[wocnb] 注册系统通知点击处理失败：', err)
-  })
-}
+initBuildNotificationActionHandler({
+  navigate: (target) => router.push(target),
+  openPanel: () => {
+    // 直接置位模块级面板开关 ref（与组件内 useDashboard 返回的是同一份
+    // 单例引用，铃铛面板打开状态自然同步）
+    isNotificationsSlideoverOpen.value = true
+  },
+}).catch((err) => {
+  // 注册失败只影响"点击直达"这一个入口（通知本身照常弹出），不阻断启动
+  console.warn('[wocnb] 注册系统通知点击处理失败：', err)
+})
 
 // 401 统一拦截：任意 CNB API 请求返回 401（令牌失效）时，
 // 清除本地登录态并跳转登录页；携带 redirect 供登录后原路返回，
 // expired 标记供登录页展示"登录已过期"提示。
 // 已在登录页时跳过跳转（登录页自身的校验请求不走 cnbFetch，正常不会触发；
 // 此判断作为兜底防止循环重定向）。
-// 托盘面板窗口跳过：面板自身不发 CNB API 请求（数据全来自 localStorage
-// 与 Rust 命令），装这个 handler 只会被未登录时的重定向逻辑误触发。
-if (!isTrayPanelWindow) {
-  setUnauthorizedHandler((fromPath) => {
-    if (router.currentRoute.value.path === '/login') {
-      return
-    }
-    router.push({ path: '/login', query: { redirect: fromPath, expired: '1' } })
-  })
-}
+setUnauthorizedHandler((fromPath) => {
+  if (router.currentRoute.value.path === '/login') {
+    return
+  }
+  router.push({ path: '/login', query: { redirect: fromPath, expired: '1' } })
+})
 
 // macOS 应用菜单栏「关于 WOCNB」点击：Rust 侧 handle_app_menu_event emit
 // `cnb://menu-about`，这里转成应用内路由跳转到「设置 · 关于」页（含检查
 // 更新入口，比系统原生 about 面板更有用）。菜单事件在 Rust 主线程，拿不到
 // webview 路由，必须经 IPC 转交；浏览器 dev 无 Tauri runtime，跳过注册。
-// 托盘面板窗口跳过（应用菜单属于主窗口）。
-if ('__TAURI_INTERNALS__' in window && !isTrayPanelWindow) {
+if ('__TAURI_INTERNALS__' in window) {
   import('@tauri-apps/api/event')
     .then(({ listen }) => listen('cnb://menu-about', () => router.push('/settings/about')))
     .catch((err) => {

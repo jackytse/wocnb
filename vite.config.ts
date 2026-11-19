@@ -20,5 +20,19 @@ export default defineConfig({
         }
       }
     })
-  ]
+  ],
+  build: {
+    rollupOptions: {
+      /**
+       * 多入口构建：
+       * - index.html：主应用 SPA（路由 + 布局 + 全部页面）；
+       * - tray-panel.html：托盘快捷面板的独立应用（见 src/tray-panel/），
+       *   与主应用互不加载。两入口共用同一套 Tailwind/Nuxt UI 主题。
+       */
+      input: {
+        main: 'index.html',
+        'tray-panel': 'tray-panel.html'
+      }
+    }
+  }
 })

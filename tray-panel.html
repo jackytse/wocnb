@@ -1,0 +1,15 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <link rel="icon" type="image/png" href="/app-icon.png" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>WOCNB</title>
+  </head>
+  <body>
+    <!-- 托盘快捷面板的独立入口：与主应用 index.html 完全分离，
+         不加载 SPA 的路由 / 布局 / 全局启动副作用。 -->
+    <div id="tray-panel"></div>
+    <script type="module" src="/src/tray-panel/main.ts"></script>
+  </body>
+</html>

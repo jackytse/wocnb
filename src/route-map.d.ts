@@ -141,13 +141,6 @@ declare module 'vue-router/auto-routes' {
       Record<never, never>,
       | never
     >,
-    '/tray-panel': RouteRecordInfo<
-      '/tray-panel',
-      '/tray-panel',
-      Record<never, never>,
-      Record<never, never>,
-      | never
-    >,
   }
 
   /**
@@ -282,14 +275,6 @@ declare module 'vue-router/auto-routes' {
     'src/pages/settings/token.vue': {
       routes:
         | '/settings/token'
-      views:
-        | never
-      pathParamNames:
-        | never
-    }
-    'src/pages/tray-panel.vue': {
-      routes:
-        | '/tray-panel'
       views:
         | never
       pathParamNames:

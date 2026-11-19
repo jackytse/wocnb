@@ -112,7 +112,9 @@ const TRAY_LOCALE_FILE: &str = "tray-locale.txt";
 /// 归一化兜底也回落 zh-CN（历史行为就是中文，改默认会让老用户突兀）。
 fn tray_menu_texts(locale: &str) -> (&'static str, &'static str) {
     match locale {
-        "en" => ("Open WOCNB", "Quit"),
+        // 英文文案与中文「打开应用」同义：不把产品名放进入口项，
+        // 避免托盘菜单看起来像"打开某个叫 WOCNB 的东西"
+        "en" => ("Open App", "Quit"),
         "zh-TW" => ("開啟應用", "退出應用"),
         _ => ("打开应用", "退出应用"),
     }
@@ -1448,6 +1450,18 @@ pub fn run() {
             // 本文件「窗口尺寸记忆」模块头注释（物理/逻辑像素踩坑记录）。
             if let Some(window) = app.get_webview_window("main") {
                 restore_window_size(&window);
+            }
+
+            // —— 托盘面板窗口：启动时强制保持隐藏 ——
+            //
+            // tauri.conf.json 已声明 visible:false，这里再显式 hide() 一次，
+            // 兜住两类会把面板"带出来"的情况：
+            // 1. macOS 窗口恢复/开发态热重启时对上次可见窗口的状态恢复；
+            // 2. 配置被误改为可见时的防御。
+            // 面板的唯一入口是托盘左键（toggle_tray_panel），应用启动时
+            // 绝不应该自己弹出来。
+            if let Some(panel) = app.get_webview_window(TRAY_PANEL_LABEL) {
+                let _ = panel.hide();
             }
 
             // —— 系统通知点击上报（通知点击直达构建详情）——

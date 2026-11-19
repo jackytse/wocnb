@@ -24,9 +24,9 @@
       {
         "label": "tray-panel",
         "title": "WOCNB",
-        "url": "index.html",
-        "width": 360,
-        "height": 440,
+        "url": "tray-panel.html",
+        "width": 380,
+        "height": 500,
         "resizable": false,
         "fullscreen": false,
         "visible": false,
