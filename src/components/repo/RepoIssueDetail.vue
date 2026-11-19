@@ -210,13 +210,12 @@ async function doChangeState() {
 
       <!-- 标签 / 处理人（REQ-04：canManage 时显示编辑入口，写后重拉详情） -->
       <div class="mt-3 flex items-center gap-2 flex-wrap text-xs">
-        <UBadge
+        <!-- 标签配色统一由 LabelChip 推导（CNB 标签色多为浅粉彩） -->
+        <LabelChip
           v-for="label in issue.labels"
           :key="label.name"
-          variant="subtle"
-          size="sm"
-          :label="label.name"
-          :style="label.color ? { color: label.color, backgroundColor: `${label.color}1a` } : undefined"
+          :name="label.name"
+          :color="label.color"
         />
         <span v-if="issue.assignees.length" class="text-dimmed inline-flex items-center gap-1">
           <UIcon name="i-lucide-user-check" class="size-3.5" />

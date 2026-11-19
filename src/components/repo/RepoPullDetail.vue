@@ -484,23 +484,14 @@ function onMerged() {
 
       <!-- 标签行（QA 批次 2 遗留①）：只读展示；canManage 时给编辑入口（不可管理不渲染，事前隐藏） -->
       <div class="mt-2 flex items-center gap-2 flex-wrap">
-        <UBadge
+        <!-- 标签：改用 LabelChip（原先"中性徽标 + 色圆点"与 Issue 页样式不一致，
+             且浅色标签点上浮在白底上几乎看不出颜色） -->
+        <LabelChip
           v-for="label in pullLabels"
           :key="label.name"
-          color="neutral"
-          variant="subtle"
-          size="sm"
-          class="font-medium"
-        >
-          <span class="flex items-center gap-1.5">
-            <!-- 色块：与 Issue 标签同款（无色回落灰，字典可能未配色） -->
-            <span
-              class="size-2.5 rounded-full border border-default shrink-0"
-              :style="{ backgroundColor: label.color || '#a1a1aa' }"
-            />
-            {{ label.name }}
-          </span>
-        </UBadge>
+          :name="label.name"
+          :color="label.color"
+        />
         <span v-if="pullLabels.length === 0" class="text-xs text-dimmed">
           {{ t('repo.pulls.labelsEmpty') }}
         </span>

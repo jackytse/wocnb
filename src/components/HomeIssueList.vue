@@ -151,14 +151,13 @@ defineExpose({ reload: loadIssues })
             size="sm"
             :label="issue.priority"
           />
-          <!-- 标签（最多 10 个，展示前 3 个防溢出，颜色用 CNB 返回的标签色） -->
-          <UBadge
+          <!-- 标签（最多 10 个，展示前 3 个防溢出）。配色交给 LabelChip：
+               CNB 的标签色是 #E5F5FF 这类浅色，直接把标签色当文字色会看不见字 -->
+          <LabelChip
             v-for="label in issue.labels.slice(0, 3)"
             :key="label.name"
-            variant="subtle"
-            size="sm"
-            :label="label.name"
-            :style="label.color ? { color: label.color } : undefined"
+            :name="label.name"
+            :color="label.color"
           />
           <!-- 评论数 -->
           <span v-if="issue.commentCount > 0" class="inline-flex items-center gap-0.5 shrink-0">

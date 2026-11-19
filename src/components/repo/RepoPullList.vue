@@ -171,13 +171,12 @@ const siteUrl = computed(() => repoSiteUrl(props.repoPath, `/-/pulls?state=${cur
               size="sm"
               :label="t('pulls.draft')"
             />
-            <UBadge
+            <!-- 标签：配色统一由 LabelChip 推导（浅粉彩标签色不能直接当文字色） -->
+            <LabelChip
               v-for="label in pull.labels.slice(0, 3)"
               :key="label.name"
-              variant="subtle"
-              size="sm"
-              :label="label.name"
-              :style="label.color ? { color: label.color, backgroundColor: `${label.color}1a` } : undefined"
+              :name="label.name"
+              :color="label.color"
             />
           </p>
         </div>
