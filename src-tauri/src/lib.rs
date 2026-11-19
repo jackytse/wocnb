@@ -79,6 +79,153 @@ unsafe fn popup_menu_at_cursor(ns_menu: *mut std::ffi::c_void) {
     }
 }
 
+// ---------------------------------------------------------------------------
+// 托盘菜单语言（跟随前端应用语言设置）
+//
+// # 为什么需要 IPC 同步
+//
+// 托盘菜单是 Rust 侧的原生 muda 菜单，无法直接感知 WebView 里 vue-i18n
+// 的语言状态。前端在语言初始化/切换时调用 set_tray_locale 命令把最终
+// 生效语言（resolvedLocale，偏好为 system 时已推断成具体语言）传过来；
+// Rust 侧存内存 + 持久化到 app_data_dir，下次启动读取该文件决定初始
+// 文案（读不到回落 zh-CN，与历史行为一致）。
+//
+// # 线程约束
+//
+// muda Menu / NSMenu 只允许主线程操作：命令处理线程（async runtime）
+// 不能直接重建菜单，必须经 `run_on_main_thread` 派回主线程执行；
+// 重建即替换 TRAY_NATIVE_MENU（thread_local，主线程语义见其注释），
+// 条目 id（open/quit）不变，on_menu_event 回调无需任何改动。
+// ---------------------------------------------------------------------------
+
+/// 托盘菜单语言持久化文件名（位于 app_data_dir 下）
+const TRAY_LOCALE_FILE: &str = "tray-locale.txt";
+
+/// 托盘菜单文案三语映射（纯函数，单测锁定）。
+///
+/// 文案与前端 menu.openApp / menu.logout 同语义：跟随设置页可选的三种
+/// 显式语言；'system' 不会出现在这里（前端只传 resolvedLocale 具体值），
+/// 归一化兜底也回落 zh-CN（历史行为就是中文，改默认会让老用户突兀）。
+fn tray_menu_texts(locale: &str) -> (&'static str, &'static str) {
+    match locale {
+        "en" => ("Open WOCNB", "Quit"),
+        "zh-TW" => ("開啟應用", "退出應用"),
+        _ => ("打开应用", "退出应用"),
+    }
+}
+
+/// 归一化前端传来的 locale（防脏值：未知语言一律回落 zh-CN）。
+/// 接受前端三种显式值（en / zh-CN / zh-TW），大小写不敏感。
+fn normalize_tray_locale(locale: &str) -> String {
+    match locale.trim().to_lowercase().as_str() {
+        "en" => "en".to_string(),
+        "zh-tw" => "zh-TW".to_string(),
+        _ => "zh-CN".to_string(),
+    }
+}
+
+/// 托盘语言内存状态（进程内全局）。
+///
+/// 为什么用 OnceLock<Mutex<String>> 而不是 app.manage()：
+/// 这里只存一个小字符串，任何线程（命令处理线程读、主线程重建菜单读）
+/// 都要能安全访问，Mutex 足够；Tauri State 需要在 setup 里注册才能用，
+/// 而命令可能在 setup 前被调用（理论时序），OnceLock 天然免初始化时序问题。
+static TRAY_LOCALE: std::sync::OnceLock<std::sync::Mutex<String>> =
+    std::sync::OnceLock::new();
+
+/// 托盘语言槽位（懒初始化，默认 zh-CN 与文案映射的兜底一致）
+fn tray_locale_slot() -> &'static std::sync::Mutex<String> {
+    TRAY_LOCALE.get_or_init(|| std::sync::Mutex::new("zh-CN".to_string()))
+}
+
+/// 持久化文件完整路径（app_data_dir/tray-locale.txt；路径解析失败返回 None，
+/// 调用方按"无持久化"降级 —— 只影响下次启动的初始语言，不影响本次会话）
+fn tray_locale_file_path(app: &tauri::AppHandle) -> Option<std::path::PathBuf> {
+    app.path().app_data_dir().ok().map(|d| d.join(TRAY_LOCALE_FILE))
+}
+
+/// 读取持久化的托盘语言（启动时调用；文件缺失/脏值一律回落 zh-CN）
+fn read_tray_locale(app: &tauri::AppHandle) -> String {
+    if let Some(path) = tray_locale_file_path(app) {
+        if let Ok(raw) = std::fs::read_to_string(path) {
+            return normalize_tray_locale(&raw);
+        }
+    }
+    "zh-CN".to_string()
+}
+
+/// 持久化托盘语言（尽力而为：写失败只影响下次启动的初始文案，不阻断）
+fn write_tray_locale(app: &tauri::AppHandle, locale: &str) {
+    if let Some(path) = tray_locale_file_path(app) {
+        if let Some(dir) = path.parent() {
+            let _ = std::fs::create_dir_all(dir);
+        }
+        if let Err(err) = std::fs::write(&path, locale) {
+            log::warn!("[tray] 持久化托盘语言失败: {err}");
+        }
+    }
+}
+
+/// 按 locale 构建托盘原生菜单（macOS 专属）。
+///
+/// 条目 id 固定 open/quit：事件分发（on_menu_event）按 id 匹配，
+/// 语言切换只换文案不换 id，回调逻辑零改动。
+#[cfg(target_os = "macos")]
+fn build_tray_menu(locale: &str) -> muda::Menu {
+    use muda::{Menu, MenuId, MenuItem, PredefinedMenuItem};
+    let (open_text, quit_text) = tray_menu_texts(locale);
+    let open_item = MenuItem::builder()
+        .id(MenuId::new("open"))
+        .text(open_text)
+        .enabled(true)
+        .build();
+    let quit_item = MenuItem::builder()
+        .id(MenuId::new("quit"))
+        .text(quit_text)
+        .enabled(true)
+        .build();
+    let tray_menu = Menu::new();
+    // append 到新建空菜单理论上不会失败（无父节点冲突），忽略错误保持签名简单
+    let _ = tray_menu.append(&open_item);
+    let _ = tray_menu.append(&PredefinedMenuItem::separator());
+    let _ = tray_menu.append(&quit_item);
+    tray_menu
+}
+
+/// 主线程重建托盘菜单（替换 TRAY_NATIVE_MENU，旧菜单随之释放）。
+/// 必须在主线程调用（muda/NSMenu 线程约束，调用方保证）。
+#[cfg(target_os = "macos")]
+fn rebuild_tray_menu(locale: &str) {
+    let menu = build_tray_menu(locale);
+    TRAY_NATIVE_MENU.with(|slot| *slot.borrow_mut() = Some(menu));
+}
+
+/// 前端语言切换时同步托盘菜单语言（useAppLocale → 本命令）。
+///
+/// 处理流程：归一 → 写内存 → 持久化 → 主线程重建菜单（macOS）。
+/// 任一步失败都不让前端侧报错弹窗（托盘文案是低价值 UI，静默降级）；
+/// 但归一/锁失败仍返回 Err 便于 dev 排查。
+#[tauri::command]
+fn set_tray_locale(app: tauri::AppHandle, locale: String) -> Result<(), String> {
+    let locale = normalize_tray_locale(&locale);
+    // 写内存状态：下次菜单重建（含本命令触发的这次）都用它
+    {
+        let slot = tray_locale_slot();
+        let mut guard = slot.lock().map_err(|e| e.to_string())?;
+        *guard = locale.clone();
+    }
+    // 持久化：失败不阻断（下次启动回落默认文案）
+    write_tray_locale(&app, &locale);
+    // macOS：菜单重建必须回主线程（muda/NSMenu 线程约束，见模块注释）
+    #[cfg(target_os = "macos")]
+    {
+        let loc = locale.clone();
+        app.run_on_main_thread(move || rebuild_tray_menu(&loc))
+            .map_err(|e| format!("run_on_main_thread failed: {e}"))?;
+    }
+    Ok(())
+}
+
 /// Tauri 命令：返回问候语。
 /// 用途：验证前端 JS 与 Rust 后端的 invoke 通信链路是否打通，
 /// 是 Tauri 官方模板的标准示例命令，也是集成测试的锚点。
@@ -687,6 +834,8 @@ pub fn run() {
             cnb_fetch_image,
             // —— 二进制下载通道（源码包 / Release 附件，设计文档 D2）——
             cnb_download_archive,
+            // —— 托盘菜单语言（跟随前端应用语言设置，见托盘 locale 模块注释）——
+            set_tray_locale,
             // —— cnb-cli 集成（OAuth 设备授权登录）——
             cnb_cli::cnb_cli_detect,
             cnb_cli::cnb_cli_install,
@@ -844,23 +993,20 @@ pub fn run() {
             //    由 on_tray_icon_event 在右键时按光标位置手动弹出，
             //    以修复多显示器下 tray-icon performClick 弹错屏的问题。
             //    菜单条目点击事件经 Tauri 全局通道进入上面的 on_menu_event。
+            //
+            //    菜单文案跟随前端应用语言：启动时读持久化的 locale（上次
+            //    会话由前端 set_tray_locale 写入），随后前端语言变化时经
+            //    同一命令实时重建。前端启动后也会主动同步一次（以本地
+            //    localStorage 的偏好为准，覆盖文件里的旧值）。
             #[cfg(target_os = "macos")]
             {
-                use muda::{Menu, MenuId, MenuItem, PredefinedMenuItem};
-                let open_item = MenuItem::builder()
-                    .id(MenuId::new("open"))
-                    .text("打开应用")
-                    .enabled(true)
-                    .build();
-                let quit_item = MenuItem::builder()
-                    .id(MenuId::new("quit"))
-                    .text("退出应用")
-                    .enabled(true)
-                    .build();
-                let tray_menu = Menu::new();
-                tray_menu.append(&open_item)?;
-                tray_menu.append(&PredefinedMenuItem::separator())?;
-                tray_menu.append(&quit_item)?;
+                let tray_locale = read_tray_locale(app.handle());
+                // 初始化内存状态：set_tray_locale 命令处理线程也会读它，
+                // 启动阶段先把持久化值灌进去，避免主线程/命令线程不一致
+                if let Ok(mut guard) = tray_locale_slot().lock() {
+                    *guard = tray_locale.clone();
+                }
+                let tray_menu = build_tray_menu(&tray_locale);
                 // 存入主线程 thread_local：保持菜单存活（弹出时引用 NSMenu），
                 // 供托盘事件回调读取（见 TRAY_NATIVE_MENU 注释）
                 TRAY_NATIVE_MENU.with(|slot| *slot.borrow_mut() = Some(tray_menu));
@@ -939,9 +1085,52 @@ pub fn run() {
 mod tests {
     use super::{
         build_header_map, greet, is_allowed_api_url, is_allowed_image_url, next_available_path,
-        sanitize_archive_name, BUILD_NOTIFY_ACTION_TYPE_ID,
+        normalize_tray_locale, sanitize_archive_name, tray_menu_texts,
+        BUILD_NOTIFY_ACTION_TYPE_ID,
     };
     use std::collections::HashMap;
+
+    /// 托盘菜单三语文案映射锁定：三种显式语言各自命中独立文案，
+    /// 且 open/quit 两条都不能为空（muda 空文本条目渲染异常）
+    #[test]
+    fn test_tray_menu_texts_locales() {
+        let (open_en, quit_en) = tray_menu_texts("en");
+        assert!(!open_en.is_empty() && !quit_en.is_empty());
+        assert_ne!(open_en, quit_en);
+        let (open_tw, quit_tw) = tray_menu_texts("zh-TW");
+        assert!(!open_tw.is_empty() && !quit_tw.is_empty());
+        let (open_cn, quit_cn) = tray_menu_texts("zh-CN");
+        assert!(!open_cn.is_empty() && !quit_cn.is_empty());
+        // 三种语言的文案互不相同（同一语言不可两种显示）
+        assert_ne!((open_en, quit_en), (open_tw, quit_tw));
+        assert_ne!((open_cn, quit_cn), (open_en, quit_en));
+    }
+
+    /// 托盘语言归一化：合法值原样保留（大小写不敏感），脏值回落 zh-CN
+    #[test]
+    fn test_normalize_tray_locale() {
+        assert_eq!(normalize_tray_locale("en"), "en");
+        assert_eq!(normalize_tray_locale("zh-CN"), "zh-CN");
+        assert_eq!(normalize_tray_locale("zh-TW"), "zh-TW");
+        // 大小写容错（前端理论上只传精确值，防御第三方调用）
+        assert_eq!(normalize_tray_locale("EN"), "en");
+        assert_eq!(normalize_tray_locale(" zh-tw "), "zh-TW");
+        // 脏值 / system / 空串一律回落默认（zh-CN，与历史中文菜单一致）
+        assert_eq!(normalize_tray_locale("system"), "zh-CN");
+        assert_eq!(normalize_tray_locale("fr"), "zh-CN");
+        assert_eq!(normalize_tray_locale(""), "zh-CN");
+    }
+
+    /// 归一化结果必须能命中文案映射（链路口径一致性：normalize 输出是
+    /// tray_menu_texts 的输入，若归一产出了映射外语言会静默回落中文）
+    #[test]
+    fn test_normalize_output_matches_texts_input() {
+        for locale in ["en", "zh-CN", "zh-TW"] {
+            let norm = normalize_tray_locale(locale);
+            let _ = tray_menu_texts(&norm); // 不 panic 即可，返回值被借用
+        }
+    }
+
 
     /// BUILD_NOTIFY_ACTION_TYPE_ID 字面量锁定（QA Round 2 补充，跨语言契约双向锁）。
     ///

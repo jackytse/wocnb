@@ -6,6 +6,7 @@ import { createRouter, createWebHistory } from 'vue-router'
 import { routes, handleHotUpdate } from 'vue-router/auto-routes'
 import { setupLayouts } from 'virtual:generated-layouts'
 import { createHead } from '@unhead/vue/client'
+import { invoke } from '@tauri-apps/api/core'
 import { openUrl } from '@tauri-apps/plugin-opener'
 import { restoreSession, cnbToken, setUnauthorizedHandler } from './composables/useCnbAuth'
 import { refreshCliTokenIfNeeded } from './composables/useCnbCliAuth'
@@ -256,9 +257,33 @@ sbDarkObserver.observe(document.documentElement, { attributeFilter: ['class'] })
  * 3. 同步 <html lang> 属性，便于无障碍与字体渲染策略识别语言。
  */
 i18n.global.locale.value = resolvedLocale.value
+
+/**
+ * 同步托盘菜单语言到 Rust 侧（跟随应用语言设置）。
+ *
+ * 托盘菜单是 Rust 侧的原生 muda 菜单，感知不到 WebView 里的语言状态；
+ * 这里把最终生效语言（resolvedLocale：偏好为 system 时已推断成具体值）
+ * 经 set_tray_locale 命令传给 Rust —— 持久化并立即重建菜单文案。
+ *
+ * 调用时机：启动一次（覆盖上次会话残留）+ 每次语言变化（watch）。
+ * 浏览器 dev（无 Tauri runtime）跳过；调用失败只 console.warn 静默降级
+ * （托盘文案是低价值 UI，失败不该打扰用户）。
+ */
+function syncTrayLocale(loc: string): void {
+  if (!('__TAURI_INTERNALS__' in window)) {
+    return
+  }
+  invoke('set_tray_locale', { locale: loc }).catch((err) => {
+    console.warn('[wocnb] 同步托盘菜单语言失败:', err)
+  })
+}
+syncTrayLocale(resolvedLocale.value)
+
 watch(resolvedLocale, (loc) => {
   i18n.global.locale.value = loc
   document.documentElement.setAttribute('lang', loc)
+  // 语言变化实时同步托盘菜单文案（Rust 侧持久化 + 主线程重建）
+  syncTrayLocale(loc)
 })
 // 偏好本身变化也要触发一次同步（如从 zh-CN 切回 system 且推断结果不同）
 watch(localePref, () => {
