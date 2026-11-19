@@ -1162,6 +1162,7 @@ export default {
       topN: '結果數量',
       hint: '輸入關鍵詞搜尋公共倉庫（無分頁，最多返回所選條數）。',
       noResults: '沒有匹配的倉庫。',
+      tooShort: '關鍵詞太短：請輸入至少 2 個字元。',
     },
     rank: {
       title: '倉庫排行榜',

@@ -357,8 +357,12 @@ const inheritGroups = ref<InheritMemberGroup[]>([])
 const inheritLoading = ref(false)
 /** 继承区加载失败（行内提示） */
 const inheritError = ref<Error | null>(null)
-/** 是否展开"继承来源"折叠区（展开才请求，避免每次进页签都多发一次） */
-const inheritOpen = ref(false)
+/**
+ * 是否展开"继承来源"折叠区。
+ * 默认展开（用户要求）：数据随仓库选定自动加载，不等用户手动展开；
+ * 折叠区仍保留开关，收起只是隐藏内容（缓存不清）。
+ */
+const inheritOpen = ref(true)
 
 /** 拉取继承来源（失败降级空数组 + 行内错误） */
 async function loadInherit() {
@@ -381,19 +385,21 @@ async function loadInherit() {
   }
 }
 
-// 展开时首次加载（空且不在加载中才请求；写操作后已缓存的直接复用）
+// 展开时首次加载（空且不在加载中才请求；写操作后已缓存的直接复用）。
+// immediate：默认展开的场景下挂载即判定一次（此刻仓库未定 → loadInherit
+// 内部直接返回，真正的首载由下方 selectedRepo watch 驱动）
 watch(inheritOpen, (value) => {
   if (value && inheritGroups.value.length === 0 && !inheritLoading.value) {
     void loadInherit() // 首次展开才请求（缓存命中直接展示）
   }
-})
+}, { immediate: true })
 
 /** 有效成员（含继承）：复用 /list-members，展示在独立折叠区 */
 const effectiveMembers = ref<MemberItem[]>([])
 /** 有效成员加载中 */
 const effectiveLoading = ref(false)
-/** 有效成员折叠区开关（展开才请求） */
-const effectiveOpen = ref(false)
+/** 有效成员折叠区开关：默认展开（与继承来源同一口径，随仓库自动加载） */
+const effectiveOpen = ref(true)
 
 /** 拉取有效成员（失败静默降级空列表：折叠区只显示空态文案） */
 async function loadEffective() {
@@ -412,12 +418,12 @@ async function loadEffective() {
   finally {
     effectiveLoading.value = false
   }
-}// 展开时首次加载（同继承区口径）
+}// 展开时首次加载（同继承区口径，immediate 覆盖默认展开的挂载场景）
 watch(effectiveOpen, (value) => {
   if (value && effectiveMembers.value.length === 0 && !effectiveLoading.value) {
     void loadEffective() // 首次展开才请求（缓存命中直接展示）
   }
-})
+}, { immediate: true })
 
 // ---------------------------------------------------------------------------
 // 生命周期：切组织 → 重拉仓库列表；切仓库 → 重拉成员并清缓存
@@ -432,15 +438,20 @@ watch(() => selectedGroup.value?.path, () => {
   void loadRepos() // 仓库列表按新组织重拉
 }, { immediate: true })
 
-// 切仓库：成员与全部辅助缓存重置；折叠区收起（下次展开按需请求）
+// 切仓库：成员与全部辅助缓存重置；折叠区保持默认展开（用户要求），
+// 展开状态下立即重载新仓库的继承/有效成员（不再等用户手动展开）
 watch(selectedRepo, () => {
   permMap.value = {} // 新仓库的权限/成员与旧仓库毫无交集
   permDenied.value = {}
   inheritGroups.value = []
   effectiveMembers.value = []
-  inheritOpen.value = false // 收起辅助折叠区（下次展开按需请求）
-  effectiveOpen.value = false
   void loadMembers() // 直属成员列表按新仓库重拉
+  if (inheritOpen.value) {
+    void loadInherit() // 默认展开：随仓库切换自动加载
+  }
+  if (effectiveOpen.value) {
+    void loadEffective()
+  }
 })
 </script>
 

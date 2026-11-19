@@ -1172,6 +1172,7 @@ export default {
       topN: 'Result size',
       hint: 'Search public repositories by keyword (no pagination, up to the selected size).',
       noResults: 'No matching repositories.',
+      tooShort: 'Keyword too short: enter at least 2 characters.',
     },
     rank: {
       title: 'Repository rankings',

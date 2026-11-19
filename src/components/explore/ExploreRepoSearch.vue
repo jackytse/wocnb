@@ -37,11 +37,21 @@ const topNItems = [
   { label: '100', value: 100 },
 ]
 
+/**
+ * 关键词最小长度（API 硬约束）。
+ * 为什么前端拦：CNB 搜索接口要求 key 至少 2 个字符，更短直接返回
+ * 400 "The search key is too short, at least 2 characters are required."
+ * —— 不拦的话用户每敲 1 个字（防抖后）都会吃一个报错提示。
+ */
+const MIN_KEYWORD_LEN = 2
+
 const results = ref<SearchRepoItem[]>([])
 const loading = ref(false)
 const error = ref<Error | null>(null)
 /** 是否已执行过至少一次搜索（控制结果区与空态显隐） */
 const hasSearched = ref(false)
+/** 关键词非空但长度不足 MIN_KEYWORD_LEN：不发请求，空态区提示"太短" */
+const tooShort = ref(false)
 
 let debounceTimer: ReturnType<typeof setTimeout> | null = null
 
@@ -52,8 +62,18 @@ async function runSearch() {
     results.value = []
     error.value = null
     hasSearched.value = false
+    tooShort.value = false
     return
   }
+  if (trimmed.length < MIN_KEYWORD_LEN) {
+    // 不足 2 字符：不发请求（服务器必 400），空态区展示"太短"提示
+    results.value = []
+    error.value = null
+    hasSearched.value = false
+    tooShort.value = true
+    return
+  }
+  tooShort.value = false
   loading.value = true
   error.value = null
   try {
@@ -90,10 +110,13 @@ if (props.initialKey) {
   void runSearch()
 }
 
-/** 空态文案：区分"未搜索"与"无结果" */
-const emptyText = computed(() =>
-  hasSearched.value ? t('explore.search.noResults') : t('explore.search.hint'),
-)
+/** 空态文案：太短提示 > 未搜索 > 无结果（tooShort 优先，刚输入 1 字即见提示） */
+const emptyText = computed(() => {
+  if (tooShort.value) {
+    return t('explore.search.tooShort')
+  }
+  return hasSearched.value ? t('explore.search.noResults') : t('explore.search.hint')
+})
 
 function openRepo(path: string) {
   void router.push(`/repos/${path}?tab=code`)

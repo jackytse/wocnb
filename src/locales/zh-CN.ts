@@ -1184,6 +1184,7 @@ export default {
       topN: '结果数量',
       hint: '输入关键词搜索公共仓库（无分页，最多返回所选条数）。',
       noResults: '没有匹配的仓库。',
+      tooShort: '关键词太短：请输入至少 2 个字符。',
     },
     rank: {
       title: '仓库排行榜',
