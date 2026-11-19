@@ -224,10 +224,14 @@ const items = computed<DropdownMenuItem[][]>(() => ([[{
   to: '/settings'
 }, {
   // 手动检查更新：随手可用的入口（详细状态与更新通道在「设置 · 关于」）。
-  // 交互：点击后图标旋转、条目禁用防重复点击，onSelect 用 preventDefault
-  // 阻止 reka-ui 立即收起菜单 —— 直到拿到结果（toast 反馈）才停转并关菜单。
+  // 交互：点击后用 item.loading 让 Nuxt UI 渲染内置旋转 loading 图标
+  // （不能把 animate-spin 拼进 icon 字符串 —— Iconify 按整串解析图标名，
+  // 带空格的字符串解析不到图标会直接消失）；同时禁用防重复点击，
+  // onSelect 用 preventDefault 阻止 reka-ui 立即收起菜单 —— 直到拿到
+  // 结果（toast 反馈）才停止旋转并关菜单。
   label: t('settings.about.checkUpdate'),
-  icon: updateChecking.value ? 'i-lucide-refresh-cw animate-spin' : 'i-lucide-refresh-cw',
+  icon: 'i-lucide-refresh-cw',
+  loading: updateChecking.value,
   disabled: updateChecking.value,
   onSelect: (e) => {
     // preventDefault：阻止 reka-ui 在 select 后自动收起菜单，
