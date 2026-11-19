@@ -319,39 +319,15 @@ export function parseScopesFromTokenResponse(scope: string | null | undefined): 
 }
 
 /**
- * 强制刷新一次 OAuth 令牌以采集授权范围（scope 采集入口）。
+ * OAuth scope 采集说明（2026-11-19 事故教训，勿再"主动轮换采集"）：
  *
- * 为什么需要：CNB 无 scope 查询端点，唯一能拿到"本令牌有哪些权限"真值的
- * 地方是 token 端点响应 —— 应用只在真实刷新时才能看到它。存量会话
- * （scope 缓存为空）首次需要判定权限时，force 刷新一次即可采集
- * （access_token / refresh_token 轮换后 Rust 侧已写回 CLI 令牌文件，
- * 两端保持同步；令牌本就可用，轮换无副作用）。
- *
- * 失败语义：返回 false 但**不清登录态** —— 与 refreshCliTokenIfNeeded 的
- * "刷新失败即登出"不同，这里的采集是权限判定用途，失败只回退到
- * "scope 未知"状态，由调用方按默认策略处理（如资料页 OAuth 默认禁用）。
+ * scope 真值只来自 token 端点响应（见 refreshCliTokenIfNeeded 内的采集），
+ * 且**只能在自然续期时顺带捕获** —— OAuth 刷新在服务端是破坏性的
+ * （旧 access_token 立即作废、refresh_token 消费轮换），会话中途为采集
+ * scope 强制刷新会作废在用令牌，在途请求 401 → 全局登出。
+ * 因此：scope 缓存为空（未采集）时调用方按各自默认策略回退
+ * （如资料页 OAuth 默认禁用编辑），scope 会在下次临期续期时自然补齐。
  */
-export async function harvestCnbScopes(): Promise<boolean> {
-  if (!isTauriEnv() || cnbAuthMethod.value !== 'oauth' || !cnbToken.value) {
-    return false
-  }
-  try {
-    const result = await invokeCli<CliRefreshResult>('cnb_cli_refresh_token', { force: true })
-    cnbToken.value = result.accessToken
-    cnbTokenExpiresAt.value = result.expiresAt
-    const scopes = parseScopesFromTokenResponse(result.scope)
-    if (scopes) {
-      cnbTokenScopes.value = scopes
-      return true
-    }
-    // 响应没有 scope 字段：保持未知（不写缓存），让调用方走默认策略
-    return false
-  }
-  catch {
-    // 采集失败（网络/refresh_token 失效）：静默回退"未知"，不误清登录态
-    return false
-  }
-}
 
 /**
  * OAuth 令牌按需续期（应用启动时调用，先于 restoreSession）。
@@ -373,7 +349,7 @@ export async function refreshCliTokenIfNeeded(): Promise<boolean> {
     const result = await refreshCliToken()
     cnbToken.value = result.accessToken
     cnbTokenExpiresAt.value = result.expiresAt
-    // 顺手采集授权范围：真实刷新的响应里带 scope（见 harvestCnbScopes 注释）
+    // 顺手采集授权范围：真实刷新的响应里带 scope（采集说明见上方注释块）
     const scopes = parseScopesFromTokenResponse(result.scope)
     if (scopes) {
       cnbTokenScopes.value = scopes

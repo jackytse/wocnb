@@ -18,13 +18,15 @@
  * 写权限预判（2026-11-19 v2）：OAuth 设备授权登录（cnb login）签发的令牌
  * 不含 account-profile:rw，保存资料必然 403。CNB 不提供令牌 scope 查询
  * 端点、令牌本体也是不透明字符串（非 JWT），但 **OAuth token 端点的响应
- * 本身带 scope 字段**（cnb-cli 收到后丢弃；应用侧 Rust 刷新命令已捕获）。
- * 因此判定链路为（零探测写请求）：
+ * 本身带 scope 字段**（cnb-cli 收到后丢弃；应用侧 Rust 在启动临期续期时
+ * 已捕获）。因此判定链路为（零探测写请求、零主动轮换）：
  * - PAT 登录：令牌权限用户自建自选、无查询端点 → 乐观放行，
  *   保存时 403 再兜底禁用（真实保存请求即探测）；
  * - OAuth + scope 已采集：本地 hasScope() 静态判定，无任何额外请求；
- * - OAuth + scope 未知（存量会话）：force 刷新一次采集真值后判定；
- *   采集失败则按实测默认禁用（cnb_cli 客户端固定无 account-profile:rw）。
+ * - OAuth + scope 未采集：默认禁用（cnb_cli 客户端授权范围服务端固定，
+ *   实测不含 account-profile:rw）；scope 随启动临期续期自然补齐。
+ * ⚠️ 绝不能为采集 scope 主动刷新令牌 —— OAuth 刷新在服务端会立即作废
+ * 在用 access_token，在途请求 401 → 全局登出（2026-11-19 事故）。
  * 禁用时给出 scope 说明 + 管理令牌外跳 + CNB 网页端个人设置入口
  * （403 绝不引导登出，红线）。
  */
@@ -44,7 +46,6 @@ import {
 import {
   cnbAuthMethod,
   hasCnbScope,
-  harvestCnbScopes,
 } from '../composables/useCnbCliAuth'
 import {
   fetchMyStarredRepos,
@@ -243,16 +244,16 @@ function buildProfilePayload() {
 }
 
 /**
- * 写权限判定（scope 静态判定链路，零探测写请求）：
+ * 写权限判定（scope 缓存静态判定，零额外请求）：
  *
  * 1. PAT 登录：令牌权限由用户建令牌时自选、无任何查询端点 → 无法预判，
  *    乐观放行（ok），保存时 403 再兜底禁用 —— 真实保存请求即探测；
- * 2. OAuth 且 scope 已采集过：hasCnbScope 本地判定，零请求；
- * 3. OAuth 且 scope 未知（存量会话/新版首次）：force 刷新一次采集真值
- *    （token 轮换无副作用，Rust 侧写回保持 CLI 同步）；
- * 4. OAuth 且采集后仍未知（刷新失败/响应无 scope）：按实测默认禁用 ——
- *    cnb_cli 客户端的授权范围由服务端固定、实测不含 account-profile:rw，
- *    未知时"默认禁用"比"乐观放行再失败"少一次注定失败的用户输入。
+ * 2. OAuth 且 scope 已采集过（缓存非空）：hasCnbScope 本地判定，零请求；
+ * 3. OAuth 且 scope 未采集（''=未知）：默认禁用 —— cnb_cli 客户端的授权
+ *    范围由服务端固定、实测不含 account-profile:rw，"未知默认禁用"比
+ *    "乐观放行再失败"少一次注定失败的用户输入。scope 只在启动临期续期
+ *    时自然补齐（绝不能为采集而主动刷新 —— 会作废在用令牌导致登出，
+ *    2026-11-19 事故）。
  */
 async function resolveWritePermission() {
   canEdit.value = 'checking'
@@ -261,11 +262,8 @@ async function resolveWritePermission() {
     canEdit.value = 'ok'
     return
   }
-  if (hasCnbScope(PROFILE_WRITE_SCOPE) === null) {
-    // scope 未知：强制采集一次（失败静默，保持未知）
-    await harvestCnbScopes()
-  }
-  // 已知 → 按成员判定；仍未知 → 默认禁用（false 分支覆盖 null）
+  // OAuth：按缓存判定。hasCnbScope 对"未采集"返回 null → 与"确定不含"
+  // 同走禁用分支（实测 cnb_cli 客户端固定无 account-profile:rw）
   canEdit.value = hasCnbScope(PROFILE_WRITE_SCOPE) === true ? 'ok' : 'forbidden'
 }
 

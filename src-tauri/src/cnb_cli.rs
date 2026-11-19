@@ -825,8 +825,12 @@ fn write_token_file(path: &PathBuf, value: &serde_json::Value) -> Result<(), Str
 
 /// 把刷新后的令牌写回令牌文件，保持 CLI 侧登录态同步。
 ///
-/// 定位规则：优先取 auths["cnb.cool"]；键异常时按旧 access_token 匹配兜底
-/// （防御 host 键命名差异导致的更新落空）。
+/// 定位规则与 parse_token_file 的读取规则对称：
+/// - 新格式：auths["cnb.cool"]；键异常时按旧 access_token 匹配兜底
+///   （防御 host 键命名差异导致的更新落空）；
+/// - **旧版扁平格式：字段直接在顶层** —— 此前漏掉了这条分支，导致扁平
+///   文件的用户刷新时"服务端已轮换、本地写回失败"（新令牌被丢弃、旧
+///   令牌已被服务端作废 → 必然 401 登出）。已修复：顶层即条目。
 fn update_token_entry(
     old_access_token: &str,
     new_access_token: &str,
@@ -837,19 +841,27 @@ fn update_token_entry(
     let text = std::fs::read_to_string(&path).map_err(|e| format!("读取令牌文件失败: {e}"))?;
     let mut value: serde_json::Value =
         serde_json::from_str(&text).map_err(|e| format!("解析令牌文件失败: {e}"))?;
-    let auths = value
+    let entry = if let Some(auths) = value
         .get_mut("auths")
         .and_then(|v| v.as_object_mut())
-        .ok_or("令牌文件缺少 auths 结构")?;
-    let entry = if let Some(v) = auths.get_mut(CNB_LOGIN_HOST) {
-        v.as_object_mut()
-    } else {
-        auths
-            .values_mut()
-            .find(|v| v.get("access_token").and_then(|t| t.as_str()) == Some(old_access_token))
-            .and_then(|v| v.as_object_mut())
-    };
-    let Some(entry) = entry else {
+    {
+        // 新格式：优先精确 host，取不到按旧 access_token 兜底匹配
+        let entry = if let Some(v) = auths.get_mut(CNB_LOGIN_HOST) {
+            v.as_object_mut()
+        } else {
+            auths
+                .values_mut()
+                .find(|v| v.get("access_token").and_then(|t| t.as_str()) == Some(old_access_token))
+                .and_then(|v| v.as_object_mut())
+        };
+        entry.ok_or("令牌文件中未找到目标登录条目")?
+    }
+    else if value.get("access_token").and_then(|t| t.as_str()) == Some(old_access_token) {
+        // 旧版扁平格式：字段直接在顶层（须校验 access_token 匹配，防止
+        // 把不相关的 JSON 误当登录条目改坏）
+        value.as_object_mut().ok_or("令牌文件顶层不是 JSON 对象")?
+    }
+    else {
         return Err("令牌文件中未找到目标登录条目".to_string());
     };
     entry.insert("access_token".into(), serde_json::Value::String(new_access_token.into()));
@@ -2016,28 +2028,36 @@ pub struct CliRefreshResult {
 /// `scope`（OAuth 授权范围，见 CliRefreshResult.scope 注释）。
 /// 刷新成功后写回 ~/.cnb/token 保持 CLI 侧登录态同步。
 ///
-/// # 参数 force（写权限静态判定的采集入口）
+/// # ⚠️ 服务端副作用（2026-11-19 事故教训，勿再想当然）
 ///
-/// `force=true` 时跳过"临期才刷新"的短路，无条件执行一次真实刷新。
-/// 用途：前端在 scope 未知时强制采集一次授权范围（换 token 是无副作用的
-/// —— access_token 轮换、refresh_token 轮换后写回文件，两端保持同步），
-/// 之后即可在本地做 `hasScope()` 静态判定，不再需要任何探测性写请求。
+/// 刷新请求在服务端是**破坏性**的：旧 access_token 会被立即作废、
+/// refresh_token 消费后轮换。因此本命令只能由"临期续期"路径调用
+/// （应用启动时、请求尚未发出前），**绝不能**做"为了采集 scope 而强制
+/// 刷新"这类主动轮换 —— 会话中途作废在用令牌，在途请求全部 401，
+/// 全局拦截直接把用户登出。
 ///
 /// 分步说明（每一步的失败都返回可读错误，绝不静默降级）：
 /// 1. 读令牌文件 → 无令牌：直接报"请先授权登录"；
-/// 2. 未临期（距过期 >10min）且未 force → 直接返回现值，refreshed=false（零网络开销）；
+/// 2. 未临期（距过期 >10min）→ 直接返回现值，refreshed=false（零网络开销）；
 /// 3. 无 refresh_token（如手写 PAT）→ 无法刷新，引导重新授权；
 /// 4. 发刷新请求 → 非 200 只透出状态码（绝不打印令牌）；
 /// 5. 解析响应 → 缺 access_token 视为失败；
-/// 6. 写回令牌文件（保留其余 host 条目）。
+/// 6. 写回令牌文件（支持 auths 与扁平两种格式；写回失败仍返回新令牌，
+///    见下方返回值说明）。
+///
+/// # 返回值语义：写回失败不吞掉新令牌
+///
+/// 一旦刷新请求成功，服务端已作废旧 access_token —— 此时即使写回文件
+/// 失败（磁盘/格式异常），也必须把新令牌返回给前端（前端会写入登录态），
+/// 否则前端继续拿着已被作废的旧令牌请求，必然 401 全局登出。
+/// CLI 文件与前端短暂不同步（CLI 侧仍存旧值）是可恢复的 —— 下次成功
+/// 刷新会再写回；而"会话被误杀登出"对用户是实打实的破坏。
 #[tauri::command]
-pub async fn cnb_cli_refresh_token(force: Option<bool>) -> Result<CliRefreshResult, String> {
+pub async fn cnb_cli_refresh_token() -> Result<CliRefreshResult, String> {
     let entry = read_token_entry().ok_or("未找到 CNB 登录令牌（~/.cnb/token），请先授权登录")?;
     let now = now_unix_secs();
-    if !force.unwrap_or(false)
-        && !is_token_expired_or_expiring(entry.expires_at, now, REFRESH_MARGIN_SECS)
-    {
-        // 仍有效且距过期超过 10 分钟、且未被强制采集：无需刷新
+    if !is_token_expired_or_expiring(entry.expires_at, now, REFRESH_MARGIN_SECS) {
+        // 仍有效且距过期超过 10 分钟：无需刷新
         return Ok(CliRefreshResult {
             access_token: entry.access_token,
             expires_at: entry.expires_at,
@@ -2110,13 +2130,16 @@ pub async fn cnb_cli_refresh_token(force: Option<bool>) -> Result<CliRefreshResu
     // scope 字段：OAuth2 标准为空格分隔的授权范围列表；空串/缺失一律归 None
     let scope = extract_scope_from_body(&body);
 
-    // 写回令牌文件保持 CLI 同步（保留其余 host 的登录态）
-    update_token_entry(
+    // 写回令牌文件保持 CLI 同步（支持 auths 与扁平两种格式）。
+    // ⚠️ 写回失败**不**返回 Err：服务端已作废旧令牌，此时吞掉新令牌 =
+    // 前端拿着死令牌继续请求 → 401 全局登出（见本命令文档注释）。
+    // CLI 文件与前端短暂不同步可由下次成功刷新自愈，属于可恢复降级。
+    let _ = update_token_entry(
         &entry.access_token,
         &new_access_token,
         new_expires_at,
         new_refresh_token.as_deref(),
-    )?;
+    );
 
     Ok(CliRefreshResult {
         access_token: new_access_token,
