@@ -249,6 +249,9 @@ export default {
     saveFailedDesc: 'Please try again later',
     loadFailedTitle: 'Failed to load profile',
     loadFailedDesc: 'This may be a network issue or missing permissions, please retry',
+    // Single-line permission notice (shown when the probe gets 403; keeps the form area compact)
+    noPermInline: 'Token lacks the {scope} permission, so saving is disabled. Edit your profile on cnb.cool instead',
+    noPermAction: 'Edit on web',
     // 社交区块（profile.vue：「关注者 / 关注 / Star」计数 + 我的 Star / 仓库墙页签）。
     // 这批 key 曾被页面引用却漏加进三语包，导致 UI 直接渲染出 `profile.followers`
     // 这样的原始键名（2026-11-18 截图报障）；locales.test.ts 已补「源码引用的 key

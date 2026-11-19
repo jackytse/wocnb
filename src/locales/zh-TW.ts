@@ -244,6 +244,9 @@ export default {
     saveFailedDesc: '請稍後重試',
     loadFailedTitle: '資料載入失敗',
     loadFailedDesc: '可能是網路異常或權杖權限不足，請重試',
+    // 單行權限提示條（探測 403 時顯示，不佔用表單上方大塊空間）
+    noPermInline: '權杖缺少 {scope} 權限，無法在應用內儲存，請到 CNB 網頁端修改資料',
+    noPermAction: '去網頁端修改',
     // 社交區塊（與 en.ts 同批補齊）：缺失時頁面會渲染出 `profile.followers` 原始鍵名
     followers: '追蹤者',
     following: '追蹤中',

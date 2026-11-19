@@ -29,6 +29,7 @@ import * as z from 'zod'
 import { computed, onMounted, reactive, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { useRouter } from 'vue-router'
+import { openUrl } from '@tauri-apps/plugin-opener'
 import {
   fetchCnbUserProfile,
   updateCnbProfile,
@@ -48,6 +49,21 @@ import { useAppToast } from '../composables/useAppToast'
 
 const { t } = useI18n()
 const toast = useAppToast()
+
+/**
+ * 在系统浏览器打开外链（与 StateAlert/GroupsMenu 同套路）：
+ * Tauri 环境走 opener 插件，纯浏览器调试降级 window.open。
+ * 用途：单行权限提示条的「去网页端修改」入口。
+ */
+function openExternal(url: string) {
+  if ('__TAURI_INTERNALS__' in window) {
+    void openUrl(url)
+  }
+  else {
+    window.open(url, '_blank')
+  }
+}
+
 const router = useRouter()
 
 /**
@@ -324,16 +340,27 @@ async function onSubmit() {
           class="w-full"
           @submit="onSubmit"
         >
-          <!-- 403 预判：探测确认令牌缺 account-profile:rw 时，禁用表单前先给
-               说明与出口（StateAlert 403 分支：缺失 scope + 管理令牌外跳 +
-               网页端个人设置入口；403 绝不引导登出） -->
-          <StateAlert
+          <!-- 单行权限提示条：探测确认令牌缺 account-profile:rw 时显示。
+               只占一行（文本超长截断），右侧内联链接直达 CNB 网页端资料设置；
+               403 绝不引导登出（红线） -->
+          <div
             v-if="canEdit === 'forbidden'"
-            state="error"
-            :error="probeError"
-            :site-url="CNB_PROFILE_SETTINGS_URL"
-            class="mb-4"
-          />
+            class="mb-4 flex items-center gap-2 rounded-lg border border-warning/30 bg-warning/10 px-3 py-1.5 text-sm text-warning"
+          >
+            <UIcon name="i-lucide-shield-alert" class="size-4 shrink-0" />
+            <span class="min-w-0 truncate">
+              {{ t('profile.noPermInline', { scope: probeError?.missingScope || 'account-profile:rw' }) }}
+            </span>
+            <UButton
+              size="xs"
+              color="warning"
+              variant="link"
+              class="shrink-0 px-0"
+              trailing-icon="i-lucide-external-link"
+              :label="t('profile.noPermAction')"
+              @click="openExternal(CNB_PROFILE_SETTINGS_URL)"
+            />
+          </div>
 
           <UPageCard
             :title="t('profile.title')"

@@ -246,6 +246,9 @@ export default {
     saveFailedDesc: '请稍后重试',
     loadFailedTitle: '资料加载失败',
     loadFailedDesc: '可能是网络异常或令牌权限不足，请重试',
+    // 单行权限提示条（探测 403 时显示，不占用表单上方大块空间）
+    noPermInline: '令牌缺少 {scope} 权限，无法在应用内保存，请到 CNB 网页端修改资料',
+    noPermAction: '去网页端修改',
     // 社交区块（与 en.ts 同批补齐）：缺失时页面会渲染出 `profile.followers` 原始键名
     followers: '关注者',
     following: '关注',
