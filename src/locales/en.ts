@@ -1336,7 +1336,7 @@ export default {
       license: 'License',
       licenseValue: 'MIT License',
       // Check-for-update strings (useAppUpdate: manual entry + startup toast)
-      checkUpdate: 'Check for updates',
+      checkUpdate: 'Check updates',
       checking: 'Checking…',
       upToDate: 'You are up to date',
       newVersionFound: 'New version {version} available',

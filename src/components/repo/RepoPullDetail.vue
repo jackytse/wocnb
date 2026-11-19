@@ -558,11 +558,13 @@ function onMerged() {
         </div>
       </div>
 
-      <!-- 描述（ctx 传 null：PR 描述图片多为附件绝对地址，不做相对路径本地化） -->
+      <!-- 描述（ctx 传 { repoPath }：PR 描述图片多为附件绝对地址、无
+           可靠 ref 不做本地化，但根相对附件链接需要仓库前缀改写） -->
       <div class="mt-4 border border-default rounded-lg p-4">
         <MarkdownView
           v-if="pull.body"
           :source="pull.body"
+          :ctx="{ repoPath }"
         />
         <p v-else class="text-sm text-dimmed">
           {{ t('pulls.bodyEmpty') }}

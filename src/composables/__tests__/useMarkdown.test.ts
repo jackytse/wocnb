@@ -29,6 +29,21 @@ describe('resolveLinkUrl（Markdown 相对链接改写）', () => {
       .toBe('https://cnb.cool/-/files/issues/1/voice.wav')
   })
 
+  it('ctx 只有 repoPath（Issue/PR/Release 场景，ref 缺省）→ 链接改写照常拼仓库前缀', () => {
+    // 回归锁定：wav 链接漏组织/仓库名的缺陷根因 —— 调用方因凑不出 ref
+    // 传了 ctx=null。ref 可选化后链接改写只依赖 repoPath
+    const repoOnly: MarkdownContext = { repoPath: 'cnb/feedback' }
+    expect(resolveLinkUrl('/-/files/issues/211/x/01.wav', repoOnly))
+      .toBe('https://cnb.cool/cnb/feedback/-/files/issues/211/x/01.wav')
+  })
+
+  it('ctx 无 ref 时裸相对路径 → 无法拼合法 raw URL，保持原样（null）', () => {
+    const repoOnly: MarkdownContext = { repoPath: 'cnb/feedback' }
+    expect(resolveLinkUrl('record.wav', repoOnly)).toBeNull()
+    expect(resolveLinkUrl('./record.wav', repoOnly)).toBeNull()
+    expect(resolveLinkUrl('../record.wav', repoOnly)).toBeNull()
+  })
+
   it('./ 与裸相对路径 → 仓库 raw 解析（与图片同款规则，含 dir 基准）', () => {
     expect(resolveLinkUrl('./record.wav', ctx))
       .toBe('https://cnb.cool/jackytse/wocnb/-/raw/main/docs/guide/record.wav')

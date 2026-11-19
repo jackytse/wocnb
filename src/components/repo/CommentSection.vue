@@ -317,7 +317,14 @@ async function saveEdit(comment: RepoComment) {
           </div>
         </div>
         <!-- 用户内容：一律经 DOMPurify 消毒渲染（安全红线，禁止 v-html 原始字段） -->
-        <MarkdownView v-else :source="comment.body" />
+        <!-- ctx 传 { repoPath }：评论里的根相对附件链接（/-/files/...）
+             需要仓库前缀才能改写为可访问的 cnb.cool 绝对地址（wav 白屏
+             修复的链接改写依赖它）；ref 缺省 → 图片不本地化 -->
+        <MarkdownView
+          v-else
+          :source="comment.body"
+          :ctx="{ repoPath }"
+        />
       </article>
     </div>
 

@@ -485,10 +485,12 @@ const releaseBadge = computed(() => releaseDetail.value ? badgeOf(releaseDetail.
           </p>
         </div>
 
-        <!-- 描述（Markdown 消毒渲染） -->
+        <!-- 描述（Markdown 消毒渲染；ctx 传 { repoPath }：Release 正文里的
+             根相对附件链接需要仓库前缀改写，图片无 ref 不本地化） -->
         <MarkdownView
           v-if="releaseDetail.body"
           :source="releaseDetail.body"
+          :ctx="{ repoPath }"
           class="mb-4"
         />
         <p v-else class="text-sm text-dimmed mb-4">
@@ -605,6 +607,7 @@ const releaseBadge = computed(() => releaseDetail.value ? badgeOf(releaseDetail.
                     <MarkdownView
                       v-if="selectedTag.message"
                       :source="selectedTag.message"
+                      :ctx="{ repoPath }"
                       class="mt-1"
                     />
                     <!-- 标签元数据（批次 2 · REQ-08）：需要 repo-release:* 权限，

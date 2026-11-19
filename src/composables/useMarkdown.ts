@@ -25,7 +25,15 @@ import { cachedImageSrc, ensureCnbImage } from './useCnbImages'
 /** 图片相对路径解析基准（仓库 + ref + 当前目录） */
 export interface MarkdownContext {
   repoPath: string
-  ref: string
+  /**
+   * 仓库 ref（分支/tag），仅**图片本地化**需要（拼 raw URL）。
+   * 为什么可选：Issue/PR/Release 等场景拿不到可靠 ref，但链接改写
+   * （根相对附件 → cnb.cool/{repo}/...）只需要 repoPath；若强制必填，
+   * 调用方会因凑不出 ref 干脆传 null，链接改写跟着失效（wav 白屏
+   * 修复后又漏组织/仓库名的根因）。ref 缺省时：链接改写照常，图片
+   * 本地化跳过（resolveImageUrl 返回 null，保持原样）。
+   */
+  ref?: string
   /** 正文所在目录（如 'docs/guide'），相对图片以该目录为基准；缺省为根目录 */
   dir?: string
 }
@@ -42,6 +50,11 @@ const IMG_PLACEHOLDER
 function resolveImageUrl(src: string, ctx: MarkdownContext): string | null {
   if (/^(https?:)?\/\//i.test(src) || src.startsWith('data:')) {
     // 绝对地址/协议相对/data URL：不经本地化管线，原样交给消毒器判断
+    return null
+  }
+  // 无 ref 无法拼合法 raw URL（/-/raw/{ref}/... 会塌成 /-/raw//）：
+  // Issue/PR/评论场景 ctx 只带 repoPath（供链接改写），图片保持原样
+  if (!ctx.ref) {
     return null
   }
   const segments = (ctx.dir || '').split('/').filter(Boolean)

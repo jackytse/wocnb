@@ -258,12 +258,15 @@ async function doChangeState() {
       </div>
 
       <!-- 正文（Markdown 消毒渲染；空正文给占位文案）。
-           ctx 传 null：Issue 正文图片多为 CNB 附件绝对地址，
-           相对图片无可靠的 ref/dir 解析基准，不做本地化 -->
+           ctx 传 { repoPath }：Issue 图片多为附件绝对地址、无可靠 ref
+           做本地化（ctx.ref 缺省时图片保持原样），但**根相对附件链接**
+           （如 /-/files/issues/.../x.wav）需要 repoPath 才能改写为
+           https://cnb.cool/{repo}/...（缺组织/仓库名会 404） -->
       <div class="mt-4 border border-default rounded-lg p-4">
         <MarkdownView
           v-if="issue.body"
           :source="issue.body"
+          :ctx="{ repoPath }"
         />
         <p v-else class="text-sm text-dimmed">
           {{ t('issues.bodyEmpty') }}
