@@ -1329,6 +1329,8 @@ export default {
       newVersionFound: '發現新版本 {version}',
       goDownload: '前往下載',
       installNow: '一鍵更新',
+      modalDesc: '目前版本 {current}，可更新到 {version}',
+      installDoneRestart: '更新完成，應用即將自動重啟…',
       downloading: '正在下載 {percent}%',
       installing: '正在安裝…',
       restartToUpdate: '重啟完成更新',

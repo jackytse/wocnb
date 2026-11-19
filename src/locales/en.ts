@@ -1339,6 +1339,8 @@ export default {
       newVersionFound: 'New version {version} available',
       goDownload: 'Download',
       installNow: 'Install update',
+      modalDesc: 'Current version {current}. Update available to {version}.',
+      installDoneRestart: 'Update installed. Restarting automatically…',
       downloading: 'Downloading {percent}%',
       installing: 'Installing…',
       restartToUpdate: 'Restart to finish',

@@ -8,7 +8,7 @@
  * - 名称：昵称（nickname），折叠时只显示头像
  * 菜单能力：查看主页（cnb.cool 个人页）、退出登录（清空本地凭证并回登录页）。
  */
-import { computed, onMounted, ref } from 'vue'
+import { computed, onMounted, ref, watch } from 'vue'
 import { useRouter } from 'vue-router'
 import { useI18n } from 'vue-i18n'
 import type { DropdownMenuItem } from '@nuxt/ui'
@@ -22,8 +22,10 @@ import { cnbAuthMethod, cnbTokenExpiresAt, logoutCliSide } from '../composables/
 import { localePref, type LocalePref } from '../composables/useAppLocale'
 // 图片内存缓存：用户头像转 data URL 后绘制，菜单重新挂载不再闪动
 import { cachedImageSrc, ensureCnbImage } from '../composables/useCnbImages'
-// 检查更新：菜单里提供全局可达的手动入口（与「设置 · 关于」共享同一单例）
-import { useAppUpdate } from '../composables/useAppUpdate'
+// 检查更新：菜单里提供全局可达的手动入口（与「设置 · 关于」共享同一单例）。
+// 弹窗内一键更新 → 进度展示 → 完成自动重启，全部复用 useAppUpdate 的
+// 安装状态机（installStatus / installProgress / relaunchApp）。
+import { useAppUpdate, APP_RELEASES_PAGE_URL } from '../composables/useAppUpdate'
 
 defineProps<{
   collapsed?: boolean
@@ -35,22 +37,23 @@ const toast = useToast()
 
 /**
  * 手动检查更新的进行中标记：
- * - true 时菜单条目图标切换为旋转态（animate-spin）并禁用重复点击；
- * - 检测结束（无论成败）归 false，同时关闭整个菜单（见 handleCheckUpdate）。
+ * - true 时菜单条目图标切换为旋转态（Nuxt UI item.loading）并禁用重复点击；
+ * - 检测结束（无论成败）归 false。
  */
 const updateChecking = ref(false)
 
-/**
- * 下拉菜单受控开关（v-model:open）。
- * 为什么需要受控：检查更新期间要用 onSelect 的 preventDefault 阻止
- * reka-ui 自动收起菜单（否则图标还没转起来菜单就关了），此后没有任何
- * 默认行为能替我们关菜单 —— 只能在拿到结果后手动置 false 收起。
- */
-const menuOpen = ref(false)
 // 组件内翻译函数：t 在 computed 中调用，语言切换时依赖响应式 locale 自动重算
 const { t } = useI18n()
-// 检查更新动作（单例状态与关于页共享；这里只用 checkForUpdate）
-const { checkForUpdate } = useAppUpdate()
+// 检查更新动作（单例状态与关于页共享：检查结果、安装进度都落同一份 state，
+// 这里更新到一半去关于页，关于页也能看到同一份进度）
+const {
+  checkForUpdate,
+  installUpdate,
+  installStatus,
+  installProgress,
+  installError,
+  relaunchApp,
+} = useAppUpdate()
 
 /** 显示名：昵称优先，兜底用户名；极端情况（无用户数据）显示「未登录」（随语言切换） */
 const displayName = computed(() => {
@@ -97,13 +100,13 @@ async function openExternal(url: string) {
  * 与关于页/启动检查共享 useAppUpdate 的单例状态：这里查到的结果，随后
  * 打开关于页能看到同一份状态（status / latestRelease 已回填）。
  *
- * 结果用 toast 呈现（菜单点击后立即收起，没有行内区域可渲染）：
- * - 发现新版本 → 主色 toast（复用启动静默检查的同一套文案）；
- * - 已是最新 → 中性 toast，3s 自动消失，不打扰；
- * - 失败 → 错误色 toast 带服务端原文（403 缺 scope 时用户能直接看到）。
+ * 结果呈现（弹窗 + toast 分工）：
+ * - 发现新版本 → 弹出更新提示窗（UModal）：窗内「立即更新」→ 下载进度条
+ *   → 安装完成自动重启（见下方 updateModal / startInstall 注释）；
+ * - 已是最新 / 检查失败 → 中性 / 错误 toast（3~6s 自动消失，不值得弹窗）。
  */
 async function handleCheckUpdate() {
-  // 进入旋转态：菜单条目图标切换为 animate-spin，并禁用重复点击
+  // 进入旋转态：菜单条目图标切换为旋转 loading，并禁用重复点击
   updateChecking.value = true
   try {
     const result = await checkForUpdate()
@@ -117,12 +120,10 @@ async function handleCheckUpdate() {
       return
     }
     if (result.available) {
-      toast.add({
-        title: t('settings.about.newVersionFound', { version: result.latestVersion }),
-        description: t('settings.about.autoCheckDesc', { current: result.currentVersion }),
-        color: 'primary',
-        duration: 8000,
-      })
+      // 有新版本：记录版本号供弹窗展示（当前版本 / 新版本），打开提示窗
+      modalVersion.value = result.latestVersion
+      modalCurrentVersion.value = result.currentVersion
+      updateModalOpen.value = true
       return
     }
     toast.add({
@@ -132,11 +133,79 @@ async function handleCheckUpdate() {
     })
   }
   finally {
-    // 无论成败：停止旋转并关闭菜单（preventDefault 保住了菜单，
-    // 只能在这里手动收起；try/finally 保证异常时菜单也不会卡死在展开态）
+    // 无论成败停止旋转（菜单由 reka-ui 在 select 后自动收起，无需手动关）
     updateChecking.value = false
-    menuOpen.value = false
   }
+}
+
+// ---------------------------------------------------------------------------
+// 更新提示窗（UModal）：检查出新版本后的弹窗交互
+// ---------------------------------------------------------------------------
+
+/** 更新提示窗开关（检查发现新版本时自动打开；用户可稍后关闭） */
+const updateModalOpen = ref(false)
+/** 弹窗展示的新版本号（检查结果回填，去掉 tag 前导 v） */
+const modalVersion = ref('')
+/** 弹窗展示的当前版本号 */
+const modalCurrentVersion = ref('')
+/**
+ * 是否由本弹窗触发的安装（用于「安装完成自动重启」的 watch）。
+ *
+ * ⚠️ 为什么需要这个标记：installStatus 是与「设置 · 关于」共享的模块级
+ * 单例。关于页的既有语义是"安装完成后由用户点「重启完成更新」"；如果
+ * 这里的 watch 无条件监听 ready 就 relaunch，用户在关于页更新到 ready
+ * 的瞬间会被本组件强行重启。标记只在弹窗内点「立即更新」时置 true，
+ * 安装收尾即复位，保证自动重启只作用于本弹窗的流程。
+ */
+const autoRelaunch = ref(false)
+/**
+ * 弹窗内安装的兜底提示（mismatch / no-update / failed 等无法继续安装时
+ * 显示的原因文案；空串 = 正常展示进度）。failed 的原始错误单独存
+ * installError（useAppUpdate 单例），与文案一起展示。
+ */
+const modalInstallNotice = ref('')
+
+/**
+ * 弹窗内「立即更新」：下载并安装更新，完成自动重启。
+ *
+ * 流程与降级：
+ * - installUpdate() 内部完成 updater check → 通道校验 → 下载（进度实时
+ *   回填 installProgress）→ 安装（installing）→ ready；
+ * - ready → watch(installStatus) 自动 relaunchApp（见下方 watch 注释）；
+ * - failed / mismatch / no-update / unsupported → modalInstallNotice 落
+ *   对应文案，弹窗降级为「前往下载」引导（Windows 只出 portable exe，
+ *   清单缺平台条目，天然走这条降级路径）。
+ */
+async function startInstallFromModal() {
+  modalInstallNotice.value = ''
+  autoRelaunch.value = true
+  const outcome = await installUpdate()
+  // 任一非 ready 结局都取消自动重启，并给出可理解的原因文案
+  if (outcome !== 'ready') {
+    autoRelaunch.value = false
+    modalInstallNotice.value = outcome === 'mismatch'
+      ? t('settings.about.installMismatchToast')
+      : outcome === 'no-update'
+        ? t('settings.about.upToDate')
+        : t('settings.about.installFailed')
+  }
+}
+
+/**
+ * 安装完成（ready）→ 自动重启。
+ * 仅当本次安装由本弹窗触发（autoRelaunch）才执行，防止与关于页共享的
+ * 安装状态在这里产生误触发的重启（见 autoRelaunch 注释）。
+ */
+watch(installStatus, (s) => {
+  if (s === 'ready' && autoRelaunch.value) {
+    autoRelaunch.value = false
+    void relaunchApp()
+  }
+})
+
+/** 弹窗「前往下载」：系统浏览器打开 Releases 页（Windows 降级路径出口） */
+function goDownloadPage() {
+  void openExternal(APP_RELEASES_PAGE_URL)
 }
 
 /** 退出登录：清空本地令牌与用户信息，回登录页并给出操作反馈（文案随语言切换） */
@@ -224,19 +293,14 @@ const items = computed<DropdownMenuItem[][]>(() => ([[{
   to: '/settings'
 }, {
   // 手动检查更新：随手可用的入口（详细状态与更新通道在「设置 · 关于」）。
-  // 交互：点击后用 item.loading 让 Nuxt UI 渲染内置旋转 loading 图标
-  // （不能把 animate-spin 拼进 icon 字符串 —— Iconify 按整串解析图标名，
-  // 带空格的字符串解析不到图标会直接消失）；同时禁用防重复点击，
-  // onSelect 用 preventDefault 阻止 reka-ui 立即收起菜单 —— 直到拿到
-  // 结果（toast 反馈）才停止旋转并关菜单。
+  // 交互：点击后菜单收起，检查期间条目 loading（视觉上只在防连点有意义）；
+  // 检查结果 —— 有新版本弹更新提示窗（窗内一键更新 → 进度 → 自动重启），
+  // 已最新/失败走 toast。
   label: t('settings.about.checkUpdate'),
   icon: 'i-lucide-refresh-cw',
   loading: updateChecking.value,
   disabled: updateChecking.value,
-  onSelect: (e) => {
-    // preventDefault：阻止 reka-ui 在 select 后自动收起菜单，
-    // 让旋转图标在菜单里可见，结果出来后再由 handleCheckUpdate 关闭
-    e.preventDefault()
+  onSelect: () => {
     void handleCheckUpdate()
   }
 }], [{
@@ -294,7 +358,6 @@ const items = computed<DropdownMenuItem[][]>(() => ([[{
 
 <template>
   <UDropdownMenu
-    v-model:open="menuOpen"
     :items="items"
     :content="{ align: 'center', collisionPadding: 12 }"
     :ui="{ content: collapsed ? 'w-48' : 'w-(--reka-dropdown-menu-trigger-width)' }"
@@ -331,4 +394,99 @@ const items = computed<DropdownMenuItem[][]>(() => ([[{
       </div>
     </template>
   </UDropdownMenu>
+
+  <!--
+    更新提示窗：手动检查发现新版本后弹出。
+    三个阶段：
+    - idle：展示版本信息 + 「立即更新」/「稍后」；
+    - downloading/installing：进度条实时走 installProgress（0~100），
+      此阶段禁用遮罩关闭（dismissible=false）防止误触中断下载；
+    - ready：提示自动重启（watch 里 relaunchApp，进程随即退出）。
+    降级：mismatch / no-update / failed（Windows 缺热更条目等）→ 展示
+    原因 + 「前往下载」按钮（系统浏览器打开 Releases 页）。
+  -->
+  <UModal
+    v-model:open="updateModalOpen"
+    :dismissible="installStatus !== 'downloading' && installStatus !== 'installing'"
+    :ui="{ content: 'max-w-sm' }"
+  >
+    <template #content>
+      <div class="p-6">
+        <!-- 标题行：发现新版本 + 关闭按钮（下载/安装中隐藏，防误触中断） -->
+        <div class="flex items-start justify-between gap-3">
+          <h2 class="text-base font-semibold text-highlighted leading-6">
+            {{ t('settings.about.newVersionFound', { version: modalVersion }) }}
+          </h2>
+          <UButton
+            v-if="installStatus !== 'downloading' && installStatus !== 'installing'"
+            color="neutral"
+            variant="ghost"
+            icon="i-lucide-x"
+            size="xs"
+            :aria-label="t('common.cancel')"
+            @click="updateModalOpen = false"
+          />
+        </div>
+
+        <!-- 版本说明：当前 → 新版本 -->
+        <p class="mt-2 text-sm text-muted">
+          {{ t('settings.about.modalDesc', { current: modalCurrentVersion || '—', version: modalVersion }) }}
+        </p>
+
+        <!-- 阶段一：下载/安装中（进度条） -->
+        <div v-if="installStatus === 'downloading' || installStatus === 'installing'" class="mt-5">
+          <div class="flex items-center justify-between text-sm text-muted mb-2">
+            <span>{{ installStatus === 'downloading'
+              ? t('settings.about.downloading', { percent: installProgress })
+              : t('settings.about.installing') }}</span>
+            <span v-if="installStatus === 'downloading'" class="tabular-nums">{{ installProgress }}%</span>
+          </div>
+          <UProgress :model-value="installStatus === 'installing' ? 100 : installProgress" size="sm" />
+        </div>
+
+        <!-- 阶段二：安装完成 → 自动重启提示（relaunch 在 watch 里触发） -->
+        <div v-else-if="installStatus === 'ready'" class="mt-5 flex items-center gap-2 text-sm text-primary">
+          <UIcon name="i-lucide-check-circle-2" class="size-4 shrink-0" />
+          <span>{{ t('settings.about.installDoneRestart') }}</span>
+        </div>
+
+        <!-- 降级：无法应用内更新（Windows 缺条目 / 通道不一致 / 失败）→ 引导手动下载 -->
+        <div v-else-if="modalInstallNotice" class="mt-5">
+          <p class="text-sm text-error">
+            {{ modalInstallNotice }}
+          </p>
+          <p v-if="installError" class="mt-1 text-xs text-muted break-all">
+            {{ installError }}
+          </p>
+          <UButton
+            class="mt-3"
+            size="sm"
+            color="neutral"
+            variant="outline"
+            icon="i-lucide-external-link"
+            :label="t('settings.about.goDownload')"
+            @click="goDownloadPage"
+          />
+        </div>
+
+        <!-- 操作区：仅在初始态显示（进行中/完成/降级态各有自己的出口） -->
+        <div v-if="installStatus === 'idle' && !modalInstallNotice" class="mt-6 flex justify-end gap-2">
+          <UButton
+            size="sm"
+            color="neutral"
+            variant="ghost"
+            :label="t('common.cancel')"
+            @click="updateModalOpen = false"
+          />
+          <UButton
+            size="sm"
+            color="primary"
+            icon="i-lucide-download"
+            :label="t('settings.about.installNow')"
+            @click="startInstallFromModal"
+          />
+        </div>
+      </div>
+    </template>
+  </UModal>
 </template>

@@ -1354,6 +1354,9 @@ export default {
       newVersionFound: '发现新版本 {version}',
       goDownload: '前往下载',
       installNow: '一键更新',
+      // 用户菜单更新提示窗（检查出新版本后的弹窗交互）
+      modalDesc: '当前版本 {current}，可更新到 {version}',
+      installDoneRestart: '更新完成，应用即将自动重启…',
       downloading: '正在下载 {percent}%',
       installing: '正在安装…',
       restartToUpdate: '重启完成更新',
