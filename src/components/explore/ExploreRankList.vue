@@ -56,14 +56,12 @@ async function loadLanguages() {
   }
 }
 
-// 切换周期：语言选择重置 + 清单与榜单重拉（rankType 必填口径）
-watch(rankType, () => {
-  selectedLanguage.value = ''
-  void loadLanguages()
-  void loadRank()
-}, { immediate: true })
-
-// 语言切换：仅重拉榜单（清单不变）
+// 切换周期：语言选择重置 + 清单与榜单重拉（rankType 必填口径）。
+// ⚠️ 这个 watch 必须放在 items/loading 等榜单状态声明**之后**（见文件下方）：
+// immediate 回调在 setup 阶段同步执行，若此时 loadRank 内引用的 ref 还在
+// TDZ（暂时性死区），async 函数体内第一行就会抛 ReferenceError 且被 void
+// 吞掉 —— 首次加载静默失败、日榜"不自动加载"（点 Tab 后才恢复，正是
+// 因为后续触发发生在 setup 完成之后）。
 watch(selectedLanguage, () => void loadRank())
 
 /** 语言下拉项：「全部」置顶 + 语言清单（清单为空时只有「全部」） */
@@ -105,6 +103,16 @@ async function loadRank() {
 function openRepo(path: string) {
   void router.push(`/repos/${path}?tab=code`)
 }
+
+// 切换周期：语言选择重置 + 清单与榜单重拉（rankType 必填口径）。
+// ⚠️ 放在所有 ref 声明之后：immediate 回调在 setup 阶段同步执行，
+// loadRank 里引用的 loading/items 必须已初始化（见上方 selectedLanguage
+// watch 注释 —— 曾因顺序颠倒导致日榜首次加载静默失败的 TDZ 陷阱）
+watch(rankType, () => {
+  selectedLanguage.value = ''
+  void loadLanguages()
+  void loadRank()
+}, { immediate: true })
 </script>
 
 <template>
@@ -153,10 +161,11 @@ function openRepo(path: string) {
       state="empty"
       :empty-text="t('explore.rank.empty')"
     />
-    <!-- 榜单列表：名次 + 仓库 + 增量（increase_star/increase_fork）+ 更新时间 -->
+    <!-- 榜单列表：名次 + 仓库 + 增量（increase_star/increase_fork）+ 更新时间。
+         限高内滚：30 条榜单与搜索结果同高，两栏各自滚动不撑破页面 -->
     <ol
       v-else
-      class="flex flex-col gap-2"
+      class="flex flex-col gap-2 max-h-[28rem] overflow-y-auto -mr-1 pr-1"
     >
       <li
         v-for="(item, index) in items"

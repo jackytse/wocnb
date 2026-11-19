@@ -87,6 +87,7 @@ export default {
     profile: 'Profile',
     settings: 'Settings',
     theme: 'Theme',
+    system: 'System',
     light: 'Light',
     dark: 'Dark',
     language: 'Language',

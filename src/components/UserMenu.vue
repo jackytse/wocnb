@@ -208,6 +208,19 @@ const items = computed<DropdownMenuItem[][]>(() => ([[{
   label: t('menu.theme'),
   icon: 'i-lucide-palette',
   children: [{
+    // 跟随系统 = useColorMode 的 'auto'（VueUse 存储的合法值只有
+    // auto/light/dark；'system' 写进去是非法值，不会命中任何模式）。
+    // index.html 内联脚本首屏判定读的也是 'auto'，两处口径一致
+    label: t('menu.system'),
+    icon: 'i-lucide-monitor',
+    type: 'checkbox',
+    checked: colorMode.value === 'auto',
+    onSelect(e: Event) {
+      e.preventDefault()
+
+      colorMode.value = 'auto'
+    }
+  }, {
     label: t('menu.light'),
     icon: 'i-lucide-sun',
     type: 'checkbox',

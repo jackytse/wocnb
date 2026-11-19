@@ -17,6 +17,11 @@
   <script>
     (function () {
       var mode = localStorage.getItem('vueuse-color-scheme') || 'auto'
+      // 历史脏值迁移：早期外观设置页误存 'system'（非法值），归一为 'auto'
+      if (mode === 'system') {
+        mode = 'auto'
+        localStorage.setItem('vueuse-color-scheme', 'auto')
+      }
       var dark = mode === 'dark' || (mode === 'auto' && window.matchMedia('(prefers-color-scheme: dark)').matches)
       if (dark) {
         document.documentElement.classList.add('dark')

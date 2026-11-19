@@ -66,6 +66,74 @@ function setupExternalLinkHandler() {
 setupExternalLinkHandler()
 
 /**
+ * 清除 WebView 卡住的 :hover 状态。
+ *
+ * 背景：点击「使用反馈 / 代码仓库」等外链时，系统浏览器接管焦点、Webview
+ * 窗口失焦，WebKit 在窗口失焦期间不再派发 mouseleave —— 用户回到应用后，
+ * 最后悬停的那个链接仍带着鼠标移入时的样式（CSS :hover 是引擎内部状态，
+ * JS 无法直接清除）。
+ *
+ * 技巧：短暂将 body 的 pointer-events 置为 none 再恢复。hover 命中测试只
+ * 作用于 pointer-events 可命中的元素，toggle 这个属性会强制 WebKit 重算
+ * hover 链 —— 窗口重新聚焦时卡住的样式立即消失；用户再次移动鼠标后由
+ * 真实事件接管，无副作用。
+ */
+window.addEventListener('blur', () => {
+  document.body.style.pointerEvents = 'none'
+})
+window.addEventListener('focus', () => {
+  // rAF 等一帧再恢复：确保重算发生在 WebKit 处理完失焦期间的积压事件之后
+  requestAnimationFrame(() => {
+    document.body.style.pointerEvents = ''
+  })
+})
+
+/**
+ * 滚动条悬浮化：光标移入滚动区域才显示滑块（macOS overlay 观感）。
+ *
+ * 双通道保证跨 WebView 生效：
+ * - CSS 侧 `*:hover::-webkit-scrollbar-thumb`：Chromium（WebView2）支持
+ *   宿主 :hover 组合滚动条伪元素；
+ * - JS 侧 `.sb-live` 类兜底：WebKit（macOS WKWebView）对"宿主 :hover +
+ *   滚动条伪元素"组合支持不可靠，这里用事件委托给指针下最近的可滚动
+ *   容器加类（class 与 ::-webkit-scrollbar 组合在 WebKit 是确定支持的），
+ *   mouseout 时移除。第一版只靠默认透明 + :hover 浮现，真机上"滚动条
+ *   永远不出现"正是这条组合在部分 WebView 里没生效的实测结果。
+ */
+function nearestScrollable(start: Element | null): HTMLElement | null {
+  let el: Element | null = start
+  while (el) {
+    // "+1" 容忍亚像素舍入：scrollHeight 恰好等于 clientHeight 时不可滚
+    if (el instanceof HTMLElement
+      && (el.scrollHeight > el.clientHeight + 1 || el.scrollWidth > el.clientWidth + 1)) {
+      return el
+    }
+    el = el.parentElement
+  }
+  return null
+}
+
+let lastScrollHover: HTMLElement | null = null
+document.addEventListener('mouseover', (event) => {
+  const el = nearestScrollable(event.target as Element | null)
+  if (el === lastScrollHover) {
+    return
+  }
+  lastScrollHover?.classList.remove('sb-live')
+  lastScrollHover = el
+  el?.classList.add('sb-live')
+}, { passive: true })
+// 指针离开窗口 / 窗口失焦（外链跳浏览器）：清类，滑块随窗口切走而隐藏
+document.documentElement.addEventListener('mouseleave', () => {
+  lastScrollHover?.classList.remove('sb-live')
+  lastScrollHover = null
+})
+window.addEventListener('blur', () => {
+  lastScrollHover?.classList.remove('sb-live')
+  lastScrollHover = null
+})
+
+/**
  * 多语言初始化：
  * 1. 启动时按「用户偏好（默认 system）+ 系统语言」立即设定生效语言，
  *    保证首屏文案语言正确；

@@ -24,12 +24,18 @@
  * macOS 风格悬浮滚动条（全局）。
  *
  * WebView 默认滚动条又粗又占版面（Windows WebView2 尤其明显）。这里模拟
- * macOS 悬浮条：极细（6px）、轨道透明、滑块默认透明，鼠标移入滚动区域
- * （:hover 会冒泡到滚动容器自身）才浮现半透明滑块，悬停滑块本身加深。
+ * macOS 悬浮条：极细（6px）、轨道透明、滑块**默认隐藏**，光标移入滚动
+ * 区域才浮现（加深层次：悬停滑块本身再加深）。
+ *
+ * 显示通道（双保险，缺一即退化为"永远不可见"—— 第一版实测教训）：
+ * - `*:hover::-webkit-scrollbar-thumb`：Chromium（WebView2）支持宿主
+ *   :hover 组合滚动条伪元素；
+ * - `.sb-live::-webkit-scrollbar-thumb`：WebKit（macOS WKWebView）对上述
+ *   组合支持不可靠，由 main.ts 的事件委托给指针下最近的可滚动容器加类。
  *
  * 说明：Chromium/WKWebView 已废弃 overflow: overlay，纯 CSS 无法做到
- * 真正零占位（6px 车道仍保留）；但轨道透明 + 极细 + 默认隐形，观感与
- * macOS 滚动条基本一致，且不随内容高度跳动。
+ * 真正零占位（6px 车道仍保留）；但轨道透明 + 极细，观感与 macOS 基本
+ * 一致，且不随内容高度跳动。
  */
 ::-webkit-scrollbar {
   width: 6px;
@@ -44,26 +50,31 @@
   background: transparent;
 }
 
+/* 默认隐藏：光标不在滚动区域上时不占视觉 */
 ::-webkit-scrollbar-thumb {
   border-radius: 9999px;
   background-color: transparent;
 }
 
-/* 滑块默认隐形：只有指针落在滚动区域（容器自身 :hover，含子元素冒泡）才浮现 */
-*:hover::-webkit-scrollbar-thumb {
-  background-color: rgb(0 0 0 / 0.22);
+/* 光标移入滚动区域：浮现半透明滑块（Chromium 通道 + WebKit 类兜底） */
+*:hover::-webkit-scrollbar-thumb,
+.sb-live::-webkit-scrollbar-thumb {
+  background-color: rgb(0 0 0 / 0.3);
 }
 
-/* 悬停到滑块本身：加深提示可拖拽 */
-::-webkit-scrollbar-thumb:hover {
-  background-color: rgb(0 0 0 / 0.4);
+/* 悬停到滑块本身：再加深提示可拖拽 */
+::-webkit-scrollbar-thumb:hover,
+.sb-live::-webkit-scrollbar-thumb:hover {
+  background-color: rgb(0 0 0 / 0.45);
 }
 
 /* 暗色主题：滑块用白色系 */
-.dark *:hover::-webkit-scrollbar-thumb {
-  background-color: rgb(255 255 255 / 0.25);
+.dark *:hover::-webkit-scrollbar-thumb,
+.dark .sb-live::-webkit-scrollbar-thumb {
+  background-color: rgb(255 255 255 / 0.32);
 }
 
-.dark ::-webkit-scrollbar-thumb:hover {
-  background-color: rgb(255 255 255 / 0.45);
+.dark ::-webkit-scrollbar-thumb:hover,
+.dark .sb-live::-webkit-scrollbar-thumb:hover {
+  background-color: rgb(255 255 255 / 0.5);
 }

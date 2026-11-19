@@ -102,20 +102,12 @@ function openRepo(path: string) {
 
 <template>
   <UCard :ui="{ body: 'flex flex-col gap-3' }">
-    <h3 class="text-sm font-semibold">
-      {{ t('explore.search.title') }}
-    </h3>
-
-    <!-- 搜索行：关键词 + topN -->
-    <div class="flex items-center gap-2 flex-wrap">
-      <UInput
-        v-model="keyword"
-        variant="soft"
-        icon="i-lucide-search"
-        :placeholder="t('explore.search.placeholder')"
-        class="flex-1 min-w-48"
-        autocomplete="off"
-      />
+    <!-- 头部行：标题与 topN 同行（标题左、条数右），输入框独占下一行全宽
+         —— 原先三行纵排让卡片显得松散，也让榜单在窄屏被挤得更靠下 -->
+    <div class="flex items-center justify-between gap-2 flex-wrap">
+      <h3 class="text-sm font-semibold">
+        {{ t('explore.search.title') }}
+      </h3>
       <USelect
         v-model="topN"
         size="sm"
@@ -125,6 +117,17 @@ function openRepo(path: string) {
         :aria-label="t('explore.search.topN')"
       />
     </div>
+
+    <!-- 搜索行：关键词全宽（回车立即搜索，绕过 300ms 防抖等待） -->
+    <UInput
+      v-model="keyword"
+      variant="soft"
+      icon="i-lucide-search"
+      :placeholder="t('explore.search.placeholder')"
+      class="w-full"
+      autocomplete="off"
+      @keydown.enter="runSearch"
+    />
 
     <StateAlert
       v-if="loading"
@@ -141,10 +144,12 @@ function openRepo(path: string) {
       state="empty"
       :empty-text="emptyText"
     />
-    <!-- 结果列表（无分页 —— API 不支持，验收 2） -->
+    <!-- 结果列表（无分页 —— API 不支持，验收 2）。
+         限高内滚：topN=100 时结果最长，不设上限会把整个页面撑出去
+         （滚动条模拟悬浮化后，max-h + overflow-y-auto 观感与 macOS 一致） -->
     <div
       v-else
-      class="flex flex-col gap-2"
+      class="flex flex-col gap-2 max-h-[28rem] overflow-y-auto -mr-1 pr-1"
     >
       <button
         v-for="item in results"

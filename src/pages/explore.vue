@@ -32,7 +32,9 @@ const initialQuery = computed(() =>
     </template>
 
     <template #body>
-      <div class="flex flex-col gap-6">
+      <!-- 宽屏左右分栏（搜索 | 榜单），窄屏上下堆叠：搜索结果 30 条全量
+           展示曾把榜单挤到一屏之外，改为两栏后互不挤占文档流 -->
+      <div class="grid grid-cols-1 xl:grid-cols-2 gap-6 items-start">
         <!-- 公共仓库搜索（300ms 防抖 / topN / 无分页） -->
         <ExploreRepoSearch :initial-key="initialQuery" />
 
