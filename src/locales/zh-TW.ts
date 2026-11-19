@@ -1157,6 +1157,7 @@ export default {
   explore: {
     search: {
       title: '搜尋公共倉庫',
+      open: '搜尋',
       placeholder: '輸入倉庫名或關鍵詞',
       topN: '結果數量',
       hint: '輸入關鍵詞搜尋公共倉庫（無分頁，最多返回所選條數）。',

@@ -1179,6 +1179,7 @@ export default {
   explore: {
     search: {
       title: '搜索公共仓库',
+      open: '搜索',
       placeholder: '输入仓库名或关键词',
       topN: '结果数量',
       hint: '输入关键词搜索公共仓库（无分页，最多返回所选条数）。',

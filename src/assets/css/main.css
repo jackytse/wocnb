@@ -21,60 +21,25 @@
 }
 
 /*
- * macOS 风格悬浮滚动条（全局）。
+ * 全局隐藏原生滚动条（配合 main.ts 的 JS 自绘悬浮滑块）。
  *
- * WebView 默认滚动条又粗又占版面（Windows WebView2 尤其明显）。这里模拟
- * macOS 悬浮条：极细（6px）、轨道透明、滑块**默认隐藏**，光标移入滚动
- * 区域才浮现（加深层次：悬停滑块本身再加深）。
- *
- * 显示通道（双保险，缺一即退化为"永远不可见"—— 第一版实测教训）：
- * - `*:hover::-webkit-scrollbar-thumb`：Chromium（WebView2）支持宿主
- *   :hover 组合滚动条伪元素；
- * - `.sb-live::-webkit-scrollbar-thumb`：WebKit（macOS WKWebView）对上述
- *   组合支持不可靠，由 main.ts 的事件委托给指针下最近的可滚动容器加类。
- *
- * 说明：Chromium/WKWebView 已废弃 overflow: overlay，纯 CSS 无法做到
- * 真正零占位（6px 车道仍保留）；但轨道透明 + 极细，观感与 macOS 基本
- * 一致，且不随内容高度跳动。
+ * 参考 zoro（jackytse/zoro）OverlayScrollbar 的实测结论：在 Tauri
+ * WKWebView 里自定义 ::-webkit-scrollbar 会把 macOS 原生 overlay 滚动条
+ * **降级成占内容宽度的经典滚动条**（这也是"滚动条很粗很占文档流"的根源；
+ * 而把滑块设为透明则表现为"滚动条永不显示"）。因此反过来：
+ *   1. 原生滚动条彻底隐藏（WebKit 需 display:none 且 width/height 同时
+ *      归零才真正释放占位；Firefox/Chromium 走 scrollbar-width: none）；
+ *   2. 悬浮滑块由 main.ts 自绘（一个绝对定位的圆角 div，跟随"当前活跃
+ *      滚动容器"，悬停或滚动中淡入，停止后淡出）—— 不依赖任何
+ *      ::-webkit-scrollbar 伪元素，全引擎行为一致，且真零占位。
  */
-::-webkit-scrollbar {
-  width: 6px;
-  height: 6px;
+* {
+  scrollbar-width: none;
 }
 
-::-webkit-scrollbar-track {
+*::-webkit-scrollbar {
+  display: none;
+  width: 0;
+  height: 0;
   background: transparent;
-}
-
-::-webkit-scrollbar-corner {
-  background: transparent;
-}
-
-/* 默认隐藏：光标不在滚动区域上时不占视觉 */
-::-webkit-scrollbar-thumb {
-  border-radius: 9999px;
-  background-color: transparent;
-}
-
-/* 光标移入滚动区域：浮现半透明滑块（Chromium 通道 + WebKit 类兜底） */
-*:hover::-webkit-scrollbar-thumb,
-.sb-live::-webkit-scrollbar-thumb {
-  background-color: rgb(0 0 0 / 0.3);
-}
-
-/* 悬停到滑块本身：再加深提示可拖拽 */
-::-webkit-scrollbar-thumb:hover,
-.sb-live::-webkit-scrollbar-thumb:hover {
-  background-color: rgb(0 0 0 / 0.45);
-}
-
-/* 暗色主题：滑块用白色系 */
-.dark *:hover::-webkit-scrollbar-thumb,
-.dark .sb-live::-webkit-scrollbar-thumb {
-  background-color: rgb(255 255 255 / 0.32);
-}
-
-.dark ::-webkit-scrollbar-thumb:hover,
-.dark .sb-live::-webkit-scrollbar-thumb:hover {
-  background-color: rgb(255 255 255 / 0.5);
 }

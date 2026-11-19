@@ -89,49 +89,147 @@ window.addEventListener('focus', () => {
 })
 
 /**
- * 滚动条悬浮化：光标移入滚动区域才显示滑块（macOS overlay 观感）。
+ * 自绘悬浮滚动条（全局单例滑块，参考 zoro 的 OverlayScrollbar 方案）。
  *
- * 双通道保证跨 WebView 生效：
- * - CSS 侧 `*:hover::-webkit-scrollbar-thumb`：Chromium（WebView2）支持
- *   宿主 :hover 组合滚动条伪元素；
- * - JS 侧 `.sb-live` 类兜底：WebKit（macOS WKWebView）对"宿主 :hover +
- *   滚动条伪元素"组合支持不可靠，这里用事件委托给指针下最近的可滚动
- *   容器加类（class 与 ::-webkit-scrollbar 组合在 WebKit 是确定支持的），
- *   mouseout 时移除。第一版只靠默认透明 + :hover 浮现，真机上"滚动条
- *   永远不出现"正是这条组合在部分 WebView 里没生效的实测结果。
+ * 原生滚动条已在 CSS 里全局隐藏（WebKit 里自定义 ::-webkit-scrollbar 会
+ * 把 overlay 条降级成经典条 / 滑块设透明则"永不显示"，见 main.css 注释），
+ * 这里用一个 fixed 定位的圆角 div 画滑块：
+ * - 活跃容器 = 最近悬停或最近滚动的可滚动元素；
+ * - 光标移入容器 / 滚动进行中淡入；指针移出且停止滚动 700ms 后淡出
+ *   （与 macOS 原生节奏一致）；
+ * - 几何跟随容器 boundingClientRect，弹窗内滚动、窗口缩放都正确；
+ * - 不依赖 ::-webkit-scrollbar 伪元素，Chromium / WebKit 行为完全一致。
  */
+const sbThumb = document.createElement('div')
+sbThumb.style.cssText = [
+  'position: fixed',
+  'width: 5px',
+  'border-radius: 9999px',
+  'pointer-events: none',
+  'opacity: 0',
+  'transition: opacity 200ms ease-out, top 80ms linear, height 80ms linear, left 80ms linear',
+  'z-index: 9999',
+  'top: 0',
+  'left: 0',
+].join(';')
+document.body.appendChild(sbThumb)
+
+/** 滑块几何参数（与容器边缘的间距，观感对齐 macOS） */
+const SB_THUMB_W = 5
+const SB_GAP = 3
+const SB_TRACK_PAD = 4
+const SB_MIN_H = 32
+
+let sbActive: HTMLElement | null = null
+let sbHovering = false
+let sbScrolling = false
+let sbScrollTimer: ReturnType<typeof setTimeout> | null = null
+/** 暗色类变化监听（主题切换时滑块配色跟着换，无需轮询） */
+let sbDarkObserver: MutationObserver | null = null
+/** 活跃容器尺寸/内容变化监听（列表增删导致 scrollHeight 变化时重算几何） */
+let sbResizeObserver: ResizeObserver | null = null
+
+function sbApplyColor() {
+  const dark = document.documentElement.classList.contains('dark')
+  sbThumb.style.background = dark ? 'rgba(255,255,255,0.32)' : 'rgba(0,0,0,0.3)'
+}
+
+/** 由活跃容器当前状态重算滑块几何与可见性 */
+function sbUpdate() {
+  const el = sbActive
+  if (!el || !el.isConnected
+    || el.scrollHeight <= el.clientHeight + 1) {
+    sbThumb.style.opacity = '0'
+    return
+  }
+  const rect = el.getBoundingClientRect()
+  if (rect.height <= 0 || rect.width <= 0) {
+    sbThumb.style.opacity = '0'
+    return
+  }
+  const trackH = Math.max(0, rect.height - SB_TRACK_PAD * 2)
+  // 滑块长度 ∝ 可视占比，最短 32px（接近 macOS 观感）
+  const thumbH = Math.min(trackH, Math.max(SB_MIN_H, (el.clientHeight / el.scrollHeight) * trackH))
+  const maxScroll = el.scrollHeight - el.clientHeight
+  const ratio = maxScroll > 0 ? el.scrollTop / maxScroll : 0
+  sbThumb.style.top = `${rect.top + SB_TRACK_PAD + ratio * (trackH - thumbH)}px`
+  sbThumb.style.height = `${thumbH}px`
+  sbThumb.style.left = `${rect.right - SB_THUMB_W - SB_GAP}px`
+  sbThumb.style.opacity = sbHovering || sbScrolling ? '1' : '0'
+}
+
+function sbWatchActive(el: HTMLElement | null) {
+  sbResizeObserver?.disconnect()
+  sbResizeObserver = null
+  if (el) {
+    sbResizeObserver = new ResizeObserver(() => sbUpdate())
+    sbResizeObserver.observe(el)
+  }
+  sbUpdate()
+}
+
 function nearestScrollable(start: Element | null): HTMLElement | null {
-  let el: Element | null = start
-  while (el) {
+  let cur: Element | null = start
+  while (cur) {
     // "+1" 容忍亚像素舍入：scrollHeight 恰好等于 clientHeight 时不可滚
-    if (el instanceof HTMLElement
-      && (el.scrollHeight > el.clientHeight + 1 || el.scrollWidth > el.clientWidth + 1)) {
-      return el
+    if (cur instanceof HTMLElement
+      && (cur.scrollHeight > cur.clientHeight + 1 || cur.scrollWidth > cur.clientWidth + 1)) {
+      return cur
     }
-    el = el.parentElement
+    cur = cur.parentElement
   }
   return null
 }
 
-let lastScrollHover: HTMLElement | null = null
 document.addEventListener('mouseover', (event) => {
   const el = nearestScrollable(event.target as Element | null)
-  if (el === lastScrollHover) {
+  sbHovering = !!el
+  if (el === sbActive) {
+    sbUpdate()
     return
   }
-  lastScrollHover?.classList.remove('sb-live')
-  lastScrollHover = el
-  el?.classList.add('sb-live')
+  sbActive = el
+  sbWatchActive(el)
 }, { passive: true })
-// 指针离开窗口 / 窗口失焦（外链跳浏览器）：清类，滑块随窗口切走而隐藏
+
+// 指针离开窗口：滑块随窗口切走而隐藏
 document.documentElement.addEventListener('mouseleave', () => {
-  lastScrollHover?.classList.remove('sb-live')
-  lastScrollHover = null
+  sbHovering = false
+  sbUpdate()
 })
+
+// 滚动中：淡入 + 持续刷新几何；停止 700ms 后淡出（capture 捕获全站滚动）
+document.addEventListener('scroll', (event) => {
+  const el = event.target instanceof HTMLElement ? event.target : null
+  if (!el) {
+    return
+  }
+  if (el !== sbActive) {
+    sbActive = el
+    sbWatchActive(el)
+  }
+  sbScrolling = true
+  sbUpdate()
+  if (sbScrollTimer) {
+    clearTimeout(sbScrollTimer)
+  }
+  sbScrollTimer = setTimeout(() => {
+    sbScrolling = false
+    sbUpdate()
+  }, 700)
+}, { capture: true, passive: true })
+
+window.addEventListener('resize', () => sbUpdate())
 window.addEventListener('blur', () => {
-  lastScrollHover?.classList.remove('sb-live')
-  lastScrollHover = null
+  sbHovering = false
+  sbScrolling = false
+  sbUpdate()
 })
+
+// 暗色类切换（html.dark）时重算滑块配色
+sbApplyColor()
+sbDarkObserver = new MutationObserver(() => sbApplyColor())
+sbDarkObserver.observe(document.documentElement, { attributeFilter: ['class'] })
 
 /**
  * 多语言初始化：

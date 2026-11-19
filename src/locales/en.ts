@@ -1167,6 +1167,7 @@ export default {
   explore: {
     search: {
       title: 'Search public repositories',
+      open: 'Search',
       placeholder: 'Search repositories by name or keyword',
       topN: 'Result size',
       hint: 'Type a keyword to search public repositories (no pagination, returns up to the selected size).',
