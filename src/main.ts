@@ -107,7 +107,9 @@ sbThumb.style.cssText = [
   'border-radius: 9999px',
   'pointer-events: none',
   'opacity: 0',
-  'transition: opacity 200ms ease-out, top 80ms linear, height 80ms linear, left 80ms linear',
+  // 只过渡透明度（显示/隐藏淡入淡出）；几何（top/height/left）不过渡 ——
+  // 带几何过渡时首次出现会从 0 位移滑到目标位置，看起来像"变形"
+  'transition: opacity 200ms ease-out',
   'z-index: 9999',
   'top: 0',
   'left: 0',

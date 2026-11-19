@@ -12,11 +12,10 @@
  */
 import { computed, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
-import type { DropdownMenuItem, TabsItem } from '@nuxt/ui'
+import type { TabsItem } from '@nuxt/ui'
 import {
   fetchCnbActivities,
   cnbUser,
-  selectedGroup,
   type CnbActivityItem,
 } from '../composables/useCnbAuth'
 
@@ -27,29 +26,7 @@ import {
 // 页面文案随语言切换（computed 包裹保证热切换生效）
 const { t } = useI18n()
 
-/**
- * 「+」下拉：指向当前组织在 cnb.cool 的 Issue 列表（浏览器打开后可
- * 选仓库新建）。应用内跨仓库新建属 P1，本次只做外跳，删除模板遗留的
- * New mail / New customer 假条目。
- */
-const newIssueUrl = computed(() =>
-  selectedGroup.value?.path
-    ? `https://cnb.cool/${selectedGroup.value.path}/-/issues`
-    : 'https://cnb.cool',
-)
-
-const items = computed((): DropdownMenuItem[][] => [[{
-  label: t('home.newIssueOnSite'),
-  // 前置图标只负责「新建」语义；外链标识交给 Nuxt UI 的内置机制
-  // —— 条目带 target: '_blank' 时，框架会自动在标签后渲染外链图标
-  // （appConfig.ui.icons.external，即 ↗）。
-  // 早期这里还手写了 icon: 'i-lucide-external-link'，导致同一条目上出现
-  // 两个外链图标（左 external-link + 右 ↗），既冗余又弱化了标识本身，故移除。
-  icon: 'i-lucide-circle-plus',
-  to: newIssueUrl.value,
-  target: '_blank'
-}]])
-
+// ---------------------------------------------------------------------------
 // ---------------------------------------------------------------------------
 // 选项卡
 // ---------------------------------------------------------------------------
@@ -126,12 +103,6 @@ watch(active, (value) => {
       <UDashboardNavbar :title="t('home.title')" :ui="{ right: 'gap-3' }">
         <template #leading>
           <UDashboardSidebarCollapse />
-        </template>
-
-        <template #right>
-          <UDropdownMenu :items="items">
-            <UButton icon="i-lucide-plus" size="md" class="rounded-full" />
-          </UDropdownMenu>
         </template>
       </UDashboardNavbar>
     </template>

@@ -114,7 +114,6 @@ export default {
     reposLoadFailedDesc: '可能是網路異常或權限不足',
     reposEmpty: '該組織下暫無倉庫',
     updatedAt: '{time} 更新',
-    newIssueOnSite: '在瀏覽器建立 Issue',
 
     tabs: {
       activities: '動態',
@@ -1157,7 +1156,6 @@ export default {
   explore: {
     search: {
       title: '搜尋公共倉庫',
-      open: '搜尋',
       placeholder: '輸入倉庫名或關鍵詞',
       topN: '結果數量',
       hint: '輸入關鍵詞搜尋公共倉庫（無分頁，最多返回所選條數）。',

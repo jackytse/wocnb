@@ -34,22 +34,25 @@ const searchOpen = ref(!!initialQuery.value)
         <template #leading>
           <UDashboardSidebarCollapse />
         </template>
-        <template #right>
-          <!-- 搜索入口常驻导航栏：弹窗承载完整搜索 UI（输入 + topN + 结果） -->
-          <UButton
-            icon="i-lucide-search"
-            :label="t('explore.search.open')"
-            color="primary"
-            variant="soft"
-            @click="searchOpen = true"
-          />
-        </template>
       </UDashboardNavbar>
     </template>
 
     <template #body>
-      <!-- 页面主体只有排行榜（日/周/年 + 语言筛选），不再被搜索结果挤占 -->
-      <ExploreRankList />
+      <div class="flex flex-col gap-4">
+        <!-- 搜索入口在文档流中（用户要求不放导航栏）：按钮常驻榜单上方，
+             点击打开搜索弹窗 -->
+        <UButton
+          icon="i-lucide-search"
+          :label="t('explore.search.title')"
+          color="primary"
+          variant="soft"
+          class="self-start"
+          @click="searchOpen = true"
+        />
+
+        <!-- 页面主体只有排行榜（日/周/年 + 语言筛选），不再被搜索结果挤占 -->
+        <ExploreRankList />
+      </div>
 
       <!-- 公共仓库搜索弹窗（300ms 防抖 / topN / 无分页，组件逻辑不变）；
            限宽 2xl：结果列表自身限高内滚，弹窗不会被撑满全屏 -->

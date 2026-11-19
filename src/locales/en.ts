@@ -117,7 +117,6 @@ export default {
     reposLoadFailedDesc: 'This may be caused by a network issue or insufficient permissions',
     reposEmpty: 'No repositories in this group',
     updatedAt: 'Updated {time}',
-    newIssueOnSite: 'New issue in browser',
 
     // —— Home tabs ——
     tabs: {
@@ -1167,7 +1166,6 @@ export default {
   explore: {
     search: {
       title: 'Search public repositories',
-      open: 'Search',
       placeholder: 'Search repositories by name or keyword',
       topN: 'Result size',
       hint: 'Type a keyword to search public repositories (no pagination, returns up to the selected size).',

@@ -114,7 +114,6 @@ export default {
     reposLoadFailedDesc: '可能是网络异常或权限不足',
     reposEmpty: '该组织下暂无仓库',
     updatedAt: '{time} 更新',
-    newIssueOnSite: '在浏览器新建 Issue',
 
     // —— 首页选项卡（动态/待办/我创建的）——
     tabs: {
@@ -1179,7 +1178,6 @@ export default {
   explore: {
     search: {
       title: '搜索公共仓库',
-      open: '搜索',
       placeholder: '输入仓库名或关键词',
       topN: '结果数量',
       hint: '输入关键词搜索公共仓库（无分页，最多返回所选条数）。',
