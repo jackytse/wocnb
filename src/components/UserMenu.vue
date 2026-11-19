@@ -147,6 +147,8 @@ async function handleCheckUpdate() {
     }
     toast.add({
       title: t('settings.about.upToDate'),
+      // 已是最新：显式对勾图标（覆盖 useAppToast 对 neutral 的默认 ℹ）
+      icon: 'i-lucide-check',
       color: 'neutral',
       duration: 3000,
     })

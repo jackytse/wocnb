@@ -284,7 +284,9 @@ async function onInstallUpdate() {
           {{ t('settings.about.installMismatch') }}
         </p>
       </div>
-      <p v-else-if="status === 'upToDate'" class="mt-2 text-xs text-dimmed">
+      <p v-else-if="status === 'upToDate'" class="mt-2 text-xs text-dimmed flex items-center gap-1">
+        <!-- 已是最新：前置对勾图标（与菜单入口检查更新的 toast 图标一致） -->
+        <UIcon name="i-lucide-check" class="size-3.5 shrink-0" />
         {{ t('settings.about.upToDate') }}
       </p>
       <p v-else-if="status === 'checking'" class="mt-2 text-xs text-dimmed">
