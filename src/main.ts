@@ -139,8 +139,8 @@ function sbApplyColor() {
 /** 由活跃容器当前状态重算滑块几何与可见性 */
 function sbUpdate() {
   const el = sbActive
-  if (!el || !el.isConnected
-    || el.scrollHeight <= el.clientHeight + 1) {
+  // 与 nearestScrollable 同一门槛：滚动事件里也要过一遍，防止矮条/噪声
+  if (!el || !el.isConnected || !sbIsVerticallyScrollable(el)) {
     sbThumb.style.opacity = '0'
     return
   }
@@ -173,14 +173,25 @@ function sbWatchActive(el: HTMLElement | null) {
 function nearestScrollable(start: Element | null): HTMLElement | null {
   let cur: Element | null = start
   while (cur) {
-    // "+1" 容忍亚像素舍入：scrollHeight 恰好等于 clientHeight 时不可滚
-    if (cur instanceof HTMLElement
-      && (cur.scrollHeight > cur.clientHeight + 1 || cur.scrollWidth > cur.clientWidth + 1)) {
+    if (cur instanceof HTMLElement && sbIsVerticallyScrollable(cur)) {
       return cur
     }
     cur = cur.parentElement
   }
   return null
+}
+
+/**
+ * 是否值得绘制竖向滑块。
+ *
+ * 门槛刻意收紧（吃过教训）：`overflow-x-auto` 的容器（如设置页工具栏）
+ * 另一轴会计算为 auto，1~3px 的亚像素溢出就会让它"可滚动"，从而在工具栏
+ * 右侧冒出一个毫无意义的小滑块。因此要求：
+ * - 竖向溢出 ≥ 8px（1~7px 属布局舍入噪声，一律忽略）；
+ * - 容器可视高度 ≥ 60px（工具栏/标签行这类矮条不画滑块）。
+ */
+function sbIsVerticallyScrollable(el: HTMLElement): boolean {
+  return el.scrollHeight - el.clientHeight >= 8 && el.clientHeight >= 60
 }
 
 document.addEventListener('mouseover', (event) => {
@@ -203,7 +214,9 @@ document.documentElement.addEventListener('mouseleave', () => {
 // 滚动中：淡入 + 持续刷新几何；停止 700ms 后淡出（capture 捕获全站滚动）
 document.addEventListener('scroll', (event) => {
   const el = event.target instanceof HTMLElement ? event.target : null
-  if (!el) {
+  // 横向滚动容器（标签条等）与噪声级溢出不参与：不抢当前活跃容器，
+  // 也不会在矮条上画滑块
+  if (!el || !sbIsVerticallyScrollable(el)) {
     return
   }
   if (el !== sbActive) {

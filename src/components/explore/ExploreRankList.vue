@@ -162,10 +162,11 @@ watch(rankType, () => {
       :empty-text="t('explore.rank.empty')"
     />
     <!-- 榜单列表：名次 + 仓库 + 增量（increase_star/increase_fork）+ 更新时间。
-         限高内滚：30 条榜单与搜索结果同高，两栏各自滚动不撑破页面 -->
+         不做内部限高滚动：内滚会让页面出现两个滚动条（页面级 + 列表级），
+         榜单随页面自然滚动即可 -->
     <ol
       v-else
-      class="flex flex-col gap-2 max-h-[28rem] overflow-y-auto -mr-1 pr-1"
+      class="flex flex-col gap-2"
     >
       <li
         v-for="(item, index) in items"

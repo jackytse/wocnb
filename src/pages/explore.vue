@@ -9,7 +9,7 @@
  * （R14：会破坏 useOverlayUnlockGuard 守护的弹层生命周期，整窗点不动），
  * 跳到本页后自动打开搜索弹窗，把关键词交给弹窗内的组件承接。
  */
-import { computed, ref } from 'vue'
+import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { useRoute } from 'vue-router'
 import ExploreRepoSearch from '../components/explore/ExploreRepoSearch.vue'
@@ -25,6 +25,25 @@ const initialQuery = computed(() =>
 
 /** 搜索弹窗开关：⌘K 带入关键词时自动打开（组件收到 initialKey 直接出结果） */
 const searchOpen = ref(!!initialQuery.value)
+
+/**
+ * Enter 键快捷打开搜索弹窗（入口按钮右侧徽标承诺的交互）。
+ * 输入框/文本域聚焦时不接管 —— 让表单里的回车保持原语义。
+ */
+function onGlobalKeydown(e: KeyboardEvent) {
+  if (e.key !== 'Enter') {
+    return
+  }
+  const target = e.target as HTMLElement | null
+  if (target && (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA' || target.isContentEditable)) {
+    return
+  }
+  e.preventDefault()
+  searchOpen.value = true
+}
+
+onMounted(() => window.addEventListener('keydown', onGlobalKeydown))
+onBeforeUnmount(() => window.removeEventListener('keydown', onGlobalKeydown))
 </script>
 
 <template>
@@ -39,16 +58,25 @@ const searchOpen = ref(!!initialQuery.value)
 
     <template #body>
       <div class="flex flex-col gap-4">
-        <!-- 搜索入口在文档流中（用户要求不放导航栏）：按钮常驻榜单上方，
-             点击打开搜索弹窗 -->
-        <UButton
-          icon="i-lucide-search"
-          :label="t('explore.search.title')"
-          color="primary"
-          variant="soft"
-          class="self-start"
+        <!-- 搜索入口在文档流中：仿真输入框样式（全宽、placeholder 文案、
+             右侧 ⌘K 风格的 Enter 提示），点击打开搜索弹窗 —— 比孤立按钮
+             更贴合"搜索"的视觉预期 -->
+        <button
+          type="button"
+          class="w-full flex items-center gap-2.5 rounded-md ring ring-default bg-elevated px-3 py-2 text-sm text-dimmed hover:bg-elevated/70 hover:text-muted transition-colors cursor-pointer"
+          :aria-label="t('explore.search.title')"
           @click="searchOpen = true"
-        />
+        >
+          <UIcon name="i-lucide-search" class="size-4 shrink-0" />
+          <span class="flex-1 text-left truncate">{{ t('explore.search.placeholder') }}</span>
+          <UBadge
+            color="neutral"
+            variant="subtle"
+            size="sm"
+            class="font-mono shrink-0"
+            label="Enter"
+          />
+        </button>
 
         <!-- 页面主体只有排行榜（日/周/年 + 语言筛选），不再被搜索结果挤占 -->
         <ExploreRankList />

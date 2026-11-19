@@ -747,6 +747,12 @@ pub fn run() {
         .plugin(tauri_plugin_updater::Builder::new().build())
         // process 插件：更新安装完成后 relaunch 重启应用（与 updater 配套）
         .plugin(tauri_plugin_process::init())
+        // window-state 插件：关闭时把窗口尺寸/位置落盘（~/Library/Application
+        // Support/<app>/.window-state 等），下次启动自动恢复 —— 用户要求
+        // "记住窗口尺寸，下次打开保持上次关闭时的尺寸"。恢复仍受
+        // tauri.conf.json 的 minWidth/minHeight（1024x600）约束；
+        // 托盘隐藏/显示复用同一窗口，状态文件对可见性变更也做了保存
+        .plugin(tauri_plugin_window_state::Builder::default().build())
         // 全局菜单事件：托盘右键菜单（原生 muda 菜单）的条目点击会经
         // Tauri 内部的 muda 事件通道转发到这里（Builder::on_menu_event
         // 接收所有 muda 菜单的事件，不区分菜单由谁创建）

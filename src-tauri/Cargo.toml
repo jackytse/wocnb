@@ -57,6 +57,9 @@ tauri-plugin-notification = "2"
 tauri-plugin-updater = "2"
 # process：更新包安装完成后重启应用（relaunch），与 updater 配套
 tauri-plugin-process = "2"
+# window-state：关闭时记住窗口尺寸/位置，下次启动恢复（保持用户上次
+# 关闭时的窗口大小；tauri.conf.json 的 minWidth/minHeight 仍然生效）
+tauri-plugin-window-state = "2"
 
 # macOS 专用：托盘右键菜单按光标位置弹出（修复多显示器弹错屏）。
 # muda 与 tauri 内部使用的版本一致（0.20），objc2/objc2-core-foundation 也
