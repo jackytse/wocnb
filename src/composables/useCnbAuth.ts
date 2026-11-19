@@ -102,6 +102,13 @@ export const CNB_TOKEN_GUIDE_URL = 'https://docs.cnb.cool/zh/guide/access-token.
 export const CNB_TOKEN_MANAGE_URL = 'https://cnb.cool/profile/token'
 
 /**
+ * CNB 网页端个人设置页（个人资料/头像/邮箱等在站点内维护的入口）。
+ * 用途：应用内令牌缺少资料编辑权限（如 OAuth 设备授权令牌无
+ * account-profile:rw）时，引导用户到网页端完成资料修改。
+ */
+export const CNB_PROFILE_SETTINGS_URL = 'https://cnb.cool/profile'
+
+/**
  * CNB 用户头像 URL 规则：https://cnb.cool/users/{username}/avatar/s。
  * 背景：GET /user 返回的 avatar 字段在用户未自定义头像时为空字符串，
  * 但 CNB 网站本身仍会展示默认头像 —— 该 URL 由 CNB 官方前端使用

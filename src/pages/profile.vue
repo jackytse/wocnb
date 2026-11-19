@@ -14,6 +14,16 @@
  *
  * 保存成功后 useCnbAuth 内部会同步本地登录态（头像等），
  * 侧边栏用户菜单等界面随之立即更新。
+ *
+ * 写权限预判（2026-11-19）：OAuth 设备授权登录（cnb login）签发的令牌
+ * 不含 account-profile:rw，保存资料必然 403。CNB 不提供令牌 scope 查询
+ * 端点、令牌本体也是不透明字符串（非 JWT，无法本地解析），因此采用
+ * 「幂等探测」——资料加载成功后，用服务端刚返回的原始值静默回写一次
+ * （写入相同数据，语义无副作用）：
+ * - 探测成功 / 400（校验失败但鉴权已通过）→ 表单可编辑；
+ * - 探测 403 → 禁用表单，StateAlert 403 分支展示缺失 scope + 管理令牌
+ *   外跳 + CNB 网页端个人设置入口（403 绝不引导登出，红线）。
+ * 非 403 的其余失败（网络抖动等）不拦截编辑，保存时仍有 toast 兜底。
  */
 import * as z from 'zod'
 import { computed, onMounted, reactive, ref, watch } from 'vue'
@@ -23,6 +33,8 @@ import {
   fetchCnbUserProfile,
   updateCnbProfile,
   cnbUser,
+  CnbApiError,
+  CNB_PROFILE_SETTINGS_URL,
   type CnbProfilePayload,
 } from '../composables/useCnbAuth'
 import {
@@ -154,6 +166,8 @@ async function loadProfile() {
   try {
     const data: CnbProfilePayload = await fetchCnbUserProfile()
     Object.assign(profile, data)
+    // 资料就绪后立即探测写权限（不阻塞社交区块等页面的其他内容渲染）
+    void probeWritePermission()
   }
   catch {
     loadError.value = true
@@ -167,23 +181,77 @@ onMounted(() => {
   void loadProfile()
 })
 
+// ---------------------------------------------------------------------------
+// 写权限预判（幂等探测）：禁止没有权限的资料编辑操作
+// ---------------------------------------------------------------------------
+
+/**
+ * 表单可编辑状态机：
+ * - checking：探测中（保存按钮禁用，输入框暂不锁定 —— 探测通常 <1s）；
+ * - ok：探测通过（写入成功 / 400 校验失败均代表鉴权已通过）；
+ * - forbidden：探测 403（令牌缺 account-profile:rw）→ 输入框与保存按钮
+ *   全部禁用，StateAlert 给出 scope 说明与外跳引导。
+ */
+const canEdit = ref<'checking' | 'ok' | 'forbidden'>('checking')
+/** 探测得到的 403 错误（供 StateAlert 403 分支展示缺失 scope 与引导按钮） */
+const probeError = ref<CnbApiError | null>(null)
+
+/** 构造提交负载（探测与正式保存共用，保证两者语义一致；nickname 不提交） */
+function buildProfilePayload() {
+  return {
+    nickname: cnbUser.value?.nickname || '',
+    bio: profile.bio || '',
+    company: profile.company || '',
+    location: profile.location || '',
+    address: profile.address || '',
+    site: profile.site || '',
+    wechatMp: profile.wechatMp || '',
+  }
+}
+
+/**
+ * 静默探测资料写权限：用服务端刚返回的原始值幂等回写一次。
+ *
+ * 为什么用「回写原始值」而不是专门的探测接口：CNB Open API 没有
+ * scope 查询端点，POST /user 也没有 dry-run 模式；写入相同数据是唯一
+ * 无副作用的判定手段。
+ *
+ * 结果判定：
+ * - 成功 → ok；
+ * - CnbApiError 403（kind=forbidden）→ forbidden（记录错误供 StateAlert 用）；
+ * - 其他 4xx/5xx（如 400 site 格式非法）→ ok —— 请求已通过鉴权，
+ *   只是业务校验失败，说明权限在，不能误禁表单；
+ * - 网络类异常 → ok —— 无法判定时保持可用，保存失败时 toast 兜底。
+ */
+async function probeWritePermission() {
+  canEdit.value = 'checking'
+  probeError.value = null
+  try {
+    await updateCnbProfile(buildProfilePayload())
+    canEdit.value = 'ok'
+  }
+  catch (err) {
+    if (err instanceof CnbApiError && err.kind === 'forbidden') {
+      probeError.value = err
+      canEdit.value = 'forbidden'
+    }
+    else {
+      // 权限没问题（校验失败）或无法判定（网络）：放行编辑，不误伤
+      canEdit.value = 'ok'
+    }
+  }
+}
+
 /** 保存资料：POST /user 成功后给出成功反馈（本地登录态由 useCnbAuth 同步） */
 async function onSubmit() {
-  if (saving.value) {
+  // 无权限态在 UI 层已禁用，这里再兜一道（防止键盘回车等路径绕过）
+  if (saving.value || canEdit.value !== 'ok') {
     return
   }
   saving.value = true
   try {
     // 注意：nickname 不提交 —— CNB 拒绝通过 API 修改昵称（见组件头注释）
-    await updateCnbProfile({
-      nickname: cnbUser.value?.nickname || '',
-      bio: profile.bio || '',
-      company: profile.company || '',
-      location: profile.location || '',
-      address: profile.address || '',
-      site: profile.site || '',
-      wechatMp: profile.wechatMp || '',
-    })
+    await updateCnbProfile(buildProfilePayload())
     toast.add({
       title: t('profile.saveSuccess'),
       description: t('profile.saveSuccessDesc'),
@@ -256,6 +324,17 @@ async function onSubmit() {
           class="w-full"
           @submit="onSubmit"
         >
+          <!-- 403 预判：探测确认令牌缺 account-profile:rw 时，禁用表单前先给
+               说明与出口（StateAlert 403 分支：缺失 scope + 管理令牌外跳 +
+               网页端个人设置入口；403 绝不引导登出） -->
+          <StateAlert
+            v-if="canEdit === 'forbidden'"
+            state="error"
+            :error="probeError"
+            :site-url="CNB_PROFILE_SETTINGS_URL"
+            class="mb-4"
+          />
+
           <UPageCard
             :title="t('profile.title')"
             :description="t('profile.description')"
@@ -269,7 +348,7 @@ async function onSubmit() {
               color="neutral"
               type="submit"
               :loading="saving"
-              :disabled="saving"
+              :disabled="saving || canEdit !== 'ok'"
               class="w-fit lg:ms-auto"
             />
           </UPageCard>
@@ -348,6 +427,7 @@ async function onSubmit() {
                 v-model="profile.bio"
                 :rows="4"
                 autoresize
+                :disabled="canEdit === 'forbidden'"
                 class="w-full"
               />
             </UFormField>
@@ -359,6 +439,7 @@ async function onSubmit() {
             >
               <UInput
                 v-model="profile.company"
+                :disabled="canEdit === 'forbidden'"
                 autocomplete="off"
               />
             </UFormField>
@@ -370,6 +451,7 @@ async function onSubmit() {
             >
               <UInput
                 v-model="profile.location"
+                :disabled="canEdit === 'forbidden'"
                 autocomplete="off"
               />
             </UFormField>
@@ -381,6 +463,7 @@ async function onSubmit() {
             >
               <UInput
                 v-model="profile.address"
+                :disabled="canEdit === 'forbidden'"
                 autocomplete="off"
               />
             </UFormField>
@@ -397,6 +480,7 @@ async function onSubmit() {
                 v-model="profile.site"
                 type="url"
                 placeholder="https://"
+                :disabled="canEdit === 'forbidden'"
                 autocomplete="off"
               />
             </UFormField>
@@ -408,6 +492,7 @@ async function onSubmit() {
             >
               <UInput
                 v-model="profile.wechatMp"
+                :disabled="canEdit === 'forbidden'"
                 autocomplete="off"
               />
             </UFormField>
