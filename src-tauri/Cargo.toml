@@ -60,6 +60,10 @@ tauri-plugin-process = "2"
 # window-state：关闭时记住窗口尺寸/位置，下次启动恢复（保持用户上次
 # 关闭时的窗口大小；tauri.conf.json 的 minWidth/minHeight 仍然生效）
 tauri-plugin-window-state = "2"
+# rusqlite：本地 SQLite 通知持久化（构建通知 + 应用通知）。
+# bundled：静态编译 SQLite C 源码，不依赖系统 libsqlite3（避免用户机器
+# 缺库导致启动失败）；表内以 username 列做账号数据隔离，登出默认保留
+rusqlite = { version = "0.32", features = ["bundled"] }
 
 # macOS 专用：托盘右键菜单按光标位置弹出（修复多显示器弹错屏）。
 # muda 与 tauri 内部使用的版本一致（0.20），objc2/objc2-core-foundation 也

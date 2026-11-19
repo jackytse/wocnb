@@ -96,7 +96,9 @@ export default {
     loggedOut: 'Signed out',
     loggedOutDesc: 'Local credentials cleared. Sign in again to continue.',
     logoutConfirmTitle: 'Log out?',
-    logoutConfirmDesc: 'This clears the locally stored token and account info. Sign in again to continue.',
+    logoutConfirmDesc: 'This clears the locally stored token and account info. Sign in again to continue. Local notification data is kept by default and will reappear when you sign in with the same account.',
+    logoutClearData: 'Also clear local notification data (per-account history)',
+    logoutClearFailed: 'Failed to clear local notification data; data is kept on this device',
     notLoggedIn: 'Not signed in',
   },
   // 侧面栏组织（Group）菜单：全部文案统一 Group / Groups 口径，

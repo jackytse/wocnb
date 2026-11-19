@@ -94,7 +94,9 @@ export default {
     loggedOut: '已登出',
     loggedOutDesc: '本機憑證已清除，重新登入即可繼續使用',
     logoutConfirmTitle: '確認要登出？',
-    logoutConfirmDesc: '將清除本機儲存的存取權杖與帳號資訊，需要重新登入才能繼續使用。',
+    logoutConfirmDesc: '將清除本機儲存的存取權杖與帳號資訊，需要重新登入才能繼續使用。本地通知資料預設保留，下次登入同一帳號仍可見。',
+    logoutClearData: '同時清空本地通知資料（按帳號隔離的歷史通知）',
+    logoutClearFailed: '清空本地通知資料失敗，資料仍保留在本機',
     notLoggedIn: '未登入',
   },
   // 側面欄組織（Group）選單：中文統一用「組織」，鍵名與 en 完全對齊。

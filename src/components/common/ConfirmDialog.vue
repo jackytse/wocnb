@@ -103,6 +103,10 @@ function onConfirm() {
           {{ desc }}
         </p>
 
+        <!-- 扩展插槽：调用方注入额外交互（如退出登录时的「清空数据」勾选框）。
+             放在说明文案之后、高危输入之前，视觉顺序与语义一致 -->
+        <slot name="extra" />
+
         <!-- 高危确认：输入指定文本才能确认（仿 GitHub 删除仓库交互） -->
         <UFormField
           v-if="typeToConfirm !== undefined"

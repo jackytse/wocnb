@@ -94,7 +94,11 @@ export default {
     loggedOut: '已退出登录',
     loggedOutDesc: '本地凭证已清除，重新登录即可继续使用',
     logoutConfirmTitle: '确认退出登录？',
-    logoutConfirmDesc: '将清除本机保存的访问令牌与账号信息，需要重新登录才能继续使用。',
+    logoutConfirmDesc: '将清除本机保存的访问令牌与账号信息，需要重新登录才能继续使用。本地通知数据默认保留，下次登录同一账号仍可见。',
+    // 退出弹窗勾选项：默认不勾选（数据保留是默认策略，用户显式选择才删除）
+    logoutClearData: '同时清空本地通知数据（按账号隔离的历史通知）',
+    // 勾选清空后删除失败：明确告知数据仍在，避免用户误以为已清空
+    logoutClearFailed: '清空本地通知数据失败，数据仍保留在本机',
     notLoggedIn: '未登录',
   },
   // 侧面栏组织（Group）菜单：中文统一用「组织」，键名与 en 完全对齐。

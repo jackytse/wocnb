@@ -58,6 +58,7 @@ import {
   type CnbRepo,
 } from './useCnbAuth'
 import { fetchBuildLogs } from './useCnbRepo'
+import { markNoticesReadInDb, persistBuildNoticeToDb, type StoredBuildNotice } from './useNoticeDb'
 
 // ---------------------------------------------------------------------------
 // 纯函数区（可单测，禁止读写响应式状态 / 禁止网络请求）
@@ -368,23 +369,91 @@ export const buildWatchTruncated = ref(false)
 /** 通知 id 序列号（同一毫秒内多次 push 时保证 id 唯一） */
 let noticeSeq = 0
 
-/** 追加一条通知到列表头部（自动裁剪到 50 条并累加未读数） */
+/**
+ * 追加一条通知到列表头部（自动裁剪到 50 条并累加未读数）。
+ *
+ * 持久化策略：同时落库 SQLite（useNoticeDb，按当前账号隔离），
+ * 落库失败不影响内存展示（fire-and-forget）。重启后由
+ * useNoticeRestore 调 applyRestoredBuildNotices 回灌历史通知。
+ */
 function pushNotice(notice: Omit<BuildNotice, 'id'>): void {
   noticeSeq += 1
   const item: BuildNotice = { ...notice, id: `${notice.time}-${noticeSeq}` }
   buildNoticeFeed.value = [item, ...buildNoticeFeed.value].slice(0, MAX_FEED_SIZE)
   unreadBuildCount.value += 1
+  // 异步落库（未登录时 useNoticeDb 内部自动跳过，不产生写库）
+  persistBuildNoticeToDb({
+    noticeId: item.id,
+    repoPath: item.repoPath,
+    repoName: item.repoName,
+    sn: item.sn,
+    status: item.status,
+    commitTitle: item.commitTitle,
+    sourceRef: item.sourceRef,
+    nickName: item.nickName,
+    time: item.time,
+    leftover: item.leftover,
+    read: false,
+  })
 }
 
 /** 标记构建通知为已读（面板打开时调用：徽标清零，列表保留） */
 export function markBuildNoticesRead(): void {
   unreadBuildCount.value = 0
+  // 同步落库已读标记：重启后未读徽标按 read=false 条数恢复，
+  // 打过面板的通知不再重复计入未读（幂等，全量 UPDATE）
+  markNoticesReadInDb()
 }
 
-/** 清空通知列表与未读数（退出登录时调用，避免上一个账号的通知残留） */
+/**
+ * 清空通知列表与未读数（退出登录/切换账号时调用）。
+ *
+ * 注意：只清**内存**，不删数据库 —— 登出默认保留数据（用户可选清空），
+ * 同一账号下次登录时由 applyRestoredBuildNotices 回灌历史通知。
+ * 数据库删除走独立的 notice_db_clear（登出弹窗勾选时才触发）。
+ */
 export function clearBuildNotices(): void {
   buildNoticeFeed.value = []
   unreadBuildCount.value = 0
+}
+
+/**
+ * 回灌数据库恢复出的构建通知（登录态恢复/换账号时由 useNoticeRestore 调用）。
+ *
+ * 与内存 feed 按 id 去重合并：防御"回灌期间轮询刚好推了新通知"的竞态
+ * （新通知同时写内存与库，简单覆盖会丢，合并则两边都保住）。合并后按
+ * 时间倒序裁剪到 50 条；未读徽标 = 回灌条目中未读数（打开过面板的
+ * 历史通知 read=true 不再计入）。
+ */
+export function applyRestoredBuildNotices(rows: StoredBuildNotice[]): void {
+  if (rows.length === 0) {
+    return
+  }
+  const existingIds = new Set(buildNoticeFeed.value.map(n => n.id))
+  // 未读统计必须先做（在 rows 上读 read 标记）——映射成 BuildNotice 后
+  // 已丢弃 read 字段，事后过滤会把所有条目都当成未读（重复计入徽标）
+  const restoredUnread = rows.filter(r => !existingIds.has(r.noticeId) && !r.read).length
+  const restored: BuildNotice[] = rows
+    .filter(r => !existingIds.has(r.noticeId))
+    .map(r => ({
+      id: r.noticeId,
+      repoPath: r.repoPath,
+      repoName: r.repoName,
+      sn: r.sn,
+      status: r.status,
+      commitTitle: r.commitTitle,
+      sourceRef: r.sourceRef,
+      nickName: r.nickName,
+      time: r.time,
+      leftover: r.leftover,
+    }))
+  // 最新在前（数据库已倒序返回，防御性再排一次）
+  const merged = [...restored, ...buildNoticeFeed.value]
+    .sort((a, b) => b.time - a.time)
+    .slice(0, MAX_FEED_SIZE)
+  buildNoticeFeed.value = merged
+  // 回灌条目里的未读数累加进徽标（restoredUnread 在映射前已按 read 统计）
+  unreadBuildCount.value += restoredUnread
 }
 
 // ---------------------------------------------------------------------------

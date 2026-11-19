@@ -12,12 +12,16 @@
  * - 「同时在 CLI 中退出登录」：调 cnb logout 清 CLI 侧 ~/.cnb/token，
  *   保持应用与 CLI 两端登录态一致。
  */
-import { computed } from 'vue'
+import { computed, ref } from 'vue'
 import { useRouter } from 'vue-router'
 import { useI18n } from 'vue-i18n'
 import { openUrl } from '@tauri-apps/plugin-opener'
 import { cnbToken, logout, CNB_TOKEN_MANAGE_URL } from '../../composables/useCnbAuth'
 import { useAppToast } from '../../composables/useAppToast'
+// 登出可选清空持久化通知（SQLite）：勾选时在 logout() 之前物理删除
+// 当前账号的本地通知数据（依赖 username，logout 之后拿不到）
+import { clearNoticesInDb } from '../../composables/useNoticeDb'
+import ConfirmDialog from '../../components/common/ConfirmDialog.vue'
 import {
   cnbAuthMethod,
   cnbTokenExpiresAt,
@@ -89,8 +93,49 @@ async function handleCliLogout() {
   }
 }
 
-/** 退出登录：清空本地令牌与账号信息；OAuth 登录时同步清理 CLI 侧令牌 */
+/** 退出登录确认弹窗开关（与 UserMenu 同范式：退出前拦一道二次确认） */
+const logoutDialogOpen = ref(false)
+
+/**
+ * 退出时是否同时清空本地通知数据（SQLite 持久化的历史通知）。
+ * 默认 false —— 数据保留是默认策略，用户显式勾选才物理删除。
+ */
+const logoutClearData = ref(false)
+
+/**
+ * 打开退出确认弹窗（「退出登录」按钮入口）：
+ * 每次打开重置勾选为默认的不勾选，不残留上次的选择。
+ */
+function openLogoutDialog() {
+  logoutClearData.value = false
+  logoutDialogOpen.value = true
+}
+
+/**
+ * 确认退出：清空本地令牌与账号信息；OAuth 登录时同步清理 CLI 侧令牌。
+ *
+ * 可选清空数据：勾选「同时清空本地通知数据」时先物理删除当前账号的
+ * SQLite 通知（必须在 logout() 之前 —— clearNoticesInDb 依赖
+ * cnbUser.username）；删除失败用 toast 告知但不阻塞登出（凭证清理
+ * 不能因通知删除失败而中断，用户知道数据还在即可）。
+ */
 async function handleLogout() {
+  // 勾选了清空数据：删除该账号的持久化通知（构建 + 应用两个分区）
+  if (logoutClearData.value) {
+    try {
+      await clearNoticesInDb()
+    }
+    catch (err) {
+      // 删除失败：明确告知"数据未删除"，避免用户误以为已清空
+      toast.add({
+        title: t('menu.logoutClearFailed'),
+        description: String(err),
+        color: 'warning',
+        duration: 5000,
+      })
+    }
+  }
+  logoutDialogOpen.value = false
   // OAuth 登录方式：先清 CLI 侧（cnb logout），失败不阻塞本地登出
   if (cnbAuthMethod.value === 'oauth') {
     await logoutCliSide().catch(() => {})
@@ -193,8 +238,29 @@ async function handleLogout() {
         icon="i-lucide-log-out"
         :label="t('settings.token.logout')"
         :disabled="!cnbToken"
-        @click="handleLogout"
+        @click="openLogoutDialog"
       />
     </template>
   </UPageCard>
+
+  <!--
+    退出登录二次确认弹窗（ConfirmDialog 复用组件）：
+    desc 说明默认保留本地通知数据；extra 插槽放「清空数据」勾选框
+    （默认不勾选），勾选后 handleLogout 先删 SQLite 通知再登出。
+  -->
+  <ConfirmDialog
+    v-model:open="logoutDialogOpen"
+    :title="t('menu.logoutConfirmTitle')"
+    :desc="t('menu.logoutConfirmDesc')"
+    :confirm-label="t('menu.logout')"
+    confirm-color="error"
+    @confirm="handleLogout"
+  >
+    <template #extra>
+      <UCheckbox
+        v-model="logoutClearData"
+        :label="t('menu.logoutClearData')"
+      />
+    </template>
+  </ConfirmDialog>
 </template>

@@ -8,6 +8,10 @@ use tauri_plugin_notification::NotificationExt;
 /// 设计与 CLI 行为依据见模块顶部注释（src-tauri/src/cnb_cli.rs）。
 mod cnb_cli;
 
+/// 通知 SQLite 持久化模块：构建/应用通知落盘 + 按账号隔离 + 登出可选清空。
+/// 设计说明见模块顶部注释（src-tauri/src/notice_db.rs）。
+mod notice_db;
+
 /// 托盘实例 ID，用于构建后标识（当前仅一处使用，保留常量便于扩展）
 const TRAY_ID: &str = "main-tray";
 
@@ -996,6 +1000,12 @@ pub fn run() {
             cnb_cli::cnb_cli_read_token,
             cnb_cli::cnb_cli_refresh_token,
             cnb_cli::cnb_cli_logout,
+            // —— 通知 SQLite 持久化（按账号隔离，登出默认保留数据）——
+            notice_db::notice_db_load,
+            notice_db::notice_db_insert_build,
+            notice_db::notice_db_insert_app,
+            notice_db::notice_db_mark_all_read,
+            notice_db::notice_db_clear,
         ])
         // opener 插件：向前端暴露 open_url 命令，用于在系统默认浏览器中打开外部链接
         // （Tauri Webview 会拦截 target="_blank" 新窗口请求，必须显式转交系统浏览器）

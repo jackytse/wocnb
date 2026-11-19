@@ -12,6 +12,7 @@ import { restoreSession, cnbToken, setUnauthorizedHandler } from './composables/
 import { refreshCliTokenIfNeeded } from './composables/useCnbCliAuth'
 import { initBuildWatcher } from './composables/useCnbBuildWatch'
 import { initBuildNotificationActionHandler } from './composables/useBuildNotificationAction'
+import { initNoticeDbSync } from './composables/useNoticeRestore'
 import { isNotificationsSlideoverOpen } from './composables/useDashboard'
 import { localePref, resolvedLocale } from './composables/useAppLocale'
 import { i18n } from './i18n'
@@ -366,6 +367,13 @@ refreshCliTokenIfNeeded().then(() => restoreSession())
  * 不要"顺手"改回布尔值。
  */
 initBuildWatcher()
+
+/**
+ * 通知持久化联动（SQLite）：监听登录用户变化，登录/恢复会话时按账号
+ * 回灌历史通知与未读数，登出/换账号时清空内存 feed（数据库默认保留，
+ * 登出弹窗勾选「清空数据」才物理删除）。内部对浏览器 dev 环境自动跳过。
+ */
+initNoticeDbSync()
 
 /**
  * 系统通知点击处理：Rust 侧 on_action（src-tauri/src/lib.rs）把用户点击

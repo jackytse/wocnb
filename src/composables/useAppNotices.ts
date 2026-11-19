@@ -8,12 +8,13 @@
  * 仓库上下文，硬塞进 BuildNotice 会让两类条目互相背对方的可选字段。
  * 独立数据源 + 面板独立分区，各自演进互不牵连。
  *
- * # 为什么只在内存（不持久化）
+ * # 持久化策略（SQLite，useNoticeDb）
  *
- * 与构建通知（buildNoticeFeed 同为内存 ref）口径一致：应用通知是
- * "本次会话内发生了什么"的流，重启后由检测逻辑重新评估（更新检测有
- * localStorage 去重，重启后不会重复打扰），历史记录价值有限；
- * 持久化反而引入脏数据清洗成本（版本升级后结构变更等）。
+ * 与构建通知同口径落库：push 时异步写入 SQLite（按当前登录账号隔离），
+ * 失败只 warn 不影响内存展示；登录态恢复/换账号时由 useNoticeRestore
+ * 调 applyRestoredAppNotices 回灌历史。落库后即使应用重启，通知面板
+ * 也能展示历史更新提醒；"已通知版本"的 localStorage 去重仍由
+ * useAppUpdate 负责，重启不会因持久化而重复打扰。
  *
  * # 通知产生方与消费方
  *
@@ -24,6 +25,12 @@
  *   徽标累加 unreadAppNoticeCount。
  */
 import { ref } from 'vue'
+
+import {
+  markNoticesReadInDb,
+  persistAppNoticeToDb,
+  type StoredAppNotice,
+} from './useNoticeDb'
 
 /** 应用通知类型（当前仅更新检测；新事件类型在此扩展枚举） */
 export type AppNoticeKind = 'update'
@@ -59,6 +66,9 @@ let noticeSeq = 0
 /**
  * 追加一条应用通知到列表头部（自动裁剪到 20 条并累加未读数）。
  *
+ * 同时异步落库 SQLite（按当前账号隔离；未登录时 useNoticeDb 内部
+ * 自动跳过）。落库失败不影响内存展示。
+ *
  * @param notice 除 id 外的完整条目（id 由本函数生成，调用方不感知）
  */
 export function pushAppNotice(notice: Omit<AppNotice, 'id'>): void {
@@ -66,17 +76,64 @@ export function pushAppNotice(notice: Omit<AppNotice, 'id'>): void {
   const item: AppNotice = { ...notice, id: `${notice.time}-${noticeSeq}` }
   appNoticeFeed.value = [item, ...appNoticeFeed.value].slice(0, MAX_APP_NOTICE_SIZE)
   unreadAppNoticeCount.value += 1
+  persistAppNoticeToDb({
+    noticeId: item.id,
+    kind: item.kind,
+    title: item.title,
+    body: item.body,
+    version: item.version,
+    time: item.time,
+    read: false,
+  })
 }
 
-/** 标记应用通知为已读（面板打开时调用：徽标清零，列表保留） */
+/** 标记应用通知为已读（面板打开时调用：徽标清零，列表保留；落库幂等） */
 export function markAppNoticesRead(): void {
   unreadAppNoticeCount.value = 0
+  // 已读状态落库（与构建通知共用一条 mark_all_read 命令，幂等可重入）
+  markNoticesReadInDb()
 }
 
-/** 清空应用通知列表与未读数（预留：退出登录等场景调用） */
+/**
+ * 清空应用通知列表与未读数（退出登录/切换账号时调用，仅清内存 ——
+ * 数据库默认保留，登出勾选「清空数据」才走 notice_db_clear）。
+ */
 export function clearAppNotices(): void {
   appNoticeFeed.value = []
   unreadAppNoticeCount.value = 0
+}
+
+/**
+ * 回灌数据库恢复出的应用通知（登录态恢复/换账号时由 useNoticeRestore 调用）。
+ *
+ * 与内存 feed 按 id 去重合并（防御回灌期间恰有新通知 push 的竞态），
+ * 按时间倒序裁剪到 20 条；未读徽标累加回灌条目中的未读数。
+ */
+export function applyRestoredAppNotices(rows: StoredAppNotice[]): void {
+  if (rows.length === 0) {
+    return
+  }
+  const existingIds = new Set(appNoticeFeed.value.map(n => n.id))
+  // 未读统计必须在映射前做（映射成 AppNotice 后 read 字段已丢弃，
+  // 事后过滤会把所有条目都当成未读，重复计入徽标）
+  const restoredUnread = rows.filter(r => !existingIds.has(r.noticeId) && !r.read).length
+  const restored: AppNotice[] = rows
+    .filter(r => !existingIds.has(r.noticeId))
+    .map(r => ({
+      id: r.noticeId,
+      // kind 来自本应用自己写入的库；当前枚举仅 'update' 一种，
+      // 脏数据也归一为 'update'（面板渲染分支不会出现未知类型）
+      kind: 'update' as AppNoticeKind,
+      title: r.title,
+      body: r.body,
+      version: r.version,
+      time: r.time,
+    }))
+  const merged = [...restored, ...appNoticeFeed.value]
+    .sort((a, b) => b.time - a.time)
+    .slice(0, MAX_APP_NOTICE_SIZE)
+  appNoticeFeed.value = merged
+  unreadAppNoticeCount.value += restoredUnread
 }
 
 /**
