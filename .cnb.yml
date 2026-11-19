@@ -641,7 +641,11 @@ v*:
             # 节点上哪怕装的是 brew 版 rust（无 rustup 命令），只要 rustc 可用即可。
             # --config 覆盖层（tauri.updater.conf.json）只开 createUpdaterArtifacts：
             # 主 tauri.conf.json 不开它，本地 `pnpm tauri build`（无私钥）不受影响
-            pnpm exec tauri build --target aarch64-apple-darwin --bundles dmg --config src-tauri/tauri.updater.conf.json
+            # --bundles 必须**同时带 app**：热更新产物（.app.tar.gz/.sig）只在
+            # 打包 app 目标时生成（官方警告：dmg 不属于 updater-enabled targets，
+            # rc.35 首发实测 build 后无 .app.tar.gz 导致 collect 脚本报错退出）。
+            # dmg 仍要保留：Release 附件的安装包还是 dmg
+            pnpm exec tauri build --target aarch64-apple-darwin --bundles app,dmg --config src-tauri/tauri.updater.conf.json
             bash scripts/ci/collect-macos.sh aarch64-apple-darwin arm64
             # 热更新产物（.app.tar.gz + .sig）收集 + latest.json 清单生成；
             # 失败即退出（宁可本版发不出热更新，也不发坏清单）
