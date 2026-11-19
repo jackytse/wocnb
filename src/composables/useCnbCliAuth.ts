@@ -22,6 +22,7 @@
 import { onScopeDispose, ref, type Ref } from 'vue'
 import { useStorage } from '@vueuse/core'
 import { i18n } from '../i18n'
+import { clearDeniedScopes, isScopeDenied } from './useCnbScopeCache'
 import {
   cnbAvatarUrl,
   cnbFetch,
@@ -249,6 +250,8 @@ export async function applyCliToken(info: CliTokenInfo): Promise<CnbUser> {
     // 新授权的 scope 必须重置：CLI 落盘的令牌文件不含 scope，本次授权的
     // 授权范围要在首次采集后才知道；残留旧会话的缓存会导致权限误判
     cnbTokenScopes.value = ''
+    // 403 学习缓存同理：denied 结论绑定旧令牌，换令牌必须重学
+    clearDeniedScopes()
     return normalized
   } catch (err) {
     // 校验失败：回滚令牌与登录方式（过期时间置 0），保持未登录状态干净
@@ -275,6 +278,8 @@ export function markPatLogin(): void {
   // PAT 与 OAuth 是两套令牌体系：清掉可能残留的 OAuth scope 缓存
   // （hasCnbScope 对 pat 恒返回 null，这里清理是为了数据整洁与防串用）
   cnbTokenScopes.value = ''
+  // 换令牌必须重学 403 缺失结论（旧令牌的学习结果对新令牌无效）
+  clearDeniedScopes()
 }
 
 /**
@@ -295,12 +300,22 @@ export function scopeIncludes(rawScopes: string, name: string): boolean {
 }
 
 /**
- * 当前令牌是否拥有指定权限（三态）：
- * - true / false：已知（OAuth 登录且已采集过 scope），可做静态判定；
- * - null：未知（PAT 登录 / OAuth 尚未采集 / 未登录）—— 调用方按各自
- *   策略回退（如资料页 OAuth 未知时强制采集一次，PAT 乐观放行）。
+ * 当前令牌是否拥有指定权限（三态，写入口统一判定函数）：
+ * - true / false：已知 —— 优先查学习缓存（cnbDeniedScopes，真实 403 学到的
+ *   "确定缺失"，见 useCnbScopeCache），再查正向缓存（cnbTokenScopes，
+ *   OAuth token 端点响应采集的授权范围）；
+ * - null：未知（PAT 且无 403 学习 / OAuth 未采集且无 403 学习 / 未登录）
+ *   —— 调用方按各自策略回退（如资料页 OAuth 默认禁用，仓库写入口维持
+ *   角色预判 + 403 兜底）。
+ *
+ * 优先级说明：学习缓存的"确定缺失"（false）必须压过正向缓存的"列表里
+ * 没有"—— 正向缓存可能滞后（scope 未采集时 isScopeDenied 是唯一已知
+ * 信息）；而正向缓存的"列表里有"（true）压过一切，是最高置信度结论。
  */
 export function hasCnbScope(name: string): boolean | null {
+  if (isScopeDenied(name)) {
+    return false
+  }
   if (cnbAuthMethod.value !== 'oauth' || !cnbTokenScopes.value) {
     return null
   }

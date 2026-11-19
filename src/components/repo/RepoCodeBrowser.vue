@@ -18,6 +18,7 @@ import {
   type ContentEntry,
 } from '../../composables/useCnbRepo'
 import { useRepoRoute } from '../../composables/useRepoRoute'
+import { SCOPE_REPO_CODE_RW, useScopeGate } from '../../composables/useCnbWriteGate'
 import { formatBytes } from '../../utils'
 import StateAlert from './StateAlert.vue'
 import RepoFileViewer from './RepoFileViewer.vue'
@@ -37,6 +38,14 @@ const props = defineProps<{
 
 const { t } = useI18n()
 const { filePath, openPath } = useRepoRoute()
+
+/**
+ * scope 闸：分支选择器的管理入口（建/删/锁分支）端点全是 repo-code:rw
+ * —— 令牌确认缺失时隐藏管理入口，无论角色（写入口统一方案）。
+ */
+const codeScope = useScopeGate(SCOPE_REPO_CODE_RW)
+/** 叠加 scope 闸后的分支管理可见性 */
+const canManageBranches = computed(() => !!props.canManage && !codeScope.denied.value)
 
 /** 当前路径的 contents 响应（tree 或 blob） */
 const entry = ref<ContentEntry | null>(null)
@@ -184,11 +193,12 @@ const siteUrl = computed(() =>
     <template v-else-if="entry">
       <!-- 面包屑：仓库根 → 逐级目录（可点回任意层级，push 语义） -->
       <div class="flex items-center gap-1 text-sm flex-wrap mb-3">
-        <!-- 分支/标签选择器（BUG-04）：route 模式写 ?ref=，canManage 时含管理入口 -->
+        <!-- 分支/标签选择器（BUG-04）：route 模式写 ?ref=，角色 + scope 闸
+             （repo-code:rw）双预判通过时才含管理入口 -->
         <RepoBranchSelect
           :model-value="gitRef"
           :repo-path="repoPath"
-          :can-manage="canManage"
+          :can-manage="canManageBranches"
         />
         <button
           type="button"

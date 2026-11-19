@@ -15,6 +15,9 @@ import { useStorage } from '@vueuse/core'
 // （legacy:false 模式下 i18n.global 即 reactive 翻译函数，语言切换后新抛出的
 // 错误自动使用新语言；已展示在界面上的错误信息由组件层重新触发时更新）
 import { i18n } from '../i18n'
+// scope 学习缓存：403 缺失 scope 的事后学习挂点 + 登出清理。
+// 该模块零依赖，import 它不会与本模块/useCnbCliAuth 形成循环
+import { clearDeniedScopes, recordDeniedScope } from './useCnbScopeCache'
 
 /**
  * cnb-user 的自定义存储序列化器（防御性）。
@@ -340,6 +343,10 @@ async function cnbRequest(path: string, options: RequestInit = {}): Promise<Resp
     // "管理令牌"等可操作提示 —— 红线：403 绝不登出（令牌本身有效，
     // 强制登出会让缺 scope 的用户陷入登录死循环）
     const missingScope = response.status === 403 ? parseMissingScope(detail) : undefined
+    // 403 学习挂点（全应用唯一）：解析出确切缺失的 scope 时记入学习缓存，
+    // 所有需要该 scope 的写入口在下次渲染时即可事前隐藏（不再重复撞 403）。
+    // recordDeniedScope 内部有词法校验，非 scope 形态的 403 文本不会误学
+    recordDeniedScope(missingScope)
     throw new CnbApiError(
       detail ? `${base}${i18n.global.t('auth.serverDetail', { detail })}` : base,
       response.status,
@@ -521,6 +528,9 @@ function handleUnauthorized() {
 export function logout() {
   cnbToken.value = ''
   cnbUser.value = null
+  // denied（403 学习）结论绑定"某一次授权的令牌"：登出即作废，
+  // 否则下个登录用户会被旧结论误禁写入口（2026-11-19 统一 scope 方案）
+  clearDeniedScopes()
 }
 
 /** 组织详情结构（界面用到的字段，来源：Swagger dto.OrganizationAccess） */

@@ -344,7 +344,7 @@ async function onDelete() {
         </template>
       </UCard>
 
-      <!-- 删除 tag（canManage 预判显示入口；403 兜底） -->
+      <!-- 删除 tag（canManage 为父级叠加 scope 闸后的值；403 兜底） -->
       <UButton
         v-if="canManage"
         color="error"

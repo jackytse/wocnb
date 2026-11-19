@@ -15,6 +15,7 @@ import {
   type RepoIssue,
 } from '../../composables/useCnbRepo'
 import { useRepoRoute } from '../../composables/useRepoRoute'
+import { SCOPE_REPO_ISSUE, SCOPE_REPO_NOTES, useScopeGate } from '../../composables/useCnbWriteGate'
 import { formatRelativeTime } from '../../utils'
 import StateAlert from './StateAlert.vue'
 import NewIssueModal from './NewIssueModal.vue'
@@ -31,6 +32,14 @@ const { state, keyword, page, setState, setKeyword, setPage, openIssue } = useRe
 
 /** 是否有标签管理写权限（Master/Owner 单点预判，403 只作兜底） */
 const canManage = computed(() => !!props.detail?.canManage)
+
+/**
+ * scope 闸（本组件两个写入口所需 scope 不同，必须分开判定）：
+ * - notesScope：标签管理（repo-notes:rw，swagger 原文如此）；
+ * - issueScope：新建 Issue（repo-issue:rw）。
+ */
+const notesScope = useScopeGate(SCOPE_REPO_NOTES)
+const issueScope = useScopeGate(SCOPE_REPO_ISSUE)
 
 const PAGE_SIZE = 30
 
@@ -154,9 +163,10 @@ function onLabelsChanged() {
         @keydown.enter="onKeywordEnter"
       />
 
-      <!-- 标签管理入口（REQ-03）：canManage 预判，无 repo-notes:rw 时隐藏 -->
+      <!-- 标签管理入口（REQ-03）：canManage（角色）+ scope 闸双预判
+           —— labels 管理端点是 repo-notes:rw（swagger 原文），确认缺失即隐藏 -->
       <UButton
-        v-if="canManage"
+        v-if="canManage && !notesScope.denied.value"
         size="sm"
         color="neutral"
         variant="outline"
@@ -164,10 +174,10 @@ function onLabelsChanged() {
         :label="t('repo.labels.manage')"
         @click="labelManagerOpen = true"
       />
-      <!-- 新建 Issue：canManage 事前预判（repo-issue:rw），令牌缺 scope 时
-           免得点了才吃 403 —— 与本组件标签管理入口同一红线口径 -->
+      <!-- 新建 Issue：canManage（角色，repo-issue:rw）+ scope 闸（令牌维度）
+           事前预判，令牌缺 scope 时免得点了才吃 403 -->
       <UButton
-        v-if="canManage"
+        v-if="canManage && !issueScope.denied.value"
         class="ms-auto"
         size="sm"
         icon="i-lucide-plus"
@@ -273,11 +283,12 @@ function onLabelsChanged() {
     <!-- 新建 Issue 弹窗 -->
     <NewIssueModal v-model:open="showNewIssue" :repo-path="repoPath" @created="onCreated" />
 
-    <!-- 仓库标签管理弹窗（REQ-03；数据源与 Issue 详情标签选择器共用） -->
+    <!-- 仓库标签管理弹窗（REQ-03；数据源与 Issue 详情标签选择器共用）。
+         can-manage 传 notesScope 感知值：labels 写端点是 repo-notes:rw -->
     <RepoLabelManager
       v-model:open="labelManagerOpen"
       :repo-path="repoPath"
-      :can-manage="canManage"
+      :can-manage="canManage && !notesScope.denied.value"
       @changed="onLabelsChanged"
     />
   </div>

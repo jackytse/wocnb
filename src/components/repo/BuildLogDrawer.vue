@@ -14,6 +14,7 @@ import { computed, nextTick, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { openUrl } from '@tauri-apps/plugin-opener'
 import { deleteBuildLogs, fetchStageLog, type StageLog } from '../../composables/useCnbRepo'
+import { SCOPE_REPO_CNB_TRIGGER, useScopeGate } from '../../composables/useCnbWriteGate'
 import ConfirmDialog from '../common/ConfirmDialog.vue'
 import { useAppToast } from '../../composables/useAppToast'
 
@@ -39,6 +40,9 @@ const emit = defineEmits<{
 }>()
 
 const { t } = useI18n()
+
+/** scope 闸：令牌缺 repo-cnb-trigger:rw 时隐藏「删除日志」（令牌维度预判） */
+const deleteLogsScope = useScopeGate(SCOPE_REPO_CNB_TRIGGER)
 // useToast 为 Nuxt UI 全局自动导入
 const toast = useAppToast()
 
@@ -190,9 +194,10 @@ async function doDeleteLogs() {
           {{ title }}
         </h3>
         <div class="ms-auto flex items-center gap-1.5 shrink-0">
-          <!-- 删除日志：高危写操作（输入 sn 确认）；归档仓库禁用 -->
+          <!-- 删除日志：高危写操作（输入 sn 确认）；归档仓库禁用；
+               canManage（角色）+ scope 闸（令牌缺 repo-cnb-trigger:rw 隐藏） -->
           <UButton
-            v-if="canManage"
+            v-if="canManage && !deleteLogsScope.denied.value"
             size="xs"
             color="error"
             variant="ghost"

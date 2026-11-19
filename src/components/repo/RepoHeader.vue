@@ -14,6 +14,7 @@ import { computed, ref } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { openUrl } from '@tauri-apps/plugin-opener'
 import { visibilityBadge, repoSiteUrl, type RepoDetail } from '../../composables/useCnbRepo'
+import { SCOPE_REPO_CODE, SCOPE_REPO_MANAGE, useScopeGate } from '../../composables/useCnbWriteGate'
 import { formatDateTime } from '../../utils'
 import RepoSettingsDrawer from './RepoSettingsDrawer.vue'
 
@@ -42,30 +43,46 @@ const badge = computed(() => props.detail ? visibilityBadge(props.detail.visibil
 /** 归档态：菜单里"归档"换为"解除归档" */
 const archived = computed(() => !!props.detail?.archived)
 
-/** 是否展示设置下拉：canManage 预判（Master/Owner），加载中不展示 */
-const showSettings = computed(() => !!props.detail?.canManage)
+/**
+ * 是否展示设置下拉：canManage（角色，Master/Owner）+ scope 闸（令牌维度）
+ * 双预判 —— 设置抽屉内的保存/归档/转移等端点都是 repo-manage:rw，
+ * 令牌确认缺失时整个下拉不渲染（写入口统一方案，事前隐藏）。
+ */
+const manageScope = useScopeGate(SCOPE_REPO_MANAGE)
+/** 归档端点额外要求 repo-code:rw（repo-manage:rw,repo-code:rw，swagger 原文） */
+const codeScope = useScopeGate(SCOPE_REPO_CODE)
+const showSettings = computed(() => !!props.detail?.canManage && !manageScope.denied.value)
 
 /** 设置抽屉开关 */
 const settingsOpen = ref(false)
 
-/** 设置下拉条目（UDropdownMenu items；label 用函数保证语言热切换） */
-const settingsItems = computed(() => [
-  [{
-    label: t('repo.settings.edit'),
-    icon: 'i-lucide-settings',
-    onSelect: () => {
-      settingsOpen.value = true
-    },
-  }],
-  [{
-    label: archived.value ? t('repo.settings.unarchive') : t('repo.settings.archive'),
-    icon: archived.value ? 'i-lucide-archive-restore' : 'i-lucide-archive',
-    // 归档/解除归档在设置抽屉内完成（含 ConfirmDialog 二次确认）
-    onSelect: () => {
-      settingsOpen.value = true
-    },
-  }],
-])
+/**
+ * 设置下拉条目（UDropdownMenu items；label 用函数保证语言热切换）。
+ * 「归档/解除归档」是多 scope 端点：repo-manage:rw 之外还要 repo-code:rw，
+ * 令牌缺 repo-code:rw 时隐藏该条目（编辑条目仍可用）。
+ */
+const settingsItems = computed(() => {
+  const items: Array<Array<{ label: string, icon: string, onSelect: () => void }>> = [
+    [{
+      label: t('repo.settings.edit'),
+      icon: 'i-lucide-settings',
+      onSelect: () => {
+        settingsOpen.value = true
+      },
+    }],
+  ]
+  if (!codeScope.denied.value) {
+    items.push([{
+      label: archived.value ? t('repo.settings.unarchive') : t('repo.settings.archive'),
+      icon: archived.value ? 'i-lucide-archive-restore' : 'i-lucide-archive',
+      // 归档/解除归档在设置抽屉内完成（含 ConfirmDialog 二次确认）
+      onSelect: () => {
+        settingsOpen.value = true
+      },
+    }])
+  }
+  return items
+})
 
 /** 在系统浏览器打开仓库页（非 Tauri 环境兜底 window.open） */
 function openExternal() {

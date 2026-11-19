@@ -38,12 +38,20 @@ import { canManageRole, fetchCnbGroupRepos, selectedGroup } from '../../composab
 import ConfirmDialog from '../common/ConfirmDialog.vue'
 import StateAlert from '../repo/StateAlert.vue'
 import { useAppToast } from '../../composables/useAppToast'
+import { SCOPE_REPO_MANAGE, useScopeGate } from '../../composables/useCnbWriteGate'
 
 const { t } = useI18n()
 const toast = useAppToast() // 成功/失败提示（写操作反馈）
 
-/** 写入口权限预判：组织 Master/Owner 通常同时管仓库；真实 403 作兜底 */
-const canManage = computed(() => canManageRole(selectedGroup.value?.access_role))
+/**
+ * 写入口权限预判（角色 + 令牌双维度）：
+ * - 角色：组织 Master/Owner 通常同时管仓库（canManageRole 单点判定）；
+ * - scope：仓库成员/外部贡献者写端点（members、outside-collaborators）
+ *   都是 repo-manage:rw —— 令牌确认缺失时隐藏写入口，403 只兜底。
+ */
+const canManageRoleOnly = computed(() => canManageRole(selectedGroup.value?.access_role))
+const repoManageScope = useScopeGate(SCOPE_REPO_MANAGE)
+const canManage = computed(() => canManageRoleOnly.value && !repoManageScope.denied.value)
 
 // ---------------------------------------------------------------------------
 // 仓库选择（复用组织仓库列表端点 GET /{group}/-/repos）

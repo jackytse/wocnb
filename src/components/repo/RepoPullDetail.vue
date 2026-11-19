@@ -20,6 +20,7 @@
  *   RepoBranchSelect selectMode='emit' 承担（不写 ?ref=）。
  */
 import { computed, reactive, ref, watch } from 'vue'
+import { SCOPE_REPO_NOTES, SCOPE_REPO_PR, useScopeGate } from '../../composables/useCnbWriteGate'
 import { useI18n } from 'vue-i18n'
 import {
   canAssignPull,
@@ -74,6 +75,16 @@ const toast = useAppToast()
 
 /** 是否可编辑（Master/Owner 单点预判，403 只作兜底） */
 const canManage = computed(() => !!props.detail?.canManage)
+
+/**
+ * scope 闸（令牌维度，与 canManage 角色维度正交）：
+ * - prScope：编辑/合并/标签/处理人（repo-pr:rw）；
+ * - notesScope：评论与评审提交（repo-notes:rw，与 PR 本体不同 scope）。
+ */
+const prScope = useScopeGate(SCOPE_REPO_PR)
+const notesScope = useScopeGate(SCOPE_REPO_NOTES)
+/** 评论区可见性 = 角色 + 令牌双预判（评论写端点 repo-notes:rw） */
+const canComment = computed(() => canManage.value && !notesScope.denied.value)
 const archived = computed(() => !!props.detail?.archived)
 
 // ---------------------------------------------------------------------------
@@ -404,7 +415,10 @@ const showMergeModal = ref(false)
  * 服务端冲突校验仍然兜底（canManage ≠ 一定能合并）。
  */
 const canMerge = computed(() =>
-  canManage.value && pull.value?.state === 'open' && !pull.value.isWip,
+  canManage.value
+  && !prScope.denied.value
+  && pull.value?.state === 'open'
+  && !pull.value.isWip,
 )
 
 /** 合并成功：关闭弹窗 + 重载详情（状态变 merged、动态刷新） */
@@ -453,8 +467,9 @@ function onMerged() {
           size="sm"
           :label="t('pulls.draft')"
         />
+        <!-- 编辑 PR（PATCH /pulls/{n} = repo-pr:rw）：角色 + scope 闸双预判 -->
         <UButton
-          v-if="canManage"
+          v-if="canManage && !prScope.denied.value"
           size="xs"
           color="neutral"
           variant="soft"
@@ -502,7 +517,7 @@ function onMerged() {
           {{ t('repo.pulls.labelsEmpty') }}
         </span>
         <UButton
-          v-if="canManage"
+          v-if="canManage && !prScope.denied.value"
           size="xs"
           color="neutral"
           variant="ghost"
@@ -583,7 +598,7 @@ function onMerged() {
       <PullReviewPanel
         :repo-path="repoPath"
         :number="number"
-        :can-edit="canManage && !archived && pull.state === 'open'"
+        :can-edit="canManage && !notesScope.denied.value && !archived && pull.state === 'open'"
       />
 
       <!-- 处理人区（REQ-05）：canManage 预判，写后重拉 -->
@@ -592,7 +607,7 @@ function onMerged() {
           <UIcon name="i-lucide-user-round-check" class="size-4 text-muted" />
           {{ t('repo.pulls.assignees') }}
           <UButton
-            v-if="canManage"
+            v-if="canManage && !prScope.denied.value"
             size="xs"
             color="neutral"
             variant="ghost"
@@ -652,7 +667,7 @@ function onMerged() {
           :repo-path="repoPath"
           :number="number"
           kind="pulls"
-          :can-manage="canManage"
+          :can-manage="canComment"
         />
       </div>
 

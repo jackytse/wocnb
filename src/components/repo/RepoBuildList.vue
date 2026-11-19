@@ -14,6 +14,7 @@ import { computed, nextTick, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { fetchBuildLogs, repoSiteUrl, type BuildLogItem } from '../../composables/useCnbRepo'
 import { useRepoRoute } from '../../composables/useRepoRoute'
+import { SCOPE_REPO_CNB_TRIGGER, useScopeGate } from '../../composables/useCnbWriteGate'
 import { formatDateTime, formatDuration } from '../../utils'
 import StateAlert from './StateAlert.vue'
 import BuildTriggerModal from './BuildTriggerModal.vue'
@@ -28,6 +29,9 @@ const props = defineProps<{
 
 const { t } = useI18n()
 const { state, page, setState, setPage, openBuild } = useRepoRoute()
+
+/** scope 闸：令牌缺 repo-cnb-trigger:rw 时隐藏「触发构建」（角色预判之外的令牌维度） */
+const triggerScope = useScopeGate(SCOPE_REPO_CNB_TRIGGER)
 
 const PAGE_SIZE = 30
 
@@ -169,10 +173,11 @@ async function onTriggered(sn: string) {
       <span v-if="total && !loading" class="text-xs text-dimmed">
         {{ total }}
       </span>
-      <!-- 触发构建：归档仓库禁用（archived 单向下发）+ canManage 事前预判
-           （repo-cnb-trigger:rw，写操作无权限不渲染，与其他写入口红线统一） -->
+      <!-- 触发构建：归档仓库禁用（archived 单向下发）+ canManage（角色）与
+           scope 闸（令牌维度）双预判 —— repo-cnb-trigger:rw 确认缺失时不渲染，
+           与其他写入口红线统一（scope 判定见 useCnbWriteGate 模块注释） -->
       <UButton
-        v-if="canManage"
+        v-if="canManage && !triggerScope.denied.value"
         class="ms-auto"
         size="sm"
         color="primary"

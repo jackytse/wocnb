@@ -24,6 +24,7 @@ import {
   type CommitStatusResult,
 } from '../../composables/useCnbRepo'
 import { useRepoRoute } from '../../composables/useRepoRoute'
+import { SCOPE_REPO_CODE_RW, useScopeGate } from '../../composables/useCnbWriteGate'
 import { formatDateTime } from '../../utils'
 import StateAlert from './StateAlert.vue'
 import CommitStatusBadge from './CommitStatusBadge.vue'
@@ -40,6 +41,14 @@ const props = defineProps<{
 }>()
 
 const { t } = useI18n()
+
+/**
+ * scope 闸：本组件下发的写入口（分支选择器的建/删/锁分支 + 提交注解编辑）
+ * 端点全是 repo-code:rw —— 令牌确认缺失时一并隐藏，无论角色。
+ */
+const codeScope = useScopeGate(SCOPE_REPO_CODE_RW)
+/** 叠加 scope 闸后的可写判定（分支管理入口 + 注解编辑共用） */
+const canWriteCode = computed(() => !!props.canManage && !codeScope.denied.value)
 const { page, sha, compare, setPage, openCommit, openCompare, backToList } = useRepoRoute()
 
 const PAGE_SIZE = 30
@@ -236,7 +245,7 @@ const siteUrl = computed(() =>
         <RepoBranchSelect
           :model-value="gitRef"
           :repo-path="repoPath"
-          :can-manage="canManage"
+          :can-manage="canWriteCode"
         />
         <UButton
           size="sm"
@@ -322,7 +331,7 @@ const siteUrl = computed(() =>
               :repo-path="repoPath"
               kind="commit"
               :ref-key="sha"
-              :can-edit="!!canManage"
+              :can-edit="canWriteCode"
             />
           </div>
         </template>

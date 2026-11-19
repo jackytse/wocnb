@@ -18,6 +18,7 @@ import {
   type IssueActivity,
 } from '../../composables/useCnbRepo'
 import { useRepoRoute } from '../../composables/useRepoRoute'
+import { SCOPE_REPO_ISSUE, SCOPE_REPO_NOTES, useScopeGate } from '../../composables/useCnbWriteGate'
 import { formatDateTime } from '../../utils'
 import StateAlert from './StateAlert.vue'
 import MarkdownView from './MarkdownView.vue'
@@ -36,6 +37,16 @@ const props = defineProps<{
 
 /** 是否可编辑标签/处理人（Master/Owner 单点预判，403 只作兜底） */
 const canManage = computed(() => !!props.detail?.canManage)
+
+/**
+ * scope 闸（令牌维度，与 canManage 角色维度正交）：
+ * - issueScope：关闭/重开、标签/处理人编辑、自定义属性（repo-issue:rw）；
+ * - notesScope：评论区（评论端点是 repo-notes:rw，与 issue 本体不同 scope）。
+ */
+const issueScope = useScopeGate(SCOPE_REPO_ISSUE)
+const notesScope = useScopeGate(SCOPE_REPO_NOTES)
+/** 评论区可见性 = 角色 + 令牌双预判（评论写端点 repo-notes:rw） */
+const canComment = computed(() => canManage.value && !notesScope.denied.value)
 
 const { t } = useI18n()
 const toast = useAppToast()
@@ -187,10 +198,11 @@ async function doChangeState() {
           size="sm"
           :label="`${t('issues.priority')}: ${issue.priority}`"
         />
-        <!-- 关闭/重开（按当前状态二选一，弹二次确认）：canManage 事前预判
-             （repo-issue:rw），无权限时不渲染而非事后 403 -->
+        <!-- 关闭/重开（按当前状态二选一，弹二次确认）：canManage（角色）+
+             scope 闸（令牌缺 repo-issue:rw 隐藏）双预判，无权限时不渲染
+             而非事后 403 -->
         <UButton
-          v-if="canManage"
+          v-if="canManage && !issueScope.denied.value"
           class="ms-auto"
           size="xs"
           :color="issue.state === 'open' ? 'neutral' : 'success'"
@@ -226,7 +238,7 @@ async function doChangeState() {
           <span>{{ issue.assignees.map(a => a.nickname).join(', ') }}</span>
         </span>
         <UButton
-          v-if="canManage"
+          v-if="canManage && !issueScope.denied.value"
           size="xs"
           color="neutral"
           variant="ghost"
@@ -241,7 +253,7 @@ async function doChangeState() {
         <IssuePropertiesPanel
           :repo-path="repoPath"
           :number="number"
-          :can-edit="canManage"
+          :can-edit="canManage && !issueScope.denied.value"
         />
       </div>
 
@@ -269,7 +281,7 @@ async function doChangeState() {
           :repo-path="repoPath"
           :number="number"
           kind="issues"
-          :can-manage="canManage"
+          :can-manage="canComment"
         />
       </div>
     </template>

@@ -19,6 +19,7 @@
  * ConfirmDialog 输入制品名确认（高危，§8.3）。
  */
 import { computed, ref, watch } from 'vue'
+import { SCOPE_REGISTRY_PACKAGE_DELETE, useScopeGate } from '../../composables/useCnbWriteGate'
 import { useI18n } from 'vue-i18n'
 import { useMediaQuery } from '@vueuse/core'
 import {
@@ -51,6 +52,14 @@ const isWide = useMediaQuery('(min-width: 1100px)')
 
 /** 是否有管理权限（Master/Owner 单点判定 §8.2；403 只作兜底） */
 const canManage = computed(() => !!props.detail?.canManage)
+
+/**
+ * scope 闸：删除制品/标签端点是 registry-package-delete:rw —— 令牌确认
+ * 缺失时隐藏删除入口（无论角色），并透传给详情面板的删除标签按钮。
+ */
+const deleteScope = useScopeGate(SCOPE_REGISTRY_PACKAGE_DELETE)
+/** 叠加 scope 闸后的可写判定（删除制品 + 详情面板删除标签共用） */
+const canDelete = computed(() => canManage.value && !deleteScope.denied.value)
 
 // ---------------------------------------------------------------------------
 // 左栏：类型筛选 + 制品列表
@@ -343,9 +352,9 @@ async function onDeletePackage() {
             </UCard>
           </template>
 
-          <!-- 删除制品（canManage 预判显示入口；403 兜底） -->
+          <!-- 删除制品（canDelete = 角色 + registry-package-delete:rw scope 闸） -->
           <UButton
-            v-if="canManage"
+            v-if="canDelete"
             color="error"
             variant="soft"
             icon="i-lucide-trash-2"
@@ -377,7 +386,7 @@ async function onDeletePackage() {
           :name="pname"
           :tag="ptag"
           :arch-candidates="selectedTagArches"
-          :can-manage="canManage"
+          :can-manage="canDelete"
           @deleted="loadTags"
         />
       </div>

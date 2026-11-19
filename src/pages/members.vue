@@ -38,6 +38,11 @@ import { useRoute, useRouter } from 'vue-router'
 import { openUrl } from '@tauri-apps/plugin-opener'
 import type { TabsItem } from '@nuxt/ui'
 import {
+  SCOPE_GROUP_MANAGE,
+  SCOPE_REPO_MANAGE,
+  useScopeGate,
+} from '../composables/useCnbWriteGate'
+import {
   addGroupMember,
   fetchGroupMembers,
   fetchGroupMembersAccessLevel,
@@ -160,6 +165,20 @@ const error = ref<Error | null>(null)
  * 写入口据此**事前隐藏**，而不是事后报错。
  */
 const canManage = computed(() => canManageRole(selectedGroup.value?.access_role))
+
+/**
+ * scope 闸（两个页签的写端点 scope 不同，必须分开判定）：
+ * - 组织成员写（添加/改角色/移除，端点 /{group}/-/members/*）→ group-manage:rw；
+ * - 外部贡献者写（改角色/移除，端点 /{slug}/-/outside-collaborators/*）
+ *   → repo-manage:rw。
+ * 令牌确认缺失（403 学习/正向缓存）时隐藏对应页签的写入口，无论角色。
+ */
+const groupManageScope = useScopeGate(SCOPE_GROUP_MANAGE)
+const repoManageScope = useScopeGate(SCOPE_REPO_MANAGE)
+/** 组织成员页签写入口（角色 + 令牌双预判） */
+const orgCanWrite = computed(() => canManage.value && !groupManageScope.denied.value)
+/** 外部贡献者页签写入口（角色 + 令牌双预判） */
+const outsiderCanWrite = computed(() => canManage.value && !repoManageScope.denied.value)
 
 // ---------------------------------------------------------------------------
 // 外部贡献者的仓库上下文（outsiders 页签专用）
@@ -899,9 +918,9 @@ function openManage() {
           :label="selectedGroup.path"
         />
         <div class="ms-auto flex items-center gap-2">
-          <!-- 添加成员（仅「成员」页签 + 有管理权限；红线 2：写入口事前隐藏） -->
+          <!-- 添加成员（仅「成员」页签 + 角色/scope 双预判；红线 2：写入口事前隐藏） -->
           <UButton
-            v-if="tab === 'members' && canManage"
+            v-if="tab === 'members' && orgCanWrite"
             size="sm"
             color="primary"
             icon="i-lucide-user-plus"
@@ -1163,7 +1182,7 @@ function openManage() {
                    （点击才发单成员请求）；loading → 转圈；denied（403）→ 「无权限」tooltip -->
             <template v-if="tab === 'outsiders'">
               <USelect
-                v-if="canManage"
+                v-if="outsiderCanWrite"
                 :model-value="toOutsiderRole(member.accessLevel)"
                 :items="outsiderRoleItems"
                 :disabled="roleUpdating[member.username]"
@@ -1188,7 +1207,7 @@ function openManage() {
             </template>
             <template v-else>
               <USelect
-                v-if="canManage && permDisplay(member).state === 'ok' && permDisplay(member).value"
+                v-if="orgCanWrite && permDisplay(member).state === 'ok' && permDisplay(member).value"
                 :model-value="toMemberRole(permDisplay(member).value)"
                 :items="memberRoleItems"
                 :disabled="roleUpdating[member.username]"
@@ -1231,10 +1250,12 @@ function openManage() {
               />
             </template>
 
-            <!-- 行操作：移除（仅可管理时显示）。破坏性操作 → ConfirmDialog +
-                 typeToConfirm（输入 username）二次确认，见页面底部弹窗 -->
+            <!-- 行操作：移除（角色/scope 双预判；两页签端点 scope 不同，
+                 外部贡献者走 repo-manage:rw、组织成员走 group-manage:rw）。
+                 破坏性操作 → ConfirmDialog + typeToConfirm（输入 username）
+                 二次确认，见页面底部弹窗 -->
             <UButton
-              v-if="canManage"
+              v-if="tab === 'outsiders' ? outsiderCanWrite : orgCanWrite"
               size="xs"
               color="error"
               variant="ghost"

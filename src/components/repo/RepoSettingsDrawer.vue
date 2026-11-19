@@ -16,6 +16,7 @@ import { useI18n } from 'vue-i18n'
 import { openUrl } from '@tauri-apps/plugin-opener'
 import { archiveRepo, patchRepo, unarchiveRepo } from '../../composables/useCnbRepoManage'
 import { visibilityBadge, repoSiteUrl, type RepoDetail } from '../../composables/useCnbRepo'
+import { SCOPE_REPO_CODE, useScopeGate } from '../../composables/useCnbWriteGate'
 import ConfirmDialog from '../common/ConfirmDialog.vue'
 import OrgProtectionsTab from '../org/OrgProtectionsTab.vue'
 import { useAppToast } from '../../composables/useAppToast'
@@ -44,6 +45,13 @@ const openModel = computed({
 // ---------------------------------------------------------------------------
 // 编辑表单
 // ---------------------------------------------------------------------------
+
+/**
+ * scope 闸：归档/解除归档是多 scope 端点（repo-manage:rw,repo-code:rw）。
+ * 抽屉本身由 RepoHeader 的 manage 闸把守（repo-manage:rw），这里补
+ * repo-code:rw 的判定 —— 缺失时隐藏归档按钮（保存仍可用）。
+ */
+const archiveCodeScope = useScopeGate(SCOPE_REPO_CODE)
 
 const form = reactive({
   description: '',
@@ -283,10 +291,11 @@ function openExternal(url: string) {
           />
         </div>
 
-        <!-- 操作区：归档/解除归档在左，保存/取消在右 -->
+        <!-- 操作区：归档/解除归档在左（需 repo-manage:rw + repo-code:rw，
+             scope 闸确认缺失时不渲染），保存/取消在右 -->
         <div class="flex justify-between gap-2 pt-2 border-t border-default">
           <UButton
-            v-if="detail && !detail.archived"
+            v-if="detail && !detail.archived && !archiveCodeScope.denied.value"
             color="warning"
             variant="soft"
             icon="i-lucide-archive"
@@ -294,13 +303,14 @@ function openExternal(url: string) {
             @click="archiveDialogOpen = true"
           />
           <UButton
-            v-else
+            v-else-if="detail && detail.archived && !archiveCodeScope.denied.value"
             color="primary"
             variant="soft"
             icon="i-lucide-archive-restore"
             :label="t('repo.settings.unarchive')"
             @click="unarchiveDialogOpen = true"
           />
+          <span v-else />
 
           <div class="flex gap-2">
             <UButton

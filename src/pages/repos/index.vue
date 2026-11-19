@@ -18,6 +18,7 @@ import { computed, ref } from 'vue'
 import { useI18n } from 'vue-i18n'
 import ReposCreateModal from '../../components/ReposCreateModal.vue'
 import { canManageRole, selectedGroup } from '../../composables/useCnbAuth'
+import { SCOPE_GROUP_RESOURCE, useScopeGate } from '../../composables/useCnbWriteGate'
 
 const { t } = useI18n()
 
@@ -33,6 +34,13 @@ const createOpen = ref(false)
 const canCreate = computed(() => canManageRole(selectedGroup.value?.access_role))
 
 /**
+ * scope 闸：创建仓库端点 POST /{slug}/-/repos 需 group-resource:rw ——
+ * 令牌确认缺失（403 学习/正向缓存）时置灰并提示 scope 不足，无论角色。
+ */
+const resourceScope = useScopeGate(SCOPE_GROUP_RESOURCE)
+const canCreateWithScope = computed(() => canCreate.value && !resourceScope.denied.value)
+
+/**
  * 置灰按钮的 tooltip 三态（架构师 UX 边界修正）：
  * 未选组织 ≠ 无权限 —— 前者引导去侧边栏选组织，后者才提示 scope 不足，
  * 避免用户误以为要去翻令牌设置；可创建时不显示 tooltip。
@@ -41,7 +49,7 @@ const createTooltip = computed(() => {
   if (!selectedGroup.value) {
     return t('repos.create.noGroup')
   }
-  return canCreate.value ? '' : t('repos.create.noPermission')
+  return canCreateWithScope.value ? '' : t('repos.create.noPermission')
 })
 </script>
 
@@ -61,7 +69,7 @@ const createTooltip = computed(() => {
               variant="soft"
               icon="i-lucide-plus"
               :label="t('repos.create.button')"
-              :disabled="!canCreate"
+              :disabled="!canCreateWithScope"
               @click="createOpen = true"
             />
           </UTooltip>

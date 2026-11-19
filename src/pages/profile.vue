@@ -47,6 +47,7 @@ import {
   cnbAuthMethod,
   hasCnbScope,
 } from '../composables/useCnbCliAuth'
+import { SCOPE_ACCOUNT_PROFILE } from '../composables/useCnbWriteGate'
 import {
   fetchMyStarredRepos,
   type StarredRepoItem,
@@ -210,8 +211,8 @@ onMounted(() => {
 // 写权限预判（scope 静态判定）：禁止没有权限的资料编辑操作
 // ---------------------------------------------------------------------------
 
-/** 编辑资料所需的令牌权限（POST /user 的必需要求，实测 403 响应确认） */
-const PROFILE_WRITE_SCOPE = 'account-profile:rw'
+/** 编辑资料所需的令牌权限（POST /user 的必需要求，swagger + 实测 403 确认） */
+const PROFILE_WRITE_SCOPE = SCOPE_ACCOUNT_PROFILE
 
 /**
  * 表单可编辑状态机：
@@ -244,27 +245,30 @@ function buildProfilePayload() {
 }
 
 /**
- * 写权限判定（scope 缓存静态判定，零额外请求）：
+ * 写权限判定（scope 缓存静态判定，零额外请求、零主动轮换）：
  *
- * 1. PAT 登录：令牌权限由用户建令牌时自选、无任何查询端点 → 无法预判，
- *    乐观放行（ok），保存时 403 再兜底禁用 —— 真实保存请求即探测；
- * 2. OAuth 且 scope 已采集过（缓存非空）：hasCnbScope 本地判定，零请求；
- * 3. OAuth 且 scope 未采集（''=未知）：默认禁用 —— cnb_cli 客户端的授权
- *    范围由服务端固定、实测不含 account-profile:rw，"未知默认禁用"比
- *    "乐观放行再失败"少一次注定失败的用户输入。scope 只在启动临期续期
- *    时自然补齐（绝不能为采集而主动刷新 —— 会作废在用令牌导致登出，
- *    2026-11-19 事故）。
+ * hasCnbScope 三态 + 登录方式兜底（统一方案，2026-11-19）：
+ * - true（正向缓存确认拥有）→ 可编辑；
+ * - false（403 学习缓存确认缺失，PAT/OAuth 皆可能）→ 禁用；
+ * - null + OAuth → 默认禁用 —— cnb_cli 客户端授权范围服务端固定、实测
+ *   不含 account-profile:rw，"未知默认禁用"比"乐观放行再失败"少一次
+ *   注定失败的用户输入；scope 随启动临期续期自然补齐；
+ * - null + PAT → 乐观放行 + 保存 403 兜底（403 学习缓存补齐后，下次
+ *   进页自动禁用）。
  */
 async function resolveWritePermission() {
   canEdit.value = 'checking'
-  if (cnbAuthMethod.value !== 'oauth') {
-    // PAT / 未标注登录方式（旧版本数据）：乐观放行 + 保存 403 兜底
+  const known = hasCnbScope(PROFILE_WRITE_SCOPE)
+  if (known === true) {
     canEdit.value = 'ok'
     return
   }
-  // OAuth：按缓存判定。hasCnbScope 对"未采集"返回 null → 与"确定不含"
-  // 同走禁用分支（实测 cnb_cli 客户端固定无 account-profile:rw）
-  canEdit.value = hasCnbScope(PROFILE_WRITE_SCOPE) === true ? 'ok' : 'forbidden'
+  if (known === false) {
+    canEdit.value = 'forbidden'
+    return
+  }
+  // 未知：OAuth 默认禁用（实测 cnb_cli 无此权限），PAT 乐观放行
+  canEdit.value = cnbAuthMethod.value === 'oauth' ? 'forbidden' : 'ok'
 }
 
 /** 保存资料：POST /user 成功后给出成功反馈（本地登录态由 useCnbAuth 同步） */

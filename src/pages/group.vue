@@ -30,6 +30,7 @@ import {
   type CnbGroup,
 } from '../composables/useCnbAuth'
 import { fetchOrgOverview, type OrgOverview } from '../composables/useCnbOrg'
+import { SCOPE_GROUP_MANAGE, useScopeGate } from '../composables/useCnbWriteGate'
 import OrgOverviewCard from '../components/org/OrgOverviewCard.vue'
 import OrgUsageCard from '../components/org/OrgUsageCard.vue'
 import PinnedRepoWall from '../components/org/PinnedRepoWall.vue'
@@ -159,6 +160,15 @@ watch(() => selectedGroup.value?.path, (value) => {
 /** 是否有组织管理权限（仓库墙编辑入口 / 设置页写入口 / 新建子组织入口） */
 const canManage = computed(() => canManageRole(selectedGroup.value?.access_role))
 
+/**
+ * scope 闸：组织域写入口（新建子组织、组织设置、保护分支、仓库墙编辑）
+ * 端点全是 group-manage:rw —— 令牌确认缺失时统一隐藏，无论角色
+ * （写入口统一方案：角色预判 + 令牌 scope 预判，403 只兜底）。
+ */
+const manageScope = useScopeGate(SCOPE_GROUP_MANAGE)
+/** 叠加 scope 闸后的组织可写判定（页内全部组织写入口共用） */
+const orgCanWrite = computed(() => canManage.value && !manageScope.denied.value)
+
 // ---------------------------------------------------------------------------
 // 概览（GET /{group}，独立降级：失败回退 selectedGroup 概要字段）
 // ---------------------------------------------------------------------------
@@ -265,9 +275,9 @@ function onCreateGroup(path: string) {
             :label="slug"
             class="font-mono"
           />
-          <!-- 新建子组织：仅在有管理权限时出现（写入口事前隐藏，不做事后报错） -->
+          <!-- 新建子组织：canManage（角色）+ scope 闸（group-manage:rw）双预判 -->
           <UButton
-            v-if="slug && canManage"
+            v-if="slug && orgCanWrite"
             icon="i-lucide-folder-plus"
             color="neutral"
             variant="outline"
@@ -316,7 +326,7 @@ function onCreateGroup(path: string) {
           <PinnedRepoWall
             :slug="slug"
             mode="manage"
-            :can-manage="canManage"
+            :can-manage="orgCanWrite"
           />
 
           <SubGroupGrid
@@ -330,7 +340,7 @@ function onCreateGroup(path: string) {
         <OrgSettingsTab
           v-else-if="tab === 'settings'"
           :slug="slug"
-          :can-manage="canManage"
+          :can-manage="orgCanWrite"
         />
 
         <!-- 保护分支：仅根组织生效，子组织由组件内部给引导 -->
@@ -338,7 +348,7 @@ function onCreateGroup(path: string) {
           v-else
           :target="slug"
           scope-level="group"
-          :can-manage="canManage"
+          :can-manage="orgCanWrite"
         />
       </div>
 

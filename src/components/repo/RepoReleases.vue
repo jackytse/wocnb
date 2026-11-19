@@ -12,6 +12,7 @@
  * 数据一致性（§8.5）：Release CUD 后本地 reload()（重拉当前页/详情）。
  */
 import { computed, reactive, ref, watch } from 'vue'
+import { SCOPE_REPO_RELEASE, useScopeGate } from '../../composables/useCnbWriteGate'
 import { useI18n } from 'vue-i18n'
 import {
   deleteRelease,
@@ -51,6 +52,14 @@ const PAGE_SIZE = 20
 
 /** 是否有写权限（Master/Owner 预判，403 只作兜底 —— §8.2） */
 const canManage = computed(() => !!props.detail?.canManage)
+
+/**
+ * scope 闸：Releases CRUD 与建 tag 都是 repo-release:rw —— 令牌确认缺失
+ * 时隐藏全部写入口（编辑/删除、新建标签入口），无论角色多高都必 403。
+ */
+const releaseScope = useScopeGate(SCOPE_REPO_RELEASE)
+/** 叠加 scope 闸后的可写判定（本组件全部写入口统一使用） */
+const canWrite = computed(() => canManage.value && !releaseScope.denied.value)
 /** 归档仓库：写按钮禁用（写入口统一按 detail.archived 禁用） */
 const archived = computed(() => !!props.detail?.archived)
 
@@ -437,8 +446,8 @@ const releaseBadge = computed(() => releaseDetail.value ? badgeOf(releaseDetail.
             size="sm"
             :label="releaseBadge.label"
           />
-          <!-- 编辑/删除：canManage 预判 + 归档禁用 -->
-          <div v-if="canManage" class="ms-auto flex items-center gap-1.5">
+          <!-- 编辑/删除：canWrite（角色 + scope 闸）预判 + 归档禁用 -->
+          <div v-if="canWrite" class="ms-auto flex items-center gap-1.5">
             <UButton
               size="xs"
               color="neutral"
@@ -514,8 +523,8 @@ const releaseBadge = computed(() => releaseDetail.value ? badgeOf(releaseDetail.
         </UButton>
         <template #content>
           <div class="pt-2 flex flex-col gap-2">
-            <!-- 新建标签入口：canManage 预判（repo-release:rw） -->
-            <div v-if="canManage" class="flex justify-end">
+            <!-- 新建标签入口：canWrite（角色 + repo-release:rw scope 闸）预判 -->
+            <div v-if="canWrite" class="flex justify-end">
               <UButton
                 size="sm"
                 color="primary"
@@ -555,7 +564,7 @@ const releaseBadge = computed(() => releaseDetail.value ? badgeOf(releaseDetail.
                     <span v-if="tag.sha" class="font-mono text-xs text-dimmed truncate">{{ tag.sha.slice(0, 7) }}</span>
                   </button>
                   <UButton
-                    v-if="canManage"
+                    v-if="canWrite"
                     size="xs"
                     color="error"
                     variant="ghost"
@@ -621,7 +630,7 @@ const releaseBadge = computed(() => releaseDetail.value ? badgeOf(releaseDetail.
           {{ t('repo.releases.title') }}
         </h2>
         <UButton
-          v-if="canManage"
+          v-if="canWrite"
           class="ms-auto"
           size="sm"
           color="primary"

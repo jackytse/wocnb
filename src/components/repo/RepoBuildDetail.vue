@@ -22,6 +22,7 @@ import {
   type BuildStatus,
 } from '../../composables/useCnbRepo'
 import { useRepoRoute } from '../../composables/useRepoRoute'
+import { SCOPE_REPO_CNB_TRIGGER, useScopeGate } from '../../composables/useCnbWriteGate'
 import { formatDuration } from '../../utils'
 import StateAlert from './StateAlert.vue'
 import BuildLogDrawer from './BuildLogDrawer.vue'
@@ -45,6 +46,9 @@ const props = defineProps<{
 const { t } = useI18n()
 const { backToList } = useRepoRoute()
 const toast = useAppToast()
+
+/** scope 闸：令牌缺 repo-cnb-trigger:rw 时隐藏停止/删日志入口（令牌维度预判） */
+const triggerScope = useScopeGate(SCOPE_REPO_CNB_TRIGGER)
 
 /** 在系统浏览器打开链接（非 Tauri 环境兜底 window.open；模板内不直接碰 window） */
 function openExternal(url: string) {
@@ -238,9 +242,10 @@ const aiPipelineIds = computed<string[]>(() => {
         size="sm"
         :label="t(`builds.status.${status.status}`)"
       />
-      <!-- 停止按钮：仅运行中显示；归档仓库禁用（写入口统一禁用） -->
+      <!-- 停止按钮：仅运行中显示；归档仓库禁用；canManage（角色）+ scope 闸
+           （令牌缺 repo-cnb-trigger:rw 时隐藏，写入口统一方案）双预判 -->
       <UButton
-        v-if="canManage && isRunning"
+        v-if="canManage && isRunning && !triggerScope.denied.value"
         size="xs"
         color="error"
         variant="soft"

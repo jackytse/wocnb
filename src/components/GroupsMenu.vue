@@ -31,6 +31,7 @@ import {
 import { cachedImageSrc, ensureCnbImages } from '../composables/useCnbImages'
 // 站内创建组织弹窗（POST /groups）：与组织页「新建子组织」共用同一组件
 import CreateGroupModal from './org/CreateGroupModal.vue'
+import { SCOPE_GROUP_MANAGE, useScopeGate } from '../composables/useCnbWriteGate'
 import { useAppToast } from '../composables/useAppToast'
 
 /**
@@ -59,6 +60,9 @@ defineProps<{
 const { t } = useI18n()
 // toast：切换组织成功后的反馈（顶部居中，由 UApp 统一渲染）
 const toast = useAppToast()
+
+/** scope 闸：创建组织端点 POST /groups 需 group-manage:rw（令牌维度预判） */
+const createOrgScope = useScopeGate(SCOPE_GROUP_MANAGE)
 
 /**
  * 用户所在的组织列表 —— 读**共享状态** `cnbGroups`（useCnbAuth）。
@@ -206,22 +210,27 @@ const items = computed<DropdownMenuItem[][]>(() => {
   const manageUrl = cnbUser.value
     ? cnbGroupManageUrl(cnbUser.value.username)
     : 'https://cnb.cool'
-  const actionSection: DropdownMenuItem[] = [{
-    // 站内创建组织（POST /groups）：桌面端已能直接建，外跳 cnb.cool 反而
-    // 让用户以为必须去网页操作。因此这一项不再带 target（无外链箭头）。
-    label: t('groups.create'),
-    icon: 'i-lucide-circle-plus',
-    onSelect: () => {
-      createOpen.value = true
-    },
-  }, {
+  const actionSection: DropdownMenuItem[] = []
+  // 站内创建组织（POST /groups，scope group-manage:rw）：角色维度不可判
+  // （组织创建是用户级操作），令牌维度由 scope 闸兜底 —— 403 学习/正向
+  // 缓存确认缺失时隐藏条目，避免点了必 403（写入口统一方案）
+  if (!createOrgScope.denied.value) {
+    actionSection.push({
+      label: t('groups.create'),
+      icon: 'i-lucide-circle-plus',
+      onSelect: () => {
+        createOpen.value = true
+      },
+    })
+  }
+  actionSection.push({
     label: t('groups.manage'),
     icon: 'i-lucide-cog',
     target: '_blank',
     onSelect: () => {
       void openExternal(manageUrl)
     },
-  }]
+  })
 
   return [groupSection, actionSection]
 })

@@ -12,6 +12,7 @@ import {
   type RepoPull,
 } from '../../composables/useCnbRepo'
 import { useRepoRoute } from '../../composables/useRepoRoute'
+import { SCOPE_REPO_PR, useScopeGate } from '../../composables/useCnbWriteGate'
 import { formatRelativeTime } from '../../utils'
 import StateAlert from './StateAlert.vue'
 import CreatePullModal from './CreatePullModal.vue'
@@ -27,6 +28,9 @@ const { state, page, setState, setPage, openPull } = useRepoRoute()
 
 /** 是否有新建 PR 权限（Master/Owner 单点预判，403 只作兜底） */
 const canManage = computed(() => !!props.detail?.canManage)
+
+/** scope 闸：令牌缺 repo-pr:rw 时隐藏「新建 PR」（令牌维度预判） */
+const prScope = useScopeGate(SCOPE_REPO_PR)
 /** 归档仓库：写入口禁用 */
 const archived = computed(() => !!props.detail?.archived)
 
@@ -119,7 +123,7 @@ const siteUrl = computed(() => repoSiteUrl(props.repoPath, `/-/pulls?state=${cur
         </button>
       </div>
       <UButton
-        v-if="canManage"
+        v-if="canManage && !prScope.denied.value"
         class="ms-auto"
         size="sm"
         color="primary"
