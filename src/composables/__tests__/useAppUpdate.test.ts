@@ -53,12 +53,15 @@ import {
   DEFAULT_UPDATE_CHANNEL,
   checkForUpdate,
   compareVersions,
+  installUpdate,
   isAutoCheckDue,
   isNewerVersion,
   maybeAutoCheckOnStartup,
   normalizeUpdateChannel,
   parseVersion,
   pickLatestRelease,
+  relaunchApp,
+  resetUpdateInstallStateForTest,
   resetUpdateNotifyStateForTest,
   setUpdateChannel,
   useAppUpdate,
@@ -72,6 +75,10 @@ beforeEach(() => {
   pushAppNoticeMock.mockClear()
   // 复位「已通知版本」去重状态：通知编排用例之间互不串扰
   resetUpdateNotifyStateForTest()
+  // 复位热更新安装状态 + window stub（installUpdate 用例会 stub Tauri 环境）
+  resetUpdateInstallStateForTest()
+  vi.unstubAllGlobals()
+  checkMock.mockReset()
   // 复位更新通道（用例可能切到 release；切回默认会顺带清检查状态）
   setUpdateChannel(DEFAULT_UPDATE_CHANNEL)
   // 复位模块级单例（vi.resetModules 成本高，这里直接驱动状态复位：
@@ -514,5 +521,155 @@ describe('通知去重按通道隔离', () => {
     // 同通道重复检查仍然只通知一次
     await checkForUpdate({ currentVersion: '0.1.0-rc.31' })
     expect(sendAppSystemNotificationMock).toHaveBeenCalledTimes(2)
+  })
+})
+
+// ---------------------------------------------------------------------------
+// 应用内热更新（installUpdate / relaunchApp）
+//
+// mock tauri-plugin-updater：check 返回带 downloadAndInstall 的替身对象，
+// 按用例驱动 Started/Progress/Finished 事件序列，验证进度回填与终态。
+// node 环境无 window：unsupported 用例直接靠这个事实；Tauri 用例用
+// vi.stubGlobal 造一个带 __TAURI_INTERNALS__ 的假 window。
+// ---------------------------------------------------------------------------
+type DownloadEvent =
+  | { event: 'Started', data: { contentLength?: number } }
+  | { event: 'Progress', data: { chunkLength: number } }
+  | { event: 'Finished', data: Record<string, never> }
+
+const checkMock = vi.fn()
+const relaunchMock = vi.fn()
+
+vi.mock('@tauri-apps/plugin-updater', () => ({
+  check: (...args: unknown[]) => checkMock(...args),
+}))
+vi.mock('@tauri-apps/plugin-process', () => ({
+  relaunch: () => relaunchMock(),
+}))
+
+/** 构造一个按给定事件序列回调的更新对象 */
+function makeUpdate(version: string, events: DownloadEvent[]) {
+  return {
+    version,
+    downloadAndInstall: (onEvent: (e: DownloadEvent) => void) => {
+      for (const e of events) {
+        onEvent(e)
+      }
+      return Promise.resolve()
+    },
+  }
+}
+
+/** 造 Tauri 环境 + 让通道检测出 available 的最新版本 */
+async function setupTauriWithAvailableUpdate() {
+  vi.stubGlobal('window', { __TAURI_INTERNALS__: {} })
+  fetchReleasesMock.mockResolvedValue([
+    { id: '1', tagName: 'v0.1.0-rc.35', isDraft: false, isPrerelease: true },
+  ])
+  await checkForUpdate({ currentVersion: '0.1.0-rc.34' })
+}
+
+describe('installUpdate · 前置守卫', () => {
+  it('非 Tauri 环境（node 无 window）→ unsupported，不触发任何导入', async () => {
+    checkMock.mockClear()
+    expect(await installUpdate()).toBe('unsupported')
+    expect(checkMock).not.toHaveBeenCalled()
+  })
+
+  it('尚未做过通道检测（无期望版本）→ no-update', async () => {
+    vi.stubGlobal('window', { __TAURI_INTERNALS__: {} })
+    expect(await installUpdate()).toBe('no-update')
+    expect(checkMock).not.toHaveBeenCalled()
+  })
+})
+
+describe('installUpdate · 主流程', () => {
+  it('下载安装成功 → ready，进度事件回填百分比', async () => {
+    await setupTauriWithAvailableUpdate()
+    checkMock.mockResolvedValue(makeUpdate('0.1.0-rc.35', [
+      { event: 'Started', data: { contentLength: 1000 } },
+      { event: 'Progress', data: { chunkLength: 400 } },
+      { event: 'Progress', data: { chunkLength: 600 } },
+      { event: 'Finished', data: {} },
+    ]))
+    const outcome = await installUpdate()
+    expect(outcome).toBe('ready')
+    const { installStatus, installProgress, installError } = useAppUpdate()
+    expect(installStatus.value).toBe('ready')
+    expect(installProgress.value).toBe(100)
+    expect(installError.value).toBe('')
+    expect(checkMock).toHaveBeenCalledTimes(1)
+  })
+
+  it('清单版本与通道检测结果不一致（release 通道 vs 清单里的 rc）→ mismatch 拒装', async () => {
+    vi.stubGlobal('window', { __TAURI_INTERNALS__: {} })
+    // 通道检测出 rc.35（期望版本），但清单给的是 rc.36 —— 模拟
+    // "release 通道用户 + 清单只维护最新 rc" 的通道冲突场景
+    fetchReleasesMock.mockResolvedValue([
+      { id: '1', tagName: 'v0.1.0-rc.35', isDraft: false, isPrerelease: true },
+    ])
+    await checkForUpdate({ currentVersion: '0.1.0-rc.34' })
+    checkMock.mockResolvedValue(makeUpdate('0.1.0-rc.36', []))
+    expect(await installUpdate()).toBe('mismatch')
+    // 拒装不算失败：回到 idle，不落安装态
+    expect(useAppUpdate().installStatus.value).toBe('idle')
+  })
+
+  it('updater check 失败（Windows 缺平台条目 / 网络）→ failed 并落错误原文', async () => {
+    await setupTauriWithAvailableUpdate()
+    checkMock.mockRejectedValue(new Error('no entry for platform'))
+    expect(await installUpdate()).toBe('failed')
+    const { installStatus, installError } = useAppUpdate()
+    expect(installStatus.value).toBe('failed')
+    expect(installError.value).toContain('no entry for platform')
+  })
+
+  it('清单无可用更新 → no-update 且状态回 idle', async () => {
+    await setupTauriWithAvailableUpdate()
+    checkMock.mockResolvedValue(null)
+    expect(await installUpdate()).toBe('no-update')
+    expect(useAppUpdate().installStatus.value).toBe('idle')
+  })
+
+  it('连点保护：下载途中再次调用返回 in-progress，不复用旧调用', async () => {
+    await setupTauriWithAvailableUpdate()
+    // 让 downloadAndInstall 挂起（不 resolve），模拟下载进行中；
+    // installCalled 标记"已真正进入下载"（downloadAndInstall 已被调用），
+    // 不能用 installStatus === 'downloading' 当信号 —— 那个状态在 check()
+    // 之前就置位了，等不到它就 release() 会拿到未赋值的 resolve
+    let resolveInstall!: () => void
+    let installCalled = false
+    checkMock.mockResolvedValue({
+      version: '0.1.0-rc.35',
+      downloadAndInstall: () => new Promise<void>((resolve) => {
+        installCalled = true
+        resolveInstall = resolve
+      }),
+    })
+    const first = installUpdate()
+    await vi.waitFor(() => expect(installCalled).toBe(true))
+    expect(await installUpdate()).toBe('in-progress')
+    resolveInstall()
+    expect(await first).toBe('ready')
+  })
+})
+
+describe('relaunchApp', () => {
+  it('Tauri 环境调用插件 relaunch；失败不抛出', async () => {
+    vi.stubGlobal('window', { __TAURI_INTERNALS__: {} })
+    relaunchMock.mockClear()
+    relaunchMock.mockResolvedValueOnce(undefined)
+    await relaunchApp()
+    expect(relaunchMock).toHaveBeenCalledTimes(1)
+
+    relaunchMock.mockRejectedValueOnce(new Error('boom'))
+    await expect(relaunchApp()).resolves.toBeUndefined()
+  })
+
+  it('非 Tauri 环境为 no-op', async () => {
+    vi.unstubAllGlobals()
+    relaunchMock.mockClear()
+    await relaunchApp()
+    expect(relaunchMock).not.toHaveBeenCalled()
   })
 })

@@ -497,6 +497,12 @@ v*:
         tags:                     # 与节点标签是「与」关系，节点标签须为超集
           - mac
           - arm64
+      # 热更新签名私钥（TAURI_SIGNING_PRIVATE_KEY）：存放在密钥仓库
+      # jackytse/secrets 的 wocnb/tauri-updater.yml（该仓库私有，仅构建
+      # 流水线可读）。构建机缺失该变量时 build 阶段还有一层固定路径回退
+      # （~/.tauri/wocnb-updater.key），两层都拿不到则 build 直接失败 ——
+      # 热更新产物必须签名，绝不发无签名更新包。
+      imports: https://cnb.cool/jackytse/secrets/-/blob/main/wocnb/tauri-updater.yml
       env:
         CI: "true"
         COREPACK_ENABLE_DOWNLOAD_PROMPT: "0"
@@ -603,11 +609,42 @@ v*:
             # 就等于每次冷编译（该逻辑原在 build-x64 里，裁剪时搬到这里保住缓存）
             mkdir -p "${HOME}/.cnb-cache/macos-target"
             [ -L src-tauri/target ] || { rm -rf src-tauri/target; ln -s "${HOME}/.cnb-cache/macos-target" src-tauri/target; }
+            # —— 热更新签名私钥（双层来源，缺一即失败）——
+            # 1) 密钥仓库 imports 注入的 TAURI_SIGNING_PRIVATE_KEY（首选）；
+            # 2) 回退构建机固定路径 ~/.tauri/wocnb-updater.key（TAURI_SIGNING_
+            #    PRIVATE_KEY 允许传"文件路径"，bundler 会自己读内容）
+            # 两层都拿不到直接退出：createUpdaterArtifacts 开启时无私钥打包必报
+            # 错，与其让 bundler 报模糊错误不如在这里给出明确指引。
+            if [ -z "${TAURI_SIGNING_PRIVATE_KEY:-}" ]; then
+              for f in "${HOME}/.tauri/wocnb-updater.key" /Users/*/.tauri/wocnb-updater.key; do
+                if [ -f "$f" ]; then
+                  export TAURI_SIGNING_PRIVATE_KEY="$f"
+                  echo "[wocnb-ci] 签名私钥来自构建机文件：$f"
+                  break
+                fi
+              done
+            else
+              echo "[wocnb-ci] 签名私钥来自密钥仓库 imports（长度 $(printf '%s' "$TAURI_SIGNING_PRIVATE_KEY" | wc -c | tr -d ' ') 字符）"
+            fi
+            if [ -z "${TAURI_SIGNING_PRIVATE_KEY:-}" ]; then
+              echo "错误：缺少热更新签名私钥 TAURI_SIGNING_PRIVATE_KEY" >&2
+              echo "      请在密钥仓库 jackytse/secrets 的 wocnb/tauri-updater.yml 里配置，" >&2
+              echo "      或把私钥文件放到构建机 ~/.tauri/wocnb-updater.key" >&2
+              exit 1
+            fi
+            # 无密码私钥也要显式置空：部分 bundler 版本会因变量缺失尝试交互式
+            # 询问密码，CI 非交互环境会卡住
+            export TAURI_SIGNING_PRIVATE_KEY_PASSWORD="${TAURI_SIGNING_PRIVATE_KEY_PASSWORD:-}"
             # 说明：本架构（aarch64-apple-darwin = 编译机本机架构）编译**不需要**
             # rustup/rustc target 管理——rustc 默认 target 就是本机架构。
             # 节点上哪怕装的是 brew 版 rust（无 rustup 命令），只要 rustc 可用即可。
-            pnpm exec tauri build --target aarch64-apple-darwin --bundles dmg
+            # --config 覆盖层（tauri.updater.conf.json）只开 createUpdaterArtifacts：
+            # 主 tauri.conf.json 不开它，本地 `pnpm tauri build`（无私钥）不受影响
+            pnpm exec tauri build --target aarch64-apple-darwin --bundles dmg --config src-tauri/tauri.updater.conf.json
             bash scripts/ci/collect-macos.sh aarch64-apple-darwin arm64
+            # 热更新产物（.app.tar.gz + .sig）收集 + latest.json 清单生成；
+            # 失败即退出（宁可本版发不出热更新，也不发坏清单）
+            bash scripts/ci/collect-updater-macos.sh aarch64-apple-darwin arm64
     #
         - name: checksums
           script: |
@@ -622,6 +659,18 @@ v*:
             set -eu
             export PATH="/opt/homebrew/bin:/usr/local/bin:${PATH}"
             bash scripts/ci/release-upload.sh ./release
+    #
+        # 热更新清单发布：把 latest.json 覆盖上传到**固定 tag** updater-manifest
+        # 的 Release（一次性预先创建好）。客户端 updater 端点是静态 URL
+        # （.../releases/download/updater-manifest/latest.json），每次发版覆盖
+        # 同名附件即完成"清单更新"，旧客户端下轮 check() 就能拿到新版本。
+        # 注意：CNB_BRANCH 是 release-upload.sh 的目标 tag 来源，这里覆写为
+        # updater-manifest —— release 本体（rc tag）的上传在上一阶段已完成。
+        - name: publish-manifest
+          script: |
+            set -eu
+            export PATH="/opt/homebrew/bin:/usr/local/bin:${PATH}"
+            CNB_BRANCH=updater-manifest bash scripts/ci/release-upload.sh release/latest.json
     #
     # # ---- P3 release-windows：需已接入自托管 Windows 节点【未实测，启用前须空跑验证】----
     # # ⚠️ 自托管 Windows 的 stage 脚本默认走 PowerShell，不是 bash。

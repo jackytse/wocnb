@@ -40,5 +40,16 @@
     "macOS": {
       "signingIdentity": "-"
     }
+  },
+  "plugins": {
+    "updater": {
+      "endpoints": [
+        "https://cnb.cool/jackytse/wocnb/-/releases/download/updater-manifest/latest.json"
+      ],
+      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDZCQjE5MDc2RkQ3OTc5RTUKUldUbGVYbjlkcEN4YTd0VElONlc2QUFUd29sZ2VCNTZLWXV0RldRVnB5Q3IvN0JUQldYSmR3dzEK",
+      "windows": {
+        "installMode": "passive"
+      }
+    }
   }
 }

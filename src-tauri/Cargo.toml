@@ -48,6 +48,15 @@ tauri-plugin-opener = "2"
 # 背景：CNB 无推送通道（无 Webhook 接收/SSE），构建状态只能轮询，
 # 因此由前端轮询到结果后调用本插件发系统通知（窗口隐藏/驻留托盘时也能触达）
 tauri-plugin-notification = "2"
+# updater：应用内热更新（检查更新清单 → 下载 → 校验签名 → 安装）。
+# 清单端点与签名公钥在 tauri.conf.json 的 plugins.updater；更新包签名由
+# CI 在打包时用 TAURI_SIGNING_PRIVATE_KEY 生成（密钥经 CNB 密钥仓库注入）
+# 注意：仅 macOS 参与热更新（Windows 只出 portable exe，更新器必须依赖
+# NSIS/MSI 安装器产物），Windows 端 check 会因清单缺平台条目而失败，
+# 前端已做降级引导（跳转 Releases 手动下载）
+tauri-plugin-updater = "2"
+# process：更新包安装完成后重启应用（relaunch），与 updater 配套
+tauri-plugin-process = "2"
 
 # macOS 专用：托盘右键菜单按光标位置弹出（修复多显示器弹错屏）。
 # muda 与 tauri 内部使用的版本一致（0.20），objc2/objc2-core-foundation 也

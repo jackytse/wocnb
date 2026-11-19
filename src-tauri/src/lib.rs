@@ -738,6 +738,15 @@ pub fn run() {
         // "发完即忘"，前端代码无需任何改动（前端只是收不到点击事件而已，
         // 通知本身照常弹出）。
         .plugin(tauri_plugin_notification::init())
+        // updater 插件：应用内热更新。配置（清单端点 + 签名公钥）在
+        // tauri.conf.json 的 plugins.updater；更新包由 CI 打包时用私钥
+        // 签名（TAURI_SIGNING_PRIVATE_KEY，经 CNB 密钥仓库注入），运行时
+        // 用内置公钥验签后才安装。前端经 @tauri-apps/plugin-updater 调用
+        // check / downloadAndInstall；Windows 端清单缺平台条目时 check
+        // 会失败，前端降级为"前往 Releases 手动下载"
+        .plugin(tauri_plugin_updater::Builder::new().build())
+        // process 插件：更新安装完成后 relaunch 重启应用（与 updater 配套）
+        .plugin(tauri_plugin_process::init())
         // 全局菜单事件：托盘右键菜单（原生 muda 菜单）的条目点击会经
         // Tauri 内部的 muda 事件通道转发到这里（Builder::on_menu_event
         // 接收所有 muda 菜单的事件，不区分菜单由谁创建）

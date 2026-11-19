@@ -1,13 +1,20 @@
 /**
- * 应用自更新检测（检查更新，不做应用内静默安装）。
+ * 应用自更新：检测（CNB Release 列表比对）+ 应用内热更新（macOS）。
  *
- * 为什么不做 tauri-plugin-updater 自动安装：
- * 1. 更新清单要 minisign 签名 + 公网静态 JSON 端点，当前发版链路（CNB Release
- *    附件）没有签名环节；
- * 2. Windows 端当前只出 portable exe（rc 阶段 NSIS/WiX 不可用，见 .cnb.yml
- *    注释），updater 插件必须依赖安装器产物，portable exe 无法被其替换。
- * 因此本模块的定位是「检测 + 引导」：发现新版本后提示用户，跳转到
- * CNB Release 页手动下载。等正式版固定 NSIS/MSI 产物并补齐签名后再演进。
+ * 检测与安装分两条线：
+ * - 「检测」走 CNB Releases 数据层 fetchReleases（GET /{repo}/-/releases，
+ *   scope repo-release:r），复用 useCnbAuth 统一请求链路（Rust
+ *   cnb_http_request 直连，规避网关 TLS 风控）—— 通道（release/prerelease）、
+ *   版本比较、通知编排都在这条线上；
+ * - 「安装」走 tauri-plugin-updater（check → downloadAndInstall → relaunch），
+ *   清单端点是 updater-manifest Release 的 latest.json（静态 URL，见
+ *   tauri.conf.json plugins.updater），更新包由 CI 打包时签名、客户端内置
+ *   公钥验签。
+ *
+ * 为什么 Windows 不参与热更新：更新器必须依赖 NSIS/MSI 安装器产物替换，
+ * 而当前 Windows 节点 makensis 起不来（32 位程序跑不起来，rc 版只能出
+ * 裸 exe，见 .cnb.yml 注释）→ Windows check() 缺平台条目会失败，
+ * installUpdate 捕获后降级为「前往 Releases 手动下载」。
  *
  * 检测通道：复用 Releases 数据层 fetchReleases（GET /{repo}/-/releases，
  * scope repo-release:r），走 useCnbAuth 统一请求链路（Rust cnb_http_request
@@ -28,6 +35,22 @@
  * 还是连预发布版一起看（默认 prerelease —— 本项目 rc 阶段只有预发布版）。
  * 通道持久化在 localStorage，参与 pickLatestRelease 过滤，并按通道分别维护
  * 「已通知版本」去重记录。
+ *
+ * 应用内热更新（macOS）：检测到新版本后可在「设置 · 关于」一键安装 ——
+ * 走 tauri-plugin-updater：check() 拉 updater-manifest 清单 → downloadAndInstall
+ * （下载进度经回调回填 installProgress）→ 完成后由用户点「重启」调
+ * plugin-process 的 relaunch。清单端点与签名公钥在 tauri.conf.json 的
+ * plugins.updater，更新包签名由 CI 打包时生成（TAURI_SIGNING_PRIVATE_KEY）。
+ *
+ * 通道与热更新的交汇点（容易漏的坑）：updater 清单只维护「最新版本」一条
+ * 记录，**不感知通道**。若用户选了 release 通道而清单指向 rc，直接装会把
+ * 预发布版塞给"只要稳定版"的用户 —— 所以 installUpdate() 里校验
+ * update.version 必须等于当前通道检测出的 latestVersion，不等则拒绝安装
+ * 并引导手动下载。
+ *
+ * Windows 端降级：清单目前只有 darwin-aarch64 条目（Windows 只出 portable
+ * exe，更新器必须依赖 NSIS/MSI 安装器产物），Windows check() 会失败 /
+ * 缺条目，installUpdate 捕获后走 failed 分支，UI 引导手动下载。
  *
  * 通知双通道（本应用的通知约定：推送本地系统通知的同时在通知面板落记录）：
  * 发现新版本时经 sendAppSystemNotification 推一条系统通知（点击直达
@@ -51,7 +74,7 @@ import { sendAppSystemNotification } from './useCnbBuildWatch'
 
 /**
  * 本应用自身的发版仓库（CNB）。改仓库地址时只需改这里 ——
- * 检测与「前往下载」都指向它。与 settings/about.vue 的 repoUrl 保持一致。
+ * 检测、「前往下载」与 ⌘K 的「使用反馈」都指向它。
  */
 export const APP_SOURCE_REPO = 'jackytse/wocnb'
 
@@ -393,6 +416,11 @@ export function setUpdateChannel(channel: UpdateChannel): void {
   lastError.value = ''
   checkedAt.value = 0
   writeLastCheckAt(0)
+  // 安装状态同属旧通道：一并复位（否则切通道后残留的 ready 态会让用户
+  // 把新通道的检查结果和新版本安装动作错误地拼在一起）
+  installStatus.value = 'idle'
+  installProgress.value = 0
+  installError.value = ''
 }
 
 /** 进行中的检查（防抖：连点「检查更新」按钮只发一次请求） */
@@ -685,6 +713,147 @@ export async function maybeAutoCheckOnStartup(opts: { currentVersion?: string, n
   }
 }
 
+// ---------------------------------------------------------------------------
+// 应用内热更新（macOS）：tauri-plugin-updater 下载安装 + process 重启
+// ---------------------------------------------------------------------------
+
+/**
+ * 安装状态机：
+ * - idle：未在安装（无可装内容或从未点过安装）；
+ * - downloading：下载中（installProgress 为 0~100 百分比）；
+ * - installing：下载完成、写入/校验中（通常很快）；
+ * - ready：安装完成，等待用户点「重启」生效；
+ * - failed：失败（installError 带原文，UI 引导手动下载兜底）。
+ */
+export type UpdateInstallStatus = 'idle' | 'downloading' | 'installing' | 'ready' | 'failed'
+
+/**
+ * installUpdate 的结果码（细粒度，UI 据此决定提示文案与降级路径）：
+ * - ready：下载安装成功，可 relaunch；
+ * - no-update：updater 清单无可装更新（或本地还没做过通道检测）；
+ * - mismatch：清单版本与本通道检测出的最新版本不一致 —— 典型场景是
+ *   release 通道 + 清单指向 rc（见模块头注释），拒绝安装防通道被绕过；
+ * - failed：网络 / 验签 / 平台缺条目（Windows）等失败；
+ * - unsupported：非 Tauri 环境（浏览器 dev）；
+ * - in-progress：已有一次安装在进行中（连点保护）。
+ */
+export type UpdateInstallOutcome = 'ready' | 'no-update' | 'mismatch' | 'failed' | 'unsupported' | 'in-progress'
+
+// 安装状态（模块级单例，与检查状态同范式；about 页直接渲染）
+const installStatus = ref<UpdateInstallStatus>('idle')
+/** 下载进度百分比（0~100；installing/ready 时为 100） */
+const installProgress = ref(0)
+/** 失败原文（installError 展示在关于页，含 Windows 缺条目等场景） */
+const installError = ref('')
+
+/**
+ * 是否处于 Tauri 环境（热更新与启动检查同口径的守卫）。
+ * 抽成函数：installUpdate / relaunchApp 两处复用，避免散落字面量判断。
+ */
+function isTauriRuntime(): boolean {
+  return typeof window !== 'undefined' && '__TAURI_INTERNALS__' in window
+}
+
+/**
+ * 下载并安装检测到的更新（macOS 热更新主流程，关于页「一键更新」按钮）。
+ *
+ * # 流程
+ * 1. 前置校验：Tauri 环境 + 当前通道已检测出最新版本（latestRelease）；
+ * 2. updater check()：拉 tauri.conf.json 配置的清单端点（updater-manifest
+ *    Release 的 latest.json），拿到与当前平台匹配的更新项；
+ * 3. **通道校验**：update.version 必须等于本通道检测出的 latestVersion，
+ *    否则拒绝（release 通道用户绝不能被塞进 rc，见模块头注释）；
+ * 4. downloadAndInstall：进度回调回填 installProgress（百分比）；
+ * 5. 成功后置 ready —— **不自动重启**：安装瞬间杀进程会打断用户正在做的
+ *    操作，重启动作交给用户点「重启完成更新」（relaunchApp）。
+ *
+ * # 失败面
+ * - Windows：清单缺 windows 条目 → check() 抛错 → failed + 手动下载引导；
+ * - 网络/验签失败 → failed，原文落 installError；
+ * - 清单不可达（首次 bootstrap 前 / CI 未发布清单）→ 同 failed。
+ */
+export async function installUpdate(): Promise<UpdateInstallOutcome> {
+  if (!isTauriRuntime()) {
+    return 'unsupported'
+  }
+  // 连点保护：下载/安装途中再次点击直接忽略（按钮在 UI 层也会禁用）
+  if (installStatus.value === 'downloading' || installStatus.value === 'installing') {
+    return 'in-progress'
+  }
+  // 期望版本 = 当前通道检测出的最新版本（没检测过就让用户先点「检查更新」）
+  const expected = (latestRelease.value?.tagName || '').replace(/^v/, '')
+  if (!expected) {
+    return 'no-update'
+  }
+  installStatus.value = 'downloading'
+  installProgress.value = 0
+  installError.value = ''
+  try {
+    const { check } = await import('@tauri-apps/plugin-updater')
+    const update = await check()
+    if (!update) {
+      // 清单版本 ≤ 本地版本：按"无可装更新"处理（不视为错误）
+      installStatus.value = 'idle'
+      return 'no-update'
+    }
+    // 通道校验（防 release 通道被清单里的 rc 绕过，见函数头注释）
+    if (update.version.replace(/^v/, '') !== expected) {
+      installStatus.value = 'idle'
+      return 'mismatch'
+    }
+    // 下载 + 安装：进度事件按官方类型收窄（Started 带总长、Progress 带 chunk、Finished）
+    let downloaded = 0
+    let total = 0
+    await update.downloadAndInstall((event) => {
+      if (event.event === 'Started') {
+        total = event.data.contentLength ?? 0
+      }
+      else if (event.event === 'Progress') {
+        downloaded += event.data.chunkLength
+        if (total > 0) {
+          installProgress.value = Math.min(100, Math.round((downloaded / total) * 100))
+        }
+      }
+      else if (event.event === 'Finished') {
+        installStatus.value = 'installing'
+        installProgress.value = 100
+      }
+    })
+    installStatus.value = 'ready'
+    return 'ready'
+  }
+  catch (err) {
+    // Windows 缺平台条目 / 网络异常 / 验签失败都进这里：原文展示 + 手动下载兜底
+    installError.value = err instanceof Error ? err.message : String(err)
+    installStatus.value = 'failed'
+    return 'failed'
+  }
+}
+
+/**
+ * 重启应用使更新生效（关于页「重启完成更新」按钮 / 安装完成后的引导动作）。
+ * 非阻塞：relaunch 由系统接管进程生命周期；浏览器 dev 下为 no-op。
+ */
+export async function relaunchApp(): Promise<void> {
+  if (!isTauriRuntime()) {
+    return
+  }
+  try {
+    const { relaunch } = await import('@tauri-apps/plugin-process')
+    await relaunch()
+  }
+  catch {
+    // relaunch 失败极罕见（权限/平台差异）：不打断用户，UI 仍可手动重启应用
+  }
+}
+
+/** 供单测复位安装状态（生产代码不应调用） */
+export function resetUpdateInstallStateForTest(): void {
+  installStatus.value = 'idle'
+  installProgress.value = 0
+  installError.value = ''
+}
+
 /**
  * 应用更新检测（单例 state + 动作）。
  * 关于页与启动链路共用，保证两处看到同一份检查结果。
@@ -709,6 +878,16 @@ export function useAppUpdate() {
     setUpdateChannel,
     /** 是否有新版本（derived：status === 'available'） */
     updateAvailable: computed(() => status.value === 'available'),
+    /** 热更新安装状态机（downloading/installing/ready/failed） */
+    installStatus,
+    /** 热更新下载进度（0~100） */
+    installProgress,
+    /** 热更新失败原文 */
+    installError,
+    /** 下载并安装检测到的更新（macOS；Windows 会 failed 并引导手动下载） */
+    installUpdate,
+    /** 安装完成后重启应用 */
+    relaunchApp,
     checkForUpdate,
     maybeAutoCheckOnStartup,
   }
