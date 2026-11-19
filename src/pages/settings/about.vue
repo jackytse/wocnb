@@ -184,7 +184,7 @@ async function onInstallUpdate() {
     </div>
     <USeparator />
 
-    <!-- 更新通道：release（仅正式版）/ prerelease（含预发布，默认） -->
+    <!-- 更新通道：release（仅正式版，默认）/ prerelease（含预发布） -->
     <div class="flex items-center gap-4 py-1 flex-wrap">
       <div class="min-w-0 flex-1">
         <p class="text-sm text-muted">

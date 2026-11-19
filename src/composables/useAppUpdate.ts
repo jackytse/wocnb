@@ -104,17 +104,17 @@ const LAST_CHECK_STORAGE_KEY = 'wocnb.update.lastCheckAt'
 export type UpdateChannel = 'prerelease' | 'release'
 
 /** 允许的通道枚举顺序（顺序 = 设置页下拉顺序，预发布在前且为默认） */
-export const UPDATE_CHANNEL_OPTIONS: readonly UpdateChannel[] = ['prerelease', 'release']
+export const UPDATE_CHANNEL_OPTIONS: readonly UpdateChannel[] = ['release', 'prerelease']
 
 /**
- * 默认通道 = prerelease。
+ * 默认通道 = release（正式版，用户要求）。
  *
- * 为什么不是 release：本项目长期处于 rc 阶段，全部 Release 都是
- * `prerelease=true`；若默认 release，新安装的用户默认永远检测不到任何更新
- * （历史上 `/releases/latest` 恒 404 就是这个坑的翻版）。等正式版成为常态后
- * 再把默认值翻过来即可 —— 只需改这一个常量。
+ * 注意 rc 阶段的边界事实：当前全部 Release 都是 `prerelease=true`，默认
+ * release 时**新装用户默认检测不到任何更新**（除非仓库已发正式版）——这是
+ * 该默认值的既定语义（"更稳定"），不是缺陷；想要 rc 一早收到通知的用户
+ * 需在「设置 · 关于」手动切到预发布通道。
  */
-export const DEFAULT_UPDATE_CHANNEL: UpdateChannel = 'prerelease'
+export const DEFAULT_UPDATE_CHANNEL: UpdateChannel = 'release'
 
 /** localStorage 键：用户选择的更新通道 */
 export const UPDATE_CHANNEL_STORAGE_KEY = 'wocnb.update.channel'
@@ -295,7 +295,7 @@ export function isNewerVersion(candidate: string, current: string): boolean {
  *   过滤之后**取，否则 release 通道会漏出预发布版。
  *
  * @param list    Release 列表（fetchReleases 归一化结果）
- * @param channel 更新通道（默认 prerelease，与 DEFAULT_UPDATE_CHANNEL 一致；
+ * @param channel 更新通道（默认 DEFAULT_UPDATE_CHANNEL = release；
  *                显式默认值让老调用点与单测语义不变）
  */
 export function pickLatestRelease(

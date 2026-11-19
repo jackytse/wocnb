@@ -79,8 +79,10 @@ beforeEach(() => {
   resetUpdateInstallStateForTest()
   vi.unstubAllGlobals()
   checkMock.mockReset()
-  // 复位更新通道（用例可能切到 release；切回默认会顺带清检查状态）
-  setUpdateChannel(DEFAULT_UPDATE_CHANNEL)
+  // 复位更新通道：固定为 prerelease 作为本文件多数用例的基线（rc 中心
+  // 数据在 release 通道会被过滤光）。注意这不再是"默认通道"—— 默认值
+  // 已按用户要求改为 release，其验证归 normalizeUpdateChannel 的专用用例
+  setUpdateChannel('prerelease')
   // 复位模块级单例（vi.resetModules 成本高，这里直接驱动状态复位：
   // 跑一次置 error 的检查即可覆盖 checking → error；available/upToDate
   // 由各用例自身的断言顺序保证独立性）
@@ -350,23 +352,23 @@ describe('pickLatestRelease', () => {
       rel('v0.1.0-rc.29'), // 最新创建（重发/补发场景）
       rel('v0.1.0-rc.31'),
       rel('v0.1.0-rc.30'),
-    ])
+    ], 'prerelease')
     expect(picked?.tagName).toBe('v0.1.0-rc.31')
   })
 
   it('rc 段按数值比较：rc.25 比 rc.9 新', () => {
-    expect(pickLatestRelease([rel('v0.1.0-rc.9'), rel('v0.1.0-rc.25')])?.tagName).toBe('v0.1.0-rc.25')
+    expect(pickLatestRelease([rel('v0.1.0-rc.9'), rel('v0.1.0-rc.25')], 'prerelease')?.tagName).toBe('v0.1.0-rc.25')
   })
 
   it('正式版 > 同号预发布（0.1.0 排在 0.1.0-rc.31 之后也是最新）', () => {
-    expect(pickLatestRelease([rel('v0.1.0-rc.31'), rel('v0.1.0')])?.tagName).toBe('v0.1.0')
+    expect(pickLatestRelease([rel('v0.1.0-rc.31'), rel('v0.1.0')], 'prerelease')?.tagName).toBe('v0.1.0')
   })
 
   it('草稿（draft）不参与挑选：用户下载不到，不该提示', () => {
     const picked = pickLatestRelease([
       rel('v0.1.0-rc.32', { isDraft: true }),
       rel('v0.1.0-rc.31'),
-    ])
+    ], 'prerelease')
     expect(picked?.tagName).toBe('v0.1.0-rc.31')
   })
 
@@ -381,7 +383,7 @@ describe('pickLatestRelease', () => {
   })
 
   it('整列表版本号不可解析 → 退回第一条非草稿（由 isNewerVersion 决定不误报）', () => {
-    expect(pickLatestRelease([rel('nightly'), rel('latest-build')])?.tagName).toBe('nightly')
+    expect(pickLatestRelease([rel('nightly'), rel('latest-build')], 'prerelease')?.tagName).toBe('nightly')
   })
 
   it('回归：prerelease 也能被发现（latest 端点恒 404 的真实场景）', async () => {
@@ -416,8 +418,8 @@ describe('normalizeUpdateChannel', () => {
     expect(normalizeUpdateChannel(123)).toBe(DEFAULT_UPDATE_CHANNEL)
   })
 
-  it('默认通道是 prerelease（rc 阶段若默认 release 会永远检测不到更新）', () => {
-    expect(DEFAULT_UPDATE_CHANNEL).toBe('prerelease')
+  it('默认通道是 release（用户要求：默认只认正式版；rc 阶段默认检测不到更新是既定语义）', () => {
+    expect(DEFAULT_UPDATE_CHANNEL).toBe('release')
   })
 })
 
@@ -499,7 +501,8 @@ describe('checkForUpdate · 通道生效', () => {
   it('切到相同通道是 no-op（不清结果，避免无谓的界面闪烁）', async () => {
     fetchReleasesMock.mockResolvedValue([{ id: '1', tagName: 'v0.1.0-rc.32', isPrerelease: true }])
     await checkForUpdate({ currentVersion: '0.1.0-rc.31' })
-    setUpdateChannel(DEFAULT_UPDATE_CHANNEL)
+    // 基线是 prerelease（见 beforeEach），切回同通道才是 no-op 场景
+    setUpdateChannel('prerelease')
     expect(useAppUpdate().status.value).toBe('available')
   })
 })
