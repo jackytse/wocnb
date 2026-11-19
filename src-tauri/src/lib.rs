@@ -811,6 +811,157 @@ fn extra_str(extra: &std::collections::HashMap<String, serde_json::Value>, key: 
         .map(|s| s.to_string())
 }
 
+// ---------------------------------------------------------------------------
+// 窗口尺寸记忆（统一用逻辑像素）
+//
+// # 为什么尺寸不交给 tauri-plugin-window-state
+//
+// 该插件按 **物理像素** 落盘，启动时又原样 set_size 回去。实测（2026-11-19）：
+// 用户在外接屏（scale=1，窗口 x=1512）把窗口调到 1213×720，盘里存的就是
+// 1213×720 physical；换到内置 Retina 屏（scale=2）启动，同样 1213×720
+// physical 只剩 **606×360 逻辑点** —— 窗口"只有一小块"，与用户截图
+// （607×360）完全吻合。更糟的是 set_size 是程序化调用，不受
+// tauri.conf.json 的 minWidth/minHeight 约束，1024×600 的最小值兜不住它。
+//
+// 因此尺寸改由本模块自己管：存/取一律逻辑像素，恢复时再夹到
+// [最小尺寸, 当前屏幕尺寸] 区间。插件继续负责位置/最大化/可见性/装饰/
+// 全屏（这些量与缩放无关，且插件本身有"屏幕相交"判断），只摘掉 SIZE 位。
+// ---------------------------------------------------------------------------
+
+/// 尺寸持久化文件名（位于 app_data_dir 下，与插件的 .window-state.json 分开）
+const WINDOW_SIZE_FILE: &str = "window-size.txt";
+
+/// 最小窗口尺寸（逻辑像素）。必须与 tauri.conf.json 的 minWidth/minHeight
+/// 一致（默认尺寸也取这两个值，用户要求"默认打开就是最小尺寸"），
+/// 单测 test_window_size_constants_match_config 锁定两者不许漂移。
+const MIN_WINDOW_WIDTH: f64 = 1024.0;
+const MIN_WINDOW_HEIGHT: f64 = 600.0;
+
+/// 最近一次"非最大化、非全屏"的逻辑尺寸（进程内缓存）。
+///
+/// 为什么不每次 Resized 都写盘：拖拽窗口会连续触发几十次事件，逐次落盘
+/// 既慢又无意义；这里只更新内存，关窗/退出时写一次即可。
+static LAST_WINDOW_SIZE: std::sync::OnceLock<std::sync::Mutex<Option<(f64, f64)>>> =
+    std::sync::OnceLock::new();
+
+/// 尺寸缓存槽位（懒初始化；首次为 None，表示"本进程还没记到尺寸"）
+fn last_window_size_slot() -> &'static std::sync::Mutex<Option<(f64, f64)>> {
+    LAST_WINDOW_SIZE.get_or_init(|| std::sync::Mutex::new(None))
+}
+
+/// 持久化文件完整路径（app_data_dir/window-size.txt；解析失败返回 None，
+/// 调用方按"无持久化"降级，只影响下次启动的初始尺寸）
+fn window_size_file_path(app: &tauri::AppHandle) -> Option<std::path::PathBuf> {
+    app.path().app_data_dir().ok().map(|d| d.join(WINDOW_SIZE_FILE))
+}
+
+/// 解析持久化的尺寸文本（格式 "1024x600"）。
+///
+/// 容错要点：允许首尾空白与浮点（不同平台/未来版本可能写成 1024.0），
+/// 非有限值、非正数、缺分隔符一律返回 None —— 坏文件按"首次启动"处理，
+/// 绝不把 NaN/0 传给 set_size（那会让窗口尺寸变成不可预期值）。
+fn parse_window_size(text: &str) -> Option<(f64, f64)> {
+    let (w, h) = text.trim().split_once('x')?;
+    let w: f64 = w.trim().parse().ok()?;
+    let h: f64 = h.trim().parse().ok()?;
+    if !w.is_finite() || !h.is_finite() || w <= 0.0 || h <= 0.0 {
+        return None;
+    }
+    Some((w, h))
+}
+
+/// 把期望尺寸夹到 [最小尺寸, 屏幕尺寸] 区间（纯函数，单测覆盖）。
+///
+/// - `saved = None`（首次启动 / 文件损坏）→ 用最小尺寸，即配置里的默认值
+/// - 屏幕比最小尺寸还小（极端缩放/小副屏）→ 只保下限，不夹上限，
+///   避免把窗口压到比最小值还小
+fn clamp_window_size(saved: Option<(f64, f64)>, screen: Option<(f64, f64)>) -> (f64, f64) {
+    let (mut w, mut h) = saved.unwrap_or((MIN_WINDOW_WIDTH, MIN_WINDOW_HEIGHT));
+    w = w.max(MIN_WINDOW_WIDTH);
+    h = h.max(MIN_WINDOW_HEIGHT);
+    if let Some((sw, sh)) = screen {
+        // 只在屏幕确实放得下最小尺寸时才夹上限（否则等于把窗口压死）
+        if sw >= MIN_WINDOW_WIDTH {
+            w = w.min(sw);
+        }
+        if sh >= MIN_WINDOW_HEIGHT {
+            h = h.min(sh);
+        }
+    }
+    (w.round(), h.round())
+}
+
+/// 读取当前窗口的内尺寸并换算成逻辑像素。
+///
+/// 必须逐次取 scale_factor：同一窗口拖到不同缩放的屏幕上，物理尺寸会变、
+/// 逻辑尺寸不变，用旧的缩放系数换算就会得到错误的逻辑值。
+fn current_logical_size(window: &tauri::WebviewWindow) -> Option<(f64, f64)> {
+    let scale = window.scale_factor().ok()?;
+    if scale <= 0.0 {
+        return None;
+    }
+    let logical = window.inner_size().ok()?.to_logical::<f64>(scale);
+    Some((logical.width, logical.height))
+}
+
+/// 记录窗口当前尺寸到内存缓存（Resized 事件触发）。
+///
+/// 最大化/全屏时跳过：那时的 inner_size 是屏幕尺寸，用户下次希望恢复的是
+/// "常态尺寸"，把屏幕尺寸当成常态尺寸存下来会让窗口永远铺满。
+/// 小于最小尺寸时也跳过（最小化过程中可能出现异常小的中间值）。
+fn remember_window_size(window: &tauri::WebviewWindow) {
+    if window.is_maximized().unwrap_or(false) || window.is_fullscreen().unwrap_or(false) {
+        return;
+    }
+    if let Some((w, h)) = current_logical_size(window) {
+        if w >= MIN_WINDOW_WIDTH && h >= MIN_WINDOW_HEIGHT {
+            if let Ok(mut slot) = last_window_size_slot().lock() {
+                *slot = Some((w.round(), h.round()));
+            }
+        }
+    }
+}
+
+/// 启动时恢复上次关闭的尺寸（逻辑像素）。
+///
+/// 调用时机：setup 里、事件循环启动前（配置窗口此时已创建但尚未显示），
+/// 因此不会出现"先小后大"的闪跳。恢复动作是程序化 set_size，必须自己
+/// 保证不低于最小尺寸（不依赖系统约束，见文件头注释的踩坑记录）。
+fn restore_window_size(window: &tauri::WebviewWindow) {
+    let app = window.app_handle();
+    let saved = window_size_file_path(app)
+        .and_then(|path| std::fs::read_to_string(path).ok())
+        .and_then(|text| parse_window_size(&text));
+    let screen = window.current_monitor().ok().flatten().map(|monitor| {
+        let size = monitor.size().to_logical::<f64>(monitor.scale_factor());
+        (size.width, size.height)
+    });
+    let (w, h) = clamp_window_size(saved, screen);
+    if let Err(err) = window.set_size(tauri::LogicalSize::new(w, h)) {
+        log::warn!("[window] 恢复窗口尺寸失败（保持配置默认值）: {err}");
+    }
+    if let Ok(mut slot) = last_window_size_slot().lock() {
+        *slot = Some((w, h));
+    }
+}
+
+/// 把缓存的尺寸写盘（关窗 / 退出时调用）。
+///
+/// 尽力而为：写失败只影响下次启动的初始尺寸，记日志即可，绝不阻断退出。
+/// 缓存为空（本次会话没触发过 Resized）时不写，避免用 0 覆盖掉好数据。
+fn persist_window_size(app: &tauri::AppHandle) {
+    let cached = last_window_size_slot().lock().ok().and_then(|slot| *slot);
+    let Some((w, h)) = cached else { return };
+    let Some(path) = window_size_file_path(app) else { return };
+    if let Some(dir) = path.parent() {
+        let _ = std::fs::create_dir_all(dir);
+    }
+    let body = format!("{}x{}", w.round() as i64, h.round() as i64);
+    if let Err(err) = std::fs::write(&path, body) {
+        log::warn!("[window] 持久化窗口尺寸失败: {err}");
+    }
+}
+
 /// 显示并聚焦主窗口（托盘左键单击或菜单"打开应用"时调用）。
 /// 若窗口此前被隐藏（点关闭按钮）或最小化，show 会将其恢复到前台。
 fn show_main_window(app: &tauri::AppHandle) {
@@ -827,7 +978,7 @@ fn show_main_window(app: &tauri::AppHandle) {
 /// - 仅在 debug 构建下挂载日志插件（release 下关闭，避免额外开销）
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
-    tauri::Builder::default()
+    let app = tauri::Builder::default()
         .invoke_handler(tauri::generate_handler![
             greet,
             cnb_http_request,
@@ -896,12 +1047,23 @@ pub fn run() {
         .plugin(tauri_plugin_updater::Builder::new().build())
         // process 插件：更新安装完成后 relaunch 重启应用（与 updater 配套）
         .plugin(tauri_plugin_process::init())
-        // window-state 插件：关闭时把窗口尺寸/位置落盘（~/Library/Application
-        // Support/<app>/.window-state 等），下次启动自动恢复 —— 用户要求
-        // "记住窗口尺寸，下次打开保持上次关闭时的尺寸"。恢复仍受
-        // tauri.conf.json 的 minWidth/minHeight（1024x600）约束；
-        // 托盘隐藏/显示复用同一窗口，状态文件对可见性变更也做了保存
-        .plugin(tauri_plugin_window_state::Builder::default().build())
+        // window-state 插件：记住窗口位置 / 最大化 / 可见性 / 装饰 / 全屏
+        // （落盘到 ~/Library/Application Support/<app>/.window-state.json）。
+        //
+        // ⚠️ 这里刻意摘掉 StateFlags::SIZE：该插件按**物理像素**存尺寸，
+        // 换到不同缩放的屏幕（外接 1x 屏 → 内置 Retina 2x）启动会缩成一半
+        // （实测 1213×720 physical 在 2x 屏上只有 606×360 逻辑点），而且
+        // set_size 不受 minWidth/minHeight 约束 —— 于是"应用打开只有一小块"。
+        // 尺寸改由本文件「窗口尺寸记忆」模块用逻辑像素自管（restore_window_size
+        // / persist_window_size），插件只承担与缩放无关的那部分状态。
+        .plugin(
+            tauri_plugin_window_state::Builder::default()
+                .with_state_flags(
+                    tauri_plugin_window_state::StateFlags::all()
+                        & !tauri_plugin_window_state::StateFlags::SIZE,
+                )
+                .build(),
+        )
         // 全局菜单事件：托盘右键菜单（原生 muda 菜单）的条目点击会经
         // Tauri 内部的 muda 事件通道转发到这里（Builder::on_menu_event
         // 接收所有 muda 菜单的事件，不区分菜单由谁创建）
@@ -916,6 +1078,16 @@ pub fn run() {
             }
         })
         .setup(|app| {
+            // —— 恢复上次关闭时的窗口尺寸（逻辑像素）——
+            //
+            // 时机：Tauri 的 setup 是先创建配置窗口、再执行本闭包，
+            // 因此此刻窗口已存在但事件循环尚未跑起来 → 改尺寸不会出现
+            // "先按默认尺寸闪一下再变大"。最小值/屏幕上限的夹取逻辑见
+            // 本文件「窗口尺寸记忆」模块头注释（物理/逻辑像素踩坑记录）。
+            if let Some(window) = app.get_webview_window("main") {
+                restore_window_size(&window);
+            }
+
             // —— 系统通知点击上报（通知点击直达构建详情）——
             //
             // # 为什么必须在 Rust 侧注册
@@ -1070,25 +1242,123 @@ pub fn run() {
             Ok(())
         })
         .on_window_event(|window, event| {
-            // 拦截主窗口的关闭请求：隐藏窗口 + 阻止默认销毁行为，
-            // 应用继续驻留系统托盘，仅能通过托盘菜单"退出应用"真正退出
-            if let tauri::WindowEvent::CloseRequested { api, .. } = event {
-                let _ = window.hide();
-                api.prevent_close();
+            match event {
+                // 尺寸变化：只更新内存缓存。拖拽窗口会连续触发几十次，
+                // 逐次写盘既慢又无意义，真正落盘放到关窗/退出时
+                // 注意：这里拿到的是底层 Window，尺寸逻辑统一按
+                // WebviewWindow 处理 → 用 label 取回同一个窗口句柄
+                tauri::WindowEvent::Resized(_) => {
+                    if let Some(webview) = window
+                        .app_handle()
+                        .get_webview_window(window.label())
+                    {
+                        remember_window_size(&webview);
+                    }
+                }
+                // 拦截主窗口的关闭请求：先把尺寸落盘，再隐藏窗口 + 阻止
+                // 销毁行为，应用继续驻留系统托盘，仅能通过托盘菜单
+                // "退出应用"真正退出
+                tauri::WindowEvent::CloseRequested { api, .. } => {
+                    persist_window_size(window.app_handle());
+                    let _ = window.hide();
+                    api.prevent_close();
+                }
+                _ => {}
             }
         })
-        .run(tauri::generate_context!())
+        .build(tauri::generate_context!())
         .expect("error while building tauri application");
+
+    // 托盘"退出应用"走 app.exit(0)，不经过 CloseRequested → 在事件循环
+    // 退出时再落一次尺寸；正常关窗已在上面写过，这里重复写是幂等的
+    app.run(|app_handle, event| {
+        if let tauri::RunEvent::Exit = event {
+            persist_window_size(app_handle);
+        }
+    });
 }
 
 #[cfg(test)]
 mod tests {
     use super::{
-        build_header_map, greet, is_allowed_api_url, is_allowed_image_url, next_available_path,
-        normalize_tray_locale, sanitize_archive_name, tray_menu_texts,
-        BUILD_NOTIFY_ACTION_TYPE_ID,
+        build_header_map, clamp_window_size, greet, is_allowed_api_url, is_allowed_image_url,
+        next_available_path, normalize_tray_locale, parse_window_size, sanitize_archive_name,
+        tray_menu_texts, BUILD_NOTIFY_ACTION_TYPE_ID, MIN_WINDOW_HEIGHT, MIN_WINDOW_WIDTH,
     };
     use std::collections::HashMap;
+
+    /// 尺寸文本解析：正常值 / 空白 / 浮点 / 脏值的四类分支锁定。
+    /// 脏值一律 None（调用方按首次启动处理），绝不能让 NaN 流到 set_size
+    #[test]
+    fn test_parse_window_size() {
+        assert_eq!(parse_window_size("1024x600"), Some((1024.0, 600.0)));
+        assert_eq!(parse_window_size(" 1213 x 720 \n"), Some((1213.0, 720.0)));
+        assert_eq!(parse_window_size("1280.0x800.0"), Some((1280.0, 800.0)));
+        // 非法：缺分隔符 / 非数字 / 非正数 / 非有限值
+        assert_eq!(parse_window_size("1024"), None);
+        assert_eq!(parse_window_size("1024*600"), None);
+        assert_eq!(parse_window_size("axb"), None);
+        assert_eq!(parse_window_size("0x600"), None);
+        assert_eq!(parse_window_size("1024x-600"), None);
+        assert_eq!(parse_window_size("NaNx600"), None);
+        assert_eq!(parse_window_size(""), None);
+    }
+
+    /// 尺寸夹取：核心回归用例是"外接 1x 屏存的 physical 尺寸在 2x 屏上
+    /// 缩水一半"这个真实事故（1213×720 physical → 606×360 逻辑点）
+    #[test]
+    fn test_clamp_window_size() {
+        // 首次启动（无历史文件）→ 用最小尺寸，即配置默认值
+        assert_eq!(
+            clamp_window_size(None, None),
+            (MIN_WINDOW_WIDTH, MIN_WINDOW_HEIGHT)
+        );
+        // 事故场景：2x 屏上恢复出 606×360 → 必须被抬到最小值
+        assert_eq!(
+            clamp_window_size(Some((606.0, 360.0)), None),
+            (MIN_WINDOW_WIDTH, MIN_WINDOW_HEIGHT)
+        );
+        // 正常尺寸原样保留（只取整）
+        assert_eq!(clamp_window_size(Some((1213.4, 720.6)), None), (1213.0, 721.0));
+        // 超过屏幕 → 夹到屏幕尺寸（从大屏换到小屏的场景）
+        assert_eq!(
+            clamp_window_size(Some((2400.0, 1400.0)), Some((1440.0, 900.0))),
+            (1440.0, 900.0)
+        );
+        // 屏幕比最小值还小（极端缩放）→ 只保下限，不能把窗口压到更小
+        assert_eq!(
+            clamp_window_size(Some((800.0, 500.0)), Some((800.0, 500.0))),
+            (MIN_WINDOW_WIDTH, MIN_WINDOW_HEIGHT)
+        );
+    }
+
+    /// 常量与 tauri.conf.json 的窗口配置必须同步：默认尺寸 == 最小尺寸，
+    /// 改配置忘改常量（或反之）会让恢复逻辑夹错区间。`include_str!` 编译期
+    /// 读取配置，漂移时这里直接失败
+    #[test]
+    fn test_window_size_constants_match_config() {
+        let conf: serde_json::Value =
+            serde_json::from_str(include_str!("../tauri.conf.json")).expect("tauri.conf.json 不是合法 JSON");
+        let windows = conf["app"]["windows"].as_array().expect("缺少 app.windows");
+        let main = windows
+            .iter()
+            .find(|w| w["label"].as_str().unwrap_or("main") == "main")
+            .expect("缺少主窗口配置");
+        let width = main["width"].as_f64().expect("缺少 width");
+        let height = main["height"].as_f64().expect("缺少 height");
+        assert_eq!(width, MIN_WINDOW_WIDTH, "默认宽度与 MIN_WINDOW_WIDTH 不一致");
+        assert_eq!(height, MIN_WINDOW_HEIGHT, "默认高度与 MIN_WINDOW_HEIGHT 不一致");
+        assert_eq!(
+            main["minWidth"].as_f64(),
+            Some(MIN_WINDOW_WIDTH),
+            "minWidth 与 MIN_WINDOW_WIDTH 不一致"
+        );
+        assert_eq!(
+            main["minHeight"].as_f64(),
+            Some(MIN_WINDOW_HEIGHT),
+            "minHeight 与 MIN_WINDOW_HEIGHT 不一致"
+        );
+    }
 
     /// 托盘菜单三语文案映射锁定：三种显式语言各自命中独立文案，
     /// 且 open/quit 两条都不能为空（muda 空文本条目渲染异常）

@@ -42,6 +42,17 @@ const toast = useToast()
  */
 const updateChecking = ref(false)
 
+/**
+ * 下拉菜单受控开关（v-model:open）。
+ * 为什么需要受控：点击"检测更新"后要用 onSelect 的 preventDefault 阻止
+ * reka-ui 自动收起菜单 —— 否则接口还没返回菜单就关了，旋转 loading 完全
+ * 看不见，用户不知道有没有在检测。preventDefault 后没有任何默认行为能替
+ * 我们关菜单，只能在 handleCheckUpdate 拿到结果后手动置 false 收起。
+ * （注意：preventDefault 只加在检测更新这一项上；主题/语言的 checkbox
+ * 条目不能加 —— 它会阻止勾选状态翻转，见语言子菜单处的注释。）
+ */
+const menuOpen = ref(false)
+
 // 组件内翻译函数：t 在 computed 中调用，语言切换时依赖响应式 locale 自动重算
 const { t } = useI18n()
 // 检查更新动作（单例状态与关于页共享：检查结果、安装进度都落同一份 state，
@@ -133,8 +144,11 @@ async function handleCheckUpdate() {
     })
   }
   finally {
-    // 无论成败停止旋转（菜单由 reka-ui 在 select 后自动收起，无需手动关）
+    // 无论成败：停止旋转并收起菜单。preventDefault 保住了菜单（接口
+    // 检测期间保持展开、旋转可见），只能在这里手动关闭；try/finally
+    // 保证请求异常时菜单也不会卡死在展开态
     updateChecking.value = false
+    menuOpen.value = false
   }
 }
 
@@ -293,14 +307,20 @@ const items = computed<DropdownMenuItem[][]>(() => ([[{
   to: '/settings'
 }, {
   // 手动检查更新：随手可用的入口（详细状态与更新通道在「设置 · 关于」）。
-  // 交互：点击后菜单收起，检查期间条目 loading（视觉上只在防连点有意义）；
+  // 交互：点击后菜单保持展开、条目转 loading（接口检测期间可见），
+  // 拿到结果才收起菜单 —— preventDefault 阻止 reka-ui 在 select 后
+  // 自动收起（无 preventDefault 时菜单瞬间关闭，旋转态完全不可见）。
   // 检查结果 —— 有新版本弹更新提示窗（窗内一键更新 → 进度 → 自动重启），
-  // 已最新/失败走 toast。
+  // 已最新/失败走 toast；菜单收起统一在 handleCheckUpdate 的 finally。
   label: t('settings.about.checkUpdate'),
   icon: 'i-lucide-refresh-cw',
   loading: updateChecking.value,
   disabled: updateChecking.value,
-  onSelect: () => {
+  onSelect: (e) => {
+    // preventDefault：阻止 reka-ui 在 select 后自动收起菜单。
+    // 本条目不是 checkbox，preventDefault 不会带来勾选副作用；
+    // 主题/语言的 checkbox 条目严禁这么做（会阻止勾选翻转）
+    e.preventDefault()
     void handleCheckUpdate()
   }
 }], [{
@@ -358,6 +378,7 @@ const items = computed<DropdownMenuItem[][]>(() => ([[{
 
 <template>
   <UDropdownMenu
+    v-model:open="menuOpen"
     :items="items"
     :content="{ align: 'center', collisionPadding: 12 }"
     :ui="{ content: collapsed ? 'w-48' : 'w-(--reka-dropdown-menu-trigger-width)' }"
