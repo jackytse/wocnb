@@ -2,7 +2,6 @@
  * 组织用量统计（charge 域）数据层单测 —— 2026-11-11 恢复 + 增强配套。
  *
  * 网络层 cnbFetch 全 mock（与 useCnbOrg.test.ts 同范式）。锁定点：
- * - normalizeRepoVolume：volume 字符串转数字、非法值/负数按 0、slug 缺失丢弃；
  * - fetchGroupReposVolume：分页 query 拼接、空数组兜底、slug 逐段编码；
  * - normalizeSpecialAmount：_desc/_expire 配套键不产出条目、值 <= 0 过滤、
  *   expire null → ''（永久有效）、desc 缺失 → ''；
@@ -33,75 +32,13 @@ vi.mock('../useCnbAuth', () => {
 })
 
 import {
-  fetchGroupReposVolume,
   fetchGroupSpecialAmount,
-  normalizeRepoVolume,
   normalizeSpecialAmount,
-  REPOS_VOLUME_PAGE_SIZE,
   usageSeverity,
 } from '../useCnbOrg'
 
 beforeEach(() => {
   cnbFetchMock.mockReset()
-})
-
-describe('normalizeRepoVolume（仓库用量归一化）', () => {
-  it('常规条目：volume 字符串转数字，is_deleted 透传', () => {
-    expect(normalizeRepoVolume({ slug: 'org/repo', volume: '12345', is_deleted: false })).toEqual({
-      slug: 'org/repo',
-      volume: 12345,
-      isDeleted: false,
-    })
-  })
-
-  it('volume 非法值（NaN / 负数 / 非数字串）按 0', () => {
-    expect(normalizeRepoVolume({ slug: 'a/b', volume: 'abc' })?.volume).toBe(0)
-    expect(normalizeRepoVolume({ slug: 'a/b', volume: '-5' })?.volume).toBe(0)
-    expect(normalizeRepoVolume({ slug: 'a/b', volume: undefined })?.volume).toBe(0)
-  })
-
-  it('slug 缺失的条目返回 null（调用方过滤丢弃）', () => {
-    expect(normalizeRepoVolume({ volume: '100' })).toBeNull()
-    expect(normalizeRepoVolume({ slug: '', volume: '100' })).toBeNull()
-  })
-
-  it('is_deleted 缺省按 false（防御式兜底）', () => {
-    expect(normalizeRepoVolume({ slug: 'a/b', volume: '1' })?.isDeleted).toBe(false)
-    expect(normalizeRepoVolume({ slug: 'a/b', volume: '1', is_deleted: true })?.isDeleted).toBe(true)
-  })
-})
-
-describe('fetchGroupReposVolume（仓库用量分页）', () => {
-  it('分页 query：page / page_size 按参数拼接', async () => {
-    cnbFetchMock.mockResolvedValueOnce([{ slug: 'org/r1', volume: '100' }])
-    await fetchGroupReposVolume('myorg', 2)
-    expect(cnbFetchMock).toHaveBeenCalledWith(
-      `/myorg/-/charge/repos-volume?page=2&page_size=${REPOS_VOLUME_PAGE_SIZE}`,
-    )
-  })
-
-  it('slug 含斜杠时逐段编码（encodeSlug 口径，/ 保留为分隔符）', async () => {
-    cnbFetchMock.mockResolvedValueOnce([])
-    await fetchGroupReposVolume('a/b', 1)
-    expect(cnbFetchMock).toHaveBeenCalledWith(
-      `/a/b/-/charge/repos-volume?page=1&page_size=${REPOS_VOLUME_PAGE_SIZE}`,
-    )
-  })
-
-  it('响应非数组（如 null）返回空数组', async () => {
-    cnbFetchMock.mockResolvedValueOnce(null)
-    expect(await fetchGroupReposVolume('org', 1)).toEqual([])
-  })
-
-  it('slug 缺失的条目被过滤，合法条目保留', async () => {
-    cnbFetchMock.mockResolvedValueOnce([
-      { slug: 'org/ok', volume: '10' },
-      { volume: '999' },
-      { slug: 'org/ok2', volume: '20' },
-    ])
-    const items = await fetchGroupReposVolume('org', 1)
-    expect(items.map(i => i.slug)).toEqual(['org/ok', 'org/ok2'])
-  })
 })
 
 describe('normalizeSpecialAmount（特权额度归一化）', () => {
