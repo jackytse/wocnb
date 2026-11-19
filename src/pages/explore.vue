@@ -88,11 +88,16 @@ onBeforeUnmount(() => window.removeEventListener('keydown', onGlobalKeydown))
       </div>
 
       <!-- 公共仓库搜索弹窗（300ms 防抖 / topN / 无分页，组件逻辑不变）；
-           限宽 2xl：结果列表自身限高内滚，弹窗不会被撑满全屏 -->
+           限宽 2xl，结果列表自身内滚，弹窗不会被撑满全屏。
+           单滚动条约定：Nuxt UI Modal 默认 body 是 overflow-y-auto（滚动条
+           ①），结果列表又自带 max-h 内滚（滚动条 ②）→ 同屏出现两根滚动条
+           （用户实测反馈）。改为 body 不滚动（flex + overflow-hidden）、
+           卡片纵向撑满 body，列表用 flex-1 min-h-0 自适应"弹窗剩余高度"
+           内滚 —— 全弹窗只剩列表这一根滚动条，且高度跟随窗口而不是写死 -->
       <UModal
         v-model:open="searchOpen"
         :title="t('explore.search.title')"
-        :ui="{ content: 'max-w-2xl' }"
+        :ui="{ content: 'max-w-2xl', body: 'flex overflow-hidden' }"
       >
         <template #body>
           <ExploreRepoSearch :initial-key="initialQuery" />

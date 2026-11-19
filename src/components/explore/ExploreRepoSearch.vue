@@ -101,7 +101,10 @@ function openRepo(path: string) {
 </script>
 
 <template>
-  <UCard :ui="{ body: 'flex flex-col gap-3' }">
+  <!-- 卡片纵向撑满弹窗 body（explore.vue 的 UModal body 已改为 flex 不滚动）：
+     根节点 flex flex-col + min-h-0 允许整体收缩，body 槽 flex-1 min-h-0
+     接管"弹窗剩余高度"，让结果列表成为唯一的滚动容器（单滚动条约定） -->
+<UCard class="w-full flex flex-col min-h-0" :ui="{ body: 'flex flex-col gap-3 flex-1 min-h-0' }">
     <!-- 头部行：标题与 topN 同行（标题左、条数右），输入框独占下一行全宽
          —— 原先三行纵排让卡片显得松散，也让榜单在窄屏被挤得更靠下 -->
     <div class="flex items-center justify-between gap-2 flex-wrap">
@@ -150,11 +153,12 @@ function openRepo(path: string) {
       :empty-text="emptyText"
     />
     <!-- 结果列表（无分页 —— API 不支持，验收 2）。
-         限高内滚：topN=100 时结果最长，不设上限会把整个页面撑出去
-         （滚动条模拟悬浮化后，max-h + overflow-y-auto 观感与 macOS 一致） -->
+         内滚：以前写死 max-h-[28rem]，与 UModal body 自带的 overflow-y-auto
+         叠出两根滚动条；现在改 flex-1 min-h-0 自适应"卡片剩余高度"
+         （高度跟随弹窗/窗口），全弹窗只剩这一根滚动条 -->
     <div
       v-else
-      class="flex flex-col gap-2 max-h-[28rem] overflow-y-auto -mr-1 pr-1"
+      class="flex flex-col gap-2 flex-1 min-h-0 overflow-y-auto -mr-1 pr-1"
     >
       <button
         v-for="item in results"
