@@ -29,7 +29,7 @@ $timeoutSec = 900
 $intervalSec = 10
 $deadline = (Get-Date).AddSeconds($timeoutSec)
 
-Write-Output "[wait-gate] waiting for gate pipeline '$TargetPipeline' (build ${env:CNB_BUILD_ID}, max ${timeoutSec}s)"
+Write-Output "[wait-gate] waiting for gate pipeline '${TargetPipeline}' (build ${env:CNB_BUILD_ID}, max ${timeoutSec}s)"
 
 while ($true) {
     try {
@@ -39,7 +39,8 @@ while ($true) {
         # pipelinesStatus 以 pipelineId 为 key，按 name 匹配目标流水线
         #（不依赖 -001 序号硬编码，数组顺序调整也不失效）
         $status = ''
-        $ps = $resp.data.pipelinesStatus
+        $body = if ($resp.data) { $resp.data } else { $resp }
+        $ps = $body.pipelinesStatus
         if ($ps) {
             foreach ($prop in $ps.PSObject.Properties) {
                 if ($prop.Value.name -eq $TargetPipeline) {
@@ -50,17 +51,17 @@ while ($true) {
         }
         switch ($status) {
             'success' {
-                Write-Output "[wait-gate] gate passed ($TargetPipeline: success), continue build"
+                Write-Output "[wait-gate] gate passed (${TargetPipeline}: success), continue build"
                 exit 0
             }
-            'error' { Write-Output "[wait-gate] gate FAILED ($TargetPipeline: error), abort this pipeline"; exit 1 }
-            'fail' { Write-Output "[wait-gate] gate FAILED ($TargetPipeline: fail), abort this pipeline"; exit 1 }
-            'failure' { Write-Output "[wait-gate] gate FAILED ($TargetPipeline: failure), abort this pipeline"; exit 1 }
-            'cancel' { Write-Output "[wait-gate] gate canceled ($TargetPipeline), abort this pipeline"; exit 1 }
-            'canceled' { Write-Output "[wait-gate] gate canceled ($TargetPipeline), abort this pipeline"; exit 1 }
-            'skipped' { Write-Output "[wait-gate] gate skipped ($TargetPipeline), abort this pipeline"; exit 1 }
-            '' { Write-Output "[wait-gate] $TargetPipeline status not reported yet, retry in ${intervalSec}s" }
-            default { Write-Output "[wait-gate] $TargetPipeline: $status (running), recheck in ${intervalSec}s" }
+            'error' { Write-Output "[wait-gate] gate FAILED (${TargetPipeline}: error), abort this pipeline"; exit 1 }
+            'fail' { Write-Output "[wait-gate] gate FAILED (${TargetPipeline}: fail), abort this pipeline"; exit 1 }
+            'failure' { Write-Output "[wait-gate] gate FAILED (${TargetPipeline}: failure), abort this pipeline"; exit 1 }
+            'cancel' { Write-Output "[wait-gate] gate canceled (${TargetPipeline}), abort this pipeline"; exit 1 }
+            'canceled' { Write-Output "[wait-gate] gate canceled (${TargetPipeline}), abort this pipeline"; exit 1 }
+            'skipped' { Write-Output "[wait-gate] gate skipped (${TargetPipeline}), abort this pipeline"; exit 1 }
+            '' { Write-Output "[wait-gate] ${TargetPipeline} status not reported yet, retry in ${intervalSec}s" }
+            default { Write-Output "[wait-gate] ${TargetPipeline}: $status (running), recheck in ${intervalSec}s" }
         }
     }
     catch {
@@ -68,7 +69,7 @@ while ($true) {
         Write-Output "[wait-gate] API query failed, will retry: $($_.Exception.Message)"
     }
     if ((Get-Date) -ge $deadline) {
-        Write-Output "[wait-gate] timeout (${timeoutSec}s) waiting for $TargetPipeline, abort this pipeline"
+        Write-Output "[wait-gate] timeout (${timeoutSec}s) waiting for ${TargetPipeline}, abort this pipeline"
         exit 1
     }
     Start-Sleep -Seconds $intervalSec
