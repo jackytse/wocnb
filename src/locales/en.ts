@@ -137,8 +137,7 @@ export default {
   },
   notifications: {
     title: 'Notifications',
-    monthlyDesc: '{name}\'s activity this month on CNB',
-    defaultDesc: 'CNB activity',
+    subtitle: 'Build results and app notices',
     loadFailedTitle: 'Failed to load activities',
     loadFailedDesc: 'This may be a network issue, please retry',
     emptyTitle: 'No activity this month',

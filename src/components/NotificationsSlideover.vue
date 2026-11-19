@@ -8,24 +8,24 @@
  * 1. **构建结果**：本应用自己的构建通知（useCnbBuildWatch 轮询产出）。
  *    CNB 没有推送通道，构建状态是本客户端轮询 + 快照比对得到的；
  *    条目点击跳转应用内仓库构建详情（/repos/<path>?tab=builds&sn=xxx）。
- * 2. **动态**：CNB Open API GET /users/{username}/activities?date=yyyyMM
- *    （用户动态，按类型分类：提交/合并请求/议题/代码评审/建仓/加组织）。
+ * 2. **应用通知**：更新检测等应用级事件（useAppNotices），点击直达
+ *    「设置 · 关于」页。
  *
  * 重要说明：CNB 目前没有独立的通知 API（OpenAPI 无 notification 端点，
- * CNB 网页端的通知拉取本身也是返回空数组的桩实现），因此"动态"分区以
- * "当前登录用户的本月动态"作为内容展示；构建通知则完全由本客户端生成。
+ * CNB 网页端的通知拉取本身也是返回空数组的桩实现），构建通知完全由
+ * 本客户端生成。曾经的"动态"分区（CNB 用户动态）已按用户要求移除 ——
+ * 用户动态仍在首页展示（HomeActivityList + fetchCnbActivities）。
  *
- * 加载时机：动态在面板打开时拉取（避免首页加载就发请求）；
- * 构建通知是轮询结果，常驻内存，打开面板时只做"标记已读"（清铃铛徽标）。
+ * 布局（2026-11-19 重设计）：分区标题 = 色底图标 + 标题 + 计数徽标；
+ * 条目 = 卡片式（左侧状态色圆形图标容器 + 内容 + 右上相对时间），
+ * 替代旧版"纯文本行 + 徽标"的松散排版；空态居中呈现。
+ *
+ * 加载时机：两个分区的数据都常驻内存（轮询/事件产物），打开面板时
+ * 只做"标记已读"（清铃铛徽标），无网络请求。
  */
-import { computed, ref, watch } from 'vue'
+import { computed, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { useRouter } from 'vue-router'
-import {
-  fetchCnbActivities,
-  cnbUser,
-  type CnbActivityItem,
-} from '../composables/useCnbAuth'
 import {
   buildNoticeFeed,
   markBuildNoticesRead,
@@ -43,63 +43,28 @@ const { isNotificationsSlideoverOpen } = useDashboard()
 const { t } = useI18n()
 const router = useRouter()
 
-/** 动态条目列表 */
-const activities = ref<CnbActivityItem[]>([])
-/** 加载中状态（骨架屏） */
-const loading = ref(false)
-/** 加载失败标记（显示重试入口） */
-const loadError = ref(false)
-
-/** 当前月份（yyyyMM，CNB activities 接口的 date 参数格式） */
-function currentMonth(): string {
-  const now = new Date()
-  return `${now.getFullYear()}${String(now.getMonth() + 1).padStart(2, '0')}`
-}
-
-/** 拉取本月动态（仅登录后执行） */
-async function loadActivities() {
-  const username = cnbUser.value?.username
-  if (!username) {
-    return
-  }
-  loading.value = true
-  loadError.value = false
-  try {
-    activities.value = await fetchCnbActivities(username, currentMonth())
-  }
-  catch {
-    activities.value = []
-    loadError.value = true
-  }
-  finally {
-    loading.value = false
-  }
-}
-
-// 面板打开时拉取最新动态（首次打开与每次重新打开都刷新），
-// 同时清掉铃铛上的未读数（构建通知 + 应用通知两类都已展示给用户）
+// 面板打开时清掉铃铛上的未读数（构建通知 + 应用通知两类都已展示给用户）
 watch(isNotificationsSlideoverOpen, (open) => {
   if (open) {
     markBuildNoticesRead()
     markAppNoticesRead()
-    void loadActivities()
   }
 })
 
 /**
- * 构建状态徽标配色。
- * 遵循中文语境直觉：成功=绿色、失败=红色、取消=灰色、状态未知=中性。
+ * 构建状态 → 图标配色与图元。
+ * 遵循中文语境直觉：成功=绿色对勾、失败=红色叉、取消/未知=灰色横线。
  * （注意不要反过来：把失败标绿是这类通知最典型的事故）
  */
-function statusColor(status: string): 'success' | 'error' | 'neutral' {
+function statusIcon(status: string): { color: 'success' | 'error' | 'neutral', icon: string } {
   switch (status) {
     case 'success':
-      return 'success'
+      return { color: 'success', icon: 'i-lucide-check' }
     case 'error':
-      return 'error'
+      return { color: 'error', icon: 'i-lucide-x' }
     default:
       // cancel 与 ''（状态未知）都用中性色
-      return 'neutral'
+      return { color: 'neutral', icon: 'i-lucide-minus' }
   }
 }
 
@@ -167,46 +132,91 @@ function openAppNotice() {
   <USlideover
     v-model:open="isNotificationsSlideoverOpen"
     :title="t('notifications.title')"
-    :description="cnbUser ? t('notifications.monthlyDesc', { name: cnbUser.nickname }) : t('notifications.defaultDesc')"
+    :description="t('notifications.subtitle')"
   >
     <template #body>
       <div class="flex flex-col gap-6">
-        <!-- —— 构建结果分区（本客户端轮询产出的通知）—— -->
-        <section class="flex flex-col gap-2">
-          <h3 class="text-sm font-semibold text-highlighted">
-            {{ t('buildWatch.panel.sectionTitle') }}
-          </h3>
+        <!-- ==================================================================
+             分区 ①：构建结果（本客户端轮询产出的通知）
+             布局：分区头（色底图标 + 标题 + 计数徽标）→ 卡片化条目列表 /
+             居中空态。条目左侧圆形图标容器按构建结果着色，一眼区分成败。
+             ================================================================== -->
+        <section class="flex flex-col gap-2.5">
+          <!-- 分区头 -->
+          <div class="flex items-center gap-2">
+            <span class="flex size-6 shrink-0 items-center justify-center rounded-md bg-primary/10">
+              <UIcon name="i-lucide-hammer" class="size-3.5 text-primary" />
+            </span>
+            <h3 class="text-sm font-semibold text-highlighted">
+              {{ t('buildWatch.panel.sectionTitle') }}
+            </h3>
+            <UBadge
+              :label="String(notices.length)"
+              size="sm"
+              variant="subtle"
+              :color="notices.length > 0 ? 'primary' : 'neutral'"
+              class="ms-auto"
+            />
+          </div>
 
-          <p v-if="notices.length === 0" class="text-sm text-muted">
-            {{ t('buildWatch.panel.empty') }}
-          </p>
+          <!-- 空态：居中弱化呈现，不打断分区节奏 -->
+          <div
+            v-if="notices.length === 0"
+            class="flex flex-col items-center gap-1.5 rounded-lg border border-dashed border-default py-6"
+          >
+            <UIcon name="i-lucide-bell-off" class="size-5 text-dimmed" />
+            <p class="text-xs text-muted">
+              {{ t('buildWatch.panel.empty') }}
+            </p>
+          </div>
 
-          <ul v-else class="flex flex-col gap-1">
+          <!-- 条目列表：卡片式，状态色图标容器 + 内容 + 右上时间 -->
+          <ul v-else class="flex flex-col gap-2">
             <li v-for="notice in notices" :key="notice.id">
               <button
                 type="button"
-                class="flex w-full items-start gap-3 rounded-md p-2 text-left hover:bg-elevated/60"
+                class="group flex w-full items-start gap-3 rounded-lg border border-default bg-elevated/40 p-3 text-left transition-colors hover:bg-elevated hover:ring hover:ring-default"
                 @click="openBuildNotice(notice)"
               >
-                <UBadge
-                  :color="statusColor(notice.status)"
-                  variant="subtle"
-                  size="sm"
-                  :label="statusLabel(notice.status)"
-                  class="shrink-0"
-                />
-                <div class="min-w-0 flex-1">
-                  <p class="text-sm font-medium text-highlighted truncate">
-                    {{ notice.repoName }}
-                  </p>
-                  <p class="text-xs text-muted truncate">
-                    <span v-if="notice.sourceRef">{{ notice.sourceRef }} · </span>{{ notice.commitTitle }}
-                  </p>
-                  <p class="text-xs text-dimmed">
-                    {{ timeLabel(notice.time) }}
-                    <span v-if="notice.leftover">· {{ t('buildWatch.panel.leftover') }}</span>
-                  </p>
-                </div>
+                <!-- 状态图标容器：success=绿勾 / error=红叉 / 其他=灰横线 -->
+                <span
+                  class="mt-0.5 flex size-7 shrink-0 items-center justify-center rounded-full"
+                  :class="{
+                    'bg-success/15 text-success': statusIcon(notice.status).color === 'success',
+                    'bg-error/15 text-error': statusIcon(notice.status).color === 'error',
+                    'bg-neutral/15 text-muted': statusIcon(notice.status).color === 'neutral',
+                  }"
+                >
+                  <UIcon :name="statusIcon(notice.status).icon" class="size-4" />
+                </span>
+
+                <span class="min-w-0 flex-1 flex flex-col gap-0.5">
+                  <span class="flex items-center gap-2 min-w-0">
+                    <!-- 状态词 + 仓库名同行；时间推到行尾 -->
+                    <span
+                      class="text-xs font-medium shrink-0"
+                      :class="{
+                        'text-success': statusIcon(notice.status).color === 'success',
+                        'text-error': statusIcon(notice.status).color === 'error',
+                        'text-muted': statusIcon(notice.status).color === 'neutral',
+                      }"
+                    >{{ statusLabel(notice.status) }}</span>
+                    <span class="text-sm font-medium text-highlighted truncate min-w-0">
+                      {{ notice.repoName }}
+                    </span>
+                    <span class="text-xs text-dimmed ms-auto shrink-0">
+                      {{ timeLabel(notice.time) }}
+                    </span>
+                  </span>
+                  <span class="text-xs text-muted truncate">
+                    <span v-if="notice.sourceRef" class="font-mono">{{ notice.sourceRef }}</span>
+                    <span v-if="notice.sourceRef"> · </span>{{ notice.commitTitle }}
+                  </span>
+                  <span
+                    v-if="notice.leftover"
+                    class="text-xs text-dimmed"
+                  >{{ t('buildWatch.panel.leftover') }}</span>
+                </span>
               </button>
             </li>
           </ul>
@@ -214,60 +224,66 @@ function openAppNotice() {
 
         <USeparator />
 
-        <!-- —— 应用通知分区（更新检测等应用级事件）—— -->
-        <section class="flex flex-col gap-2">
-          <h3 class="text-sm font-semibold text-highlighted">
-            {{ t('notifications.updatesSection') }}
-          </h3>
+        <!-- ==================================================================
+             分区 ②：应用通知（更新检测等应用级事件）
+             布局与分区 ① 完全同构（info 色系），保持两分区视觉一致。
+             ================================================================== -->
+        <section class="flex flex-col gap-2.5">
+          <!-- 分区头 -->
+          <div class="flex items-center gap-2">
+            <span class="flex size-6 shrink-0 items-center justify-center rounded-md bg-info/10">
+              <UIcon name="i-lucide-rocket" class="size-3.5 text-info" />
+            </span>
+            <h3 class="text-sm font-semibold text-highlighted">
+              {{ t('notifications.updatesSection') }}
+            </h3>
+            <UBadge
+              :label="String(appNotices.length)"
+              size="sm"
+              variant="subtle"
+              :color="appNotices.length > 0 ? 'info' : 'neutral'"
+              class="ms-auto"
+            />
+          </div>
 
-          <p v-if="appNotices.length === 0" class="text-sm text-muted">
-            {{ t('notifications.updatesEmpty') }}
-          </p>
+          <!-- 空态：居中弱化呈现 -->
+          <div
+            v-if="appNotices.length === 0"
+            class="flex flex-col items-center gap-1.5 rounded-lg border border-dashed border-default py-6"
+          >
+            <UIcon name="i-lucide-inbox" class="size-5 text-dimmed" />
+            <p class="text-xs text-muted">
+              {{ t('notifications.updatesEmpty') }}
+            </p>
+          </div>
 
-          <ul v-else class="flex flex-col gap-1">
+          <!-- 条目列表：与构建通知同构（info 色系） -->
+          <ul v-else class="flex flex-col gap-2">
             <li v-for="notice in appNotices" :key="notice.id">
               <button
                 type="button"
-                class="flex w-full items-start gap-3 rounded-md p-2 text-left hover:bg-elevated/60"
+                class="group flex w-full items-start gap-3 rounded-lg border border-default bg-elevated/40 p-3 text-left transition-colors hover:bg-elevated hover:ring hover:ring-default"
                 @click="openAppNotice()"
               >
-                <UBadge
-                  color="info"
-                  variant="subtle"
-                  size="sm"
-                  :label="t('notifications.updateBadge')"
-                  class="shrink-0"
-                />
-                <div class="min-w-0 flex-1">
-                  <p class="text-sm font-medium text-highlighted truncate">
-                    {{ notice.title }}
-                  </p>
-                  <p class="text-xs text-muted truncate">
-                    {{ notice.body }}
-                  </p>
-                  <p class="text-xs text-dimmed">
-                    {{ timeLabel(notice.time) }}
-                  </p>
-                </div>
+                <!-- 应用通知统一 info 色圆形图标容器 -->
+                <span class="mt-0.5 flex size-7 shrink-0 items-center justify-center rounded-full bg-info/15 text-info">
+                  <UIcon name="i-lucide-arrow-up-circle" class="size-4" />
+                </span>
+
+                <span class="min-w-0 flex-1 flex flex-col gap-0.5">
+                  <span class="flex items-center gap-2 min-w-0">
+                    <span class="text-sm font-medium text-highlighted truncate min-w-0">
+                      {{ notice.title }}
+                    </span>
+                    <span class="text-xs text-dimmed ms-auto shrink-0">
+                      {{ timeLabel(notice.time) }}
+                    </span>
+                  </span>
+                  <span class="text-xs text-muted line-clamp-2">{{ notice.body }}</span>
+                </span>
               </button>
             </li>
           </ul>
-        </section>
-
-        <USeparator />
-
-        <!-- —— 动态分区（CNB 用户动态）—— -->
-        <section class="flex flex-col gap-2">
-          <h3 class="text-sm font-semibold text-highlighted">
-            {{ t('home.tabs.activities') }}
-          </h3>
-          <!-- 列表展示/空态/失败重试/点击跳转均由共享组件处理 -->
-          <HomeActivityList
-            :items="activities"
-            :loading="loading"
-            :load-error="loadError"
-            @retry="loadActivities"
-          />
         </section>
       </div>
     </template>

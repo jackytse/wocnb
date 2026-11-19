@@ -134,8 +134,7 @@ export default {
   },
   notifications: {
     title: '通知',
-    monthlyDesc: '{name} 在 CNB 的本月动态',
-    defaultDesc: 'CNB 动态',
+    subtitle: '构建结果与应用通知',
     loadFailedTitle: '动态加载失败',
     loadFailedDesc: '可能是网络异常，请重试',
     emptyTitle: '本月暂无动态',

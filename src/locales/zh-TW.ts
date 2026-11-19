@@ -132,8 +132,7 @@ export default {
   },
   notifications: {
     title: '通知',
-    monthlyDesc: '{name} 在 CNB 的本月動態',
-    defaultDesc: 'CNB 動態',
+    subtitle: '建置結果與應用通知',
     loadFailedTitle: '動態載入失敗',
     loadFailedDesc: '可能是網路異常，請重試',
     emptyTitle: '本月暫無動態',
