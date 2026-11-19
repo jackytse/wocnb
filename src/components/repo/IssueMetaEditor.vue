@@ -29,6 +29,7 @@ import { listRepoLabels } from '../../composables/useCnbRepoLabels'
 // 当前登录用户（处理人候选之一；未登录时由父级隐藏本入口）
 import { cnbUser } from '../../composables/useCnbAuth'
 import StateAlert from './StateAlert.vue'
+import { useAppToast } from '../../composables/useAppToast'
 
 const props = defineProps<{
   /** 仓库完整路径（org/repo，路径编码由数据层负责） */
@@ -50,7 +51,7 @@ const emit = defineEmits<{
 
 // i18n 文案与全局 toast（成功提示 / 失败透出服务端原因）
 const { t } = useI18n()
-const toast = useToast()
+const toast = useAppToast()
 
 /** 标签字典（仓库全部可选标签，与 Issue 列表标签管理共用数据源） */
 const labelOptions = ref<RepoLabel[]>([])

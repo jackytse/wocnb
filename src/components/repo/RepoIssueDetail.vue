@@ -25,6 +25,7 @@ import CommentSection from './CommentSection.vue'
 import IssueTimeline from './IssueTimeline.vue'
 import IssueMetaEditor from './IssueMetaEditor.vue'
 import IssuePropertiesPanel from './IssuePropertiesPanel.vue'
+import { useAppToast } from '../../composables/useAppToast'
 
 const props = defineProps<{
   repoPath: string
@@ -37,7 +38,7 @@ const props = defineProps<{
 const canManage = computed(() => !!props.detail?.canManage)
 
 const { t } = useI18n()
-const toast = useToast()
+const toast = useAppToast()
 const { backToList } = useRepoRoute()
 
 // ---------------------------------------------------------------------------
@@ -264,7 +265,12 @@ async function doChangeState() {
 
       <!-- 评论区（局部自管加载与发表） -->
       <div class="mt-6">
-        <CommentSection :repo-path="repoPath" :number="number" kind="issues" :can-manage="canManage" />
+        <CommentSection
+          :repo-path="repoPath"
+          :number="number"
+          kind="issues"
+          :can-manage="canManage"
+        />
       </div>
     </template>
 

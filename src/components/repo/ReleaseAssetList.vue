@@ -19,6 +19,7 @@ import { releaseAssetApiUrl, type ReleaseAsset, type ReleaseItem } from '../../c
 import { cnbToken } from '../../composables/useCnbAuth'
 import { downloadArchive } from '../../utils/tauriDownload'
 import { formatBytes } from '../../utils'
+import { useAppToast } from '../../composables/useAppToast'
 
 const props = defineProps<{
   /** 所属 Release（tagName 用于拼装下载地址兜底） */
@@ -27,7 +28,7 @@ const props = defineProps<{
 }>()
 
 const { t } = useI18n()
-const toast = useToast()
+const toast = useAppToast()
 
 /** 附件列表（空时不渲染容器） */
 const assets = computed(() => props.release.assets)

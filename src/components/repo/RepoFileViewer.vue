@@ -20,6 +20,7 @@ import {
 } from '../../composables/useCnbRepo'
 import { highlightCode, resolveLang, escapeHtml } from '../../composables/useHighlight'
 import { formatBytes } from '../../utils'
+import { useAppToast } from '../../composables/useAppToast'
 
 const props = defineProps<{
   repoPath: string
@@ -107,7 +108,7 @@ watch(() => props.entry, value => void render(value), { immediate: true })
 // 复制 / 外跳
 // ---------------------------------------------------------------------------
 
-const toast = useToast()
+const toast = useAppToast()
 const copied = ref(false)
 
 /** 复制全文（Webview 支持 clipboard API；失败降级提示） */

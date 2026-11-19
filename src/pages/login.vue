@@ -17,12 +17,13 @@ import { useI18n } from 'vue-i18n'
 import { openUrl } from '@tauri-apps/plugin-opener'
 import { loginWithPat, CnbApiError, CNB_TOKEN_GUIDE_URL, CNB_TOKEN_MANAGE_URL } from '../composables/useCnbAuth'
 import { useCliDeviceLogin, extractUserCode, markPatLogin } from '../composables/useCnbCliAuth'
+import { useAppToast } from '../composables/useAppToast'
 
 const route = useRoute()
 const router = useRouter()
 // 登录页文案随语言切换（错误提示/按钮/引导区等）
 const { t } = useI18n()
-const toast = useToast()
+const toast = useAppToast()
 
 /** 当前展示的登录方式：oauth 为默认首选（401 跳转回登录页同样落在这里） */
 const view = ref<'oauth' | 'pat'>('oauth')

@@ -37,9 +37,10 @@ import { canManageRole, fetchCnbGroupRepos, selectedGroup } from '../../composab
 // 通用弹窗：删除确认（输入用户名二次确认）与状态降级
 import ConfirmDialog from '../common/ConfirmDialog.vue'
 import StateAlert from '../repo/StateAlert.vue'
+import { useAppToast } from '../../composables/useAppToast'
 
 const { t } = useI18n()
-const toast = useToast() // 成功/失败提示（写操作反馈）
+const toast = useAppToast() // 成功/失败提示（写操作反馈）
 
 /** 写入口权限预判：组织 Master/Owner 通常同时管仓库；真实 403 作兜底 */
 const canManage = computed(() => canManageRole(selectedGroup.value?.access_role))

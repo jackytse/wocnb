@@ -26,6 +26,7 @@ import { cnbUser } from '../../composables/useCnbAuth'
 // 用户内容统一走 DOMPurify 消毒渲染（安全红线）
 import MarkdownView from './MarkdownView.vue'
 import { formatDateTime } from '../../utils'
+import { useAppToast } from '../../composables/useAppToast'
 
 const props = defineProps<{
   /** 仓库完整路径（org/repo） */
@@ -44,7 +45,7 @@ const props = defineProps<{
 
 const { t } = useI18n()
 // useToast 为 Nuxt UI 全局自动导入（见 auto-imports.d.ts）
-const toast = useToast()
+const toast = useAppToast()
 
 /** 评论列表与加载状态 */
 const comments = ref<RepoComment[]>([]) // 归一化后的评论列表

@@ -30,6 +30,7 @@ import {
 } from '../../composables/useCnbAnnotations'
 // 通用删除二次确认（不可逆操作）
 import ConfirmDialog from '../common/ConfirmDialog.vue'
+import { useAppToast } from '../../composables/useAppToast'
 
 const props = defineProps<{
   /** 完整仓库路径 */
@@ -43,7 +44,7 @@ const props = defineProps<{
 }>()
 
 const { t } = useI18n()
-const toast = useToast() // 保存/删除成功与失败提示
+const toast = useAppToast() // 保存/删除成功与失败提示
 
 /** 是否展开（展开即触发首次加载） */
 const expanded = ref(false)

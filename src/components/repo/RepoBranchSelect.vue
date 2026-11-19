@@ -32,6 +32,7 @@ import {
 import { useRepoRoute } from '../../composables/useRepoRoute'
 import CreateBranchModal from './CreateBranchModal.vue'
 import ConfirmDialog from '../common/ConfirmDialog.vue'
+import { useAppToast } from '../../composables/useAppToast'
 
 const props = defineProps<{
   /** 仓库完整路径 */
@@ -57,7 +58,7 @@ const emit = defineEmits<{
 }>()
 
 const { t } = useI18n()
-const toast = useToast()
+const toast = useAppToast()
 const { switchRef } = useRepoRoute()
 
 const open = vueRef(false)

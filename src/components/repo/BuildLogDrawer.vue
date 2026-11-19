@@ -15,6 +15,7 @@ import { useI18n } from 'vue-i18n'
 import { openUrl } from '@tauri-apps/plugin-opener'
 import { deleteBuildLogs, fetchStageLog, type StageLog } from '../../composables/useCnbRepo'
 import ConfirmDialog from '../common/ConfirmDialog.vue'
+import { useAppToast } from '../../composables/useAppToast'
 
 const props = defineProps<{
   open: boolean
@@ -39,7 +40,7 @@ const emit = defineEmits<{
 
 const { t } = useI18n()
 // useToast 为 Nuxt UI 全局自动导入
-const toast = useToast()
+const toast = useAppToast()
 
 /** 日志数据与加载状态 */
 const log = ref<StageLog | null>(null)
@@ -191,10 +192,10 @@ async function doDeleteLogs() {
         <div class="ms-auto flex items-center gap-1.5 shrink-0">
           <!-- 删除日志：高危写操作（输入 sn 确认）；归档仓库禁用 -->
           <UButton
+            v-if="canManage"
             size="xs"
             color="error"
             variant="ghost"
-            v-if="canManage"
             icon="i-lucide-trash-2"
             :label="t('builds.deleteLogs')"
             :disabled="archived"

@@ -27,6 +27,7 @@ import type { PackageType } from '../../composables/useRepoRoute'
 import { formatBytes, formatDateTime } from '../../utils'
 import StateAlert from './StateAlert.vue'
 import ConfirmDialog from '../common/ConfirmDialog.vue'
+import { useAppToast } from '../../composables/useAppToast'
 
 const props = defineProps<{
   repoPath: string
@@ -48,7 +49,7 @@ const emit = defineEmits<{
 }>()
 
 const { t } = useI18n()
-const toast = useToast()
+const toast = useAppToast()
 
 // ---------------------------------------------------------------------------
 // 详情加载

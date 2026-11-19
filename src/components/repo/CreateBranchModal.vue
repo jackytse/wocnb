@@ -13,6 +13,7 @@
 import { computed, reactive, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { createBranch } from '../../composables/useCnbGitRefs'
+import { useAppToast } from '../../composables/useAppToast'
 
 const props = defineProps<{
   /** 弹窗开关（父级 v-model:open 管理） */
@@ -33,7 +34,7 @@ const emit = defineEmits<{
 
 // i18n 文案与全局 toast（成功提示 / 失败透出服务端原因）
 const { t } = useI18n()
-const toast = useToast()
+const toast = useAppToast()
 
 /** 表单状态（每次打开重置：name 清空，startPoint 回落当前 ref） */
 const form = reactive({ name: '', startPoint: '' })

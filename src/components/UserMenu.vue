@@ -26,6 +26,7 @@ import { cachedImageSrc, ensureCnbImage } from '../composables/useCnbImages'
 // 弹窗内一键更新 → 进度展示 → 完成自动重启，全部复用 useAppUpdate 的
 // 安装状态机（installStatus / installProgress / relaunchApp）。
 import { useAppUpdate, APP_RELEASES_PAGE_URL } from '../composables/useAppUpdate'
+import { useAppToast } from '../composables/useAppToast'
 
 defineProps<{
   collapsed?: boolean
@@ -33,7 +34,7 @@ defineProps<{
 
 const router = useRouter()
 const colorMode = useColorMode()
-const toast = useToast()
+const toast = useAppToast()
 
 /**
  * 手动检查更新的进行中标记：

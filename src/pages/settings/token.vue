@@ -17,6 +17,7 @@ import { useRouter } from 'vue-router'
 import { useI18n } from 'vue-i18n'
 import { openUrl } from '@tauri-apps/plugin-opener'
 import { cnbToken, logout, CNB_TOKEN_MANAGE_URL } from '../../composables/useCnbAuth'
+import { useAppToast } from '../../composables/useAppToast'
 import {
   cnbAuthMethod,
   cnbTokenExpiresAt,
@@ -25,7 +26,7 @@ import {
 
 const router = useRouter()
 const { t } = useI18n()
-const toast = useToast()
+const toast = useAppToast()
 
 /** 当前登录方式标识（OAuth 设备授权 / PAT 访问令牌） */
 const authMethodLabel = computed(() =>

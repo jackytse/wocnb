@@ -34,6 +34,7 @@ import { formatBytes, formatRelativeTime } from '../../utils'
 import StateAlert from './StateAlert.vue'
 import PackageTagPanel from './PackageTagPanel.vue'
 import ConfirmDialog from '../common/ConfirmDialog.vue'
+import { useAppToast } from '../../composables/useAppToast'
 
 const props = defineProps<{
   repoPath: string
@@ -42,7 +43,7 @@ const props = defineProps<{
 }>()
 
 const { t } = useI18n()
-const toast = useToast()
+const toast = useAppToast()
 const { ptype, pname, ptag, openPackage, openPackageTag, closePackageTag, closePackage, setPtype } = useRepoRoute()
 
 /** 三栏断点（≥1100px 三栏并排；否则主从两级） */

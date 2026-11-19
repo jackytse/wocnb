@@ -22,6 +22,7 @@
 // 数据层：属性字典（可见/隐藏）与 Issue 属性读写
 import { computed, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
+import { useAppToast } from '../../composables/useAppToast'
 // updateIssueProperties 返回 { success_count, failed_count, failed_keys }（部分失败语义）
 import {
   listIssueProperties,
@@ -41,7 +42,7 @@ const props = defineProps<{
 }>()
 
 const { t } = useI18n()
-const toast = useToast() // 分级反馈（success / warning / error 三档）
+const toast = useAppToast() // 分级反馈（success / warning / error 三档）
 
 /** 是否展开（折叠面板；展开才首次加载，避免打开详情就发请求） */
 const expanded = ref(false)

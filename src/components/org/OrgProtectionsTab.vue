@@ -42,6 +42,7 @@ import {
 import { CNB_TOKEN_MANAGE_URL } from '../../composables/useCnbAuth'
 import ConfirmDialog from '../common/ConfirmDialog.vue'
 import StateAlert from '../repo/StateAlert.vue'
+import { useAppToast } from '../../composables/useAppToast'
 
 /**
  * 两个作用域共用本组件（批次 2 · REQ-07，N4 防串数据）：
@@ -64,7 +65,7 @@ const props = defineProps<{
 
 const { t } = useI18n() // 文案（org.protections.* 与 repo.protections.* 双命名空间）
 const router = useRouter() // 子组织跳根组织用（站内路由，非外链）
-const toast = useToast() // 成功/失败提示（422 原文透出，不用兜底文案）
+const toast = useAppToast() // 成功/失败提示（422 原文透出，不用兜底文案）
 
 // ---------------------------------------------------------------------------
 // 作用域适配（adapter）：同一套 UI，按 scopeLevel 选不同数据层函数

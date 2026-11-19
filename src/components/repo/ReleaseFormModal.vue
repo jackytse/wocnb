@@ -14,6 +14,7 @@
  */
 import { computed, reactive, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
+import { useAppToast } from '../../composables/useAppToast'
 import {
   createRelease,
   updateRelease,
@@ -40,7 +41,7 @@ const emit = defineEmits<{
 }>()
 
 const { t } = useI18n()
-const toast = useToast()
+const toast = useAppToast()
 
 const isEdit = computed(() => !!props.release?.id)
 

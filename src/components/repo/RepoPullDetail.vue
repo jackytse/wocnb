@@ -59,6 +59,7 @@ import CommentSection from './CommentSection.vue'
 import MergePullModal from './MergePullModal.vue'
 import CommitStatusBadge from './CommitStatusBadge.vue'
 import PullReviewPanel from './PullReviewPanel.vue'
+import { useAppToast } from '../../composables/useAppToast'
 
 const props = defineProps<{
   repoPath: string
@@ -69,7 +70,7 @@ const props = defineProps<{
 
 const { t } = useI18n()
 const { backToList } = useRepoRoute()
-const toast = useToast()
+const toast = useAppToast()
 
 /** 是否可编辑（Master/Owner 单点预判，403 只作兜底） */
 const canManage = computed(() => !!props.detail?.canManage)
@@ -647,7 +648,12 @@ function onMerged() {
 
       <!-- 评论区（Issue/PR 共用组件；加载成功的评论由组件内刷新，这里传入服务端初始数据无必要） -->
       <div class="mt-6">
-        <CommentSection :repo-path="repoPath" :number="number" kind="pulls" :can-manage="canManage" />
+        <CommentSection
+          :repo-path="repoPath"
+          :number="number"
+          kind="pulls"
+          :can-manage="canManage"
+        />
       </div>
 
       <!-- 合并确认弹窗（P1） -->

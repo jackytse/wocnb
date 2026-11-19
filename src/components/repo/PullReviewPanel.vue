@@ -40,6 +40,7 @@ import {
 } from '../../composables/useCnbPullReviews'
 // 评审下钻键（?review= / ?rcomment=）的读写收口在 useRepoRoute（唯一定义处）
 import { useRepoRoute } from '../../composables/useRepoRoute'
+import { useAppToast } from '../../composables/useAppToast'
 
 const props = defineProps<{
   /** 仓库完整路径（org/repo；路径编码由数据层负责） */
@@ -51,7 +52,7 @@ const props = defineProps<{
 }>()
 
 const { t } = useI18n() // 文案与状态标签本地化
-const toast = useToast() // 成功/失败提示（区块级，不登出）
+const toast = useAppToast() // 成功/失败提示（区块级，不登出）
 // 展开态与评论定位的读写：组件内只调用路由层方法，禁止散写 router.push
 const repoRoute = useRepoRoute()
 

@@ -35,6 +35,7 @@ import ReleaseAssetList from './ReleaseAssetList.vue'
 import RepoBranchSelect from './RepoBranchSelect.vue'
 import AnnotationsPanel from './AnnotationsPanel.vue'
 import ConfirmDialog from '../common/ConfirmDialog.vue'
+import { useAppToast } from '../../composables/useAppToast'
 
 const props = defineProps<{
   repoPath: string
@@ -43,7 +44,7 @@ const props = defineProps<{
 }>()
 
 const { t } = useI18n()
-const toast = useToast()
+const toast = useAppToast()
 const { release, page, setPage, openRelease, backToList } = useRepoRoute()
 
 const PAGE_SIZE = 20

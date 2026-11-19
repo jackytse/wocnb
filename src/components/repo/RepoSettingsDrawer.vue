@@ -18,6 +18,7 @@ import { archiveRepo, patchRepo, unarchiveRepo } from '../../composables/useCnbR
 import { visibilityBadge, repoSiteUrl, type RepoDetail } from '../../composables/useCnbRepo'
 import ConfirmDialog from '../common/ConfirmDialog.vue'
 import OrgProtectionsTab from '../org/OrgProtectionsTab.vue'
+import { useAppToast } from '../../composables/useAppToast'
 
 const props = defineProps<{
   /** 抽屉开关（v-model:open） */
@@ -33,7 +34,7 @@ const emit = defineEmits<{
 }>()
 
 const { t } = useI18n()
-const toast = useToast()
+const toast = useAppToast()
 
 const openModel = computed({
   get: () => props.open,

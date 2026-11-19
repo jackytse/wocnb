@@ -127,7 +127,7 @@ function openRepo(path: string) {
   <!-- 卡片纵向撑满弹窗 body（explore.vue 的 UModal body 已改为 flex 不滚动）：
      根节点 flex flex-col + min-h-0 允许整体收缩，body 槽 flex-1 min-h-0
      接管"弹窗剩余高度"，让结果列表成为唯一的滚动容器（单滚动条约定） -->
-<UCard class="w-full flex flex-col min-h-0" :ui="{ body: 'flex flex-col gap-3 flex-1 min-h-0' }">
+  <UCard class="w-full flex flex-col min-h-0" :ui="{ body: 'flex flex-col gap-3 flex-1 min-h-0' }">
     <!-- 头部行：标题与 topN 同行（标题左、条数右），输入框独占下一行全宽
          —— 原先三行纵排让卡片显得松散，也让榜单在窄屏被挤得更靠下 -->
     <div class="flex items-center justify-between gap-2 flex-wrap">

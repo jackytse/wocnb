@@ -14,6 +14,7 @@ import { computed, reactive, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { createPull, type RepoPull } from '../../composables/useCnbRepo'
 import RepoBranchSelect from './RepoBranchSelect.vue'
+import { useAppToast } from '../../composables/useAppToast'
 
 const props = defineProps<{
   /** 弹窗开关（父级 v-model:open 管理） */
@@ -32,7 +33,7 @@ const emit = defineEmits<{
 
 // i18n 文案与全局 toast（成功提示 / 失败透出服务端原因）
 const { t } = useI18n()
-const toast = useToast()
+const toast = useAppToast()
 
 /** 表单状态：标题 / 源分支 head / 目标分支 base / 正文（每次打开重置） */
 const form = reactive({ title: '', head: '', base: '', body: '' })

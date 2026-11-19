@@ -31,6 +31,7 @@ import {
 import { cachedImageSrc, ensureCnbImages } from '../composables/useCnbImages'
 // 站内创建组织弹窗（POST /groups）：与组织页「新建子组织」共用同一组件
 import CreateGroupModal from './org/CreateGroupModal.vue'
+import { useAppToast } from '../composables/useAppToast'
 
 /**
  * 在系统浏览器中打开外部链接。
@@ -57,7 +58,7 @@ defineProps<{
 // 界面文案翻译（加载中/空态/失败重试/操作项均随语言切换）
 const { t } = useI18n()
 // toast：切换组织成功后的反馈（顶部居中，由 UApp 统一渲染）
-const toast = useToast()
+const toast = useAppToast()
 
 /**
  * 用户所在的组织列表 —— 读**共享状态** `cnbGroups`（useCnbAuth）。

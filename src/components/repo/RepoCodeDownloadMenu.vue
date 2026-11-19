@@ -23,6 +23,7 @@ import { openUrl } from '@tauri-apps/plugin-opener'
 import { CNB_API_BASE, cnbToken } from '../../composables/useCnbAuth'
 import { downloadArchive, isTauri } from '../../utils/tauriDownload'
 import { repoSiteUrl } from '../../composables/useCnbRepo'
+import { useAppToast } from '../../composables/useAppToast'
 
 const props = defineProps<{
   repoPath: string
@@ -33,7 +34,7 @@ const props = defineProps<{
 }>()
 
 const { t } = useI18n()
-const toast = useToast()
+const toast = useAppToast()
 
 /** 支持的归档格式（与 Rust sanitize 白名单一致） */
 const FORMATS = [

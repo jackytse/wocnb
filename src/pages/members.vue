@@ -69,10 +69,11 @@ import {
 import { formatDateTime } from '../utils'
 import StateAlert from '../components/repo/StateAlert.vue'
 import RepoMembersPanel from '../components/org/RepoMembersPanel.vue'
+import { useAppToast } from '../composables/useAppToast'
 
 const { t } = useI18n()
 // useToast 为 Nuxt UI 全局自动导入（见 auto-imports.d.ts）
-const toast = useToast()
+const toast = useAppToast()
 
 // 路由对象显式导入（本项目仅 Nuxt UI 组合式函数走自动导入）
 const route = useRoute()

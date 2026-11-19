@@ -9,6 +9,7 @@
 import { computed, reactive, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { mergePull, type RepoPull } from '../../composables/useCnbRepo'
+import { useAppToast } from '../../composables/useAppToast'
 
 const props = defineProps<{
   open: boolean
@@ -24,7 +25,7 @@ const emit = defineEmits<{
 }>()
 
 const { t } = useI18n()
-const toast = useToast()
+const toast = useAppToast()
 
 const form = reactive({
   mergeStyle: 'merge' as 'merge' | 'squash' | 'rebase',

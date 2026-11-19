@@ -16,6 +16,7 @@ import { useI18n } from 'vue-i18n'
 import { useRouter } from 'vue-router'
 import { createRepo, type CreateRepoVisibility } from '../composables/useCnbRepoManage'
 import { selectedGroup } from '../composables/useCnbAuth'
+import { useAppToast } from '../composables/useAppToast'
 
 const props = defineProps<{
   /** 弹窗开关（v-model:open） */
@@ -28,7 +29,7 @@ const emit = defineEmits<{
 
 const { t } = useI18n()
 const router = useRouter()
-const toast = useToast()
+const toast = useAppToast()
 
 const openModel = computed({
   get: () => props.open,

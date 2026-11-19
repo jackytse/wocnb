@@ -16,6 +16,7 @@
 import { computed, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { fetchRepoBranches, triggerBuild, type BranchItem } from '../../composables/useCnbRepo'
+import { useAppToast } from '../../composables/useAppToast'
 
 const props = defineProps<{
   /** 弹窗开关（v-model:open） */
@@ -32,7 +33,7 @@ const emit = defineEmits<{
 }>()
 
 const { t } = useI18n()
-const toast = useToast()
+const toast = useAppToast()
 
 const openModel = computed({
   get: () => props.open,

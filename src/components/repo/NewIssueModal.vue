@@ -11,6 +11,7 @@
 import { computed, reactive, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { createRepoIssue } from '../../composables/useCnbRepo'
+import { useAppToast } from '../../composables/useAppToast'
 
 const props = defineProps<{
   open: boolean
@@ -24,7 +25,7 @@ const emit = defineEmits<{
 }>()
 
 const { t } = useI18n()
-const toast = useToast()
+const toast = useAppToast()
 
 /**
  * 优先级「不设置」的哨兵值。

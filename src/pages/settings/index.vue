@@ -20,6 +20,7 @@ import { useI18n } from 'vue-i18n'
 import { openUrl } from '@tauri-apps/plugin-opener'
 import { cnbAvatarUrl, cnbGroupLogoUrl, cnbUser, selectedGroup } from '../../composables/useCnbAuth'
 import { CNB_TOKEN_MANAGE_URL } from '../../composables/useCnbAuth'
+import { useAppToast } from '../../composables/useAppToast'
 import {
   BUILD_NOTIFY_INTERVAL_OPTIONS,
   BUILD_NOTIFY_SCOPE_OPTIONS,
@@ -38,7 +39,7 @@ import {
 const { t } = useI18n()
 
 // useToast 为 Nuxt UI 全局自动导入（见 auto-imports.d.ts）
-const toast = useToast()
+const toast = useAppToast()
 
 /**
  * 当前登录账号展示名（昵称优先，兜底用户名）。

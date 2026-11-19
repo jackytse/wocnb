@@ -24,6 +24,7 @@ import {
 import StateAlert from './StateAlert.vue'
 // 通用删除二次确认弹窗（danger 色，confirm 事件驱动执行删除）
 import ConfirmDialog from '../common/ConfirmDialog.vue'
+import { useAppToast } from '../../composables/useAppToast'
 
 const props = defineProps<{
   /** 仓库完整路径（org/repo，路径编码由数据层负责） */
@@ -42,7 +43,7 @@ const emit = defineEmits<{
 
 // i18n 文案与全局 toast（成功提示 / 失败透出服务端原因）
 const { t } = useI18n()
-const toast = useToast()
+const toast = useAppToast()
 
 /** 弹窗开关的 v-model 代理（props.open 只读，写操作转 emit） */
 const openModel = computed({

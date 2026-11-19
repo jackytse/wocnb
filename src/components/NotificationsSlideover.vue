@@ -184,7 +184,7 @@ function openAppNotice() {
                   :class="{
                     'bg-success/15 text-success': statusIcon(notice.status).color === 'success',
                     'bg-error/15 text-error': statusIcon(notice.status).color === 'error',
-                    'bg-neutral/15 text-muted': statusIcon(notice.status).color === 'neutral',
+                    'bg-elevated text-muted': statusIcon(notice.status).color === 'neutral',
                   }"
                 >
                   <UIcon :name="statusIcon(notice.status).icon" class="size-4" />

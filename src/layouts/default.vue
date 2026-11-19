@@ -5,11 +5,12 @@ import { useRouter } from 'vue-router'
 import type { NavigationMenuItem, CommandPaletteItem } from '@nuxt/ui'
 import { useOverlayUnlockGuard } from '../composables/useOverlayUnlockGuard'
 import { maybeAutoCheckOnStartup } from '../composables/useAppUpdate'
+import { useAppToast } from '../composables/useAppToast'
 
 // 侧边栏导航文案随语言切换（computed 依赖 t 的响应式 locale）
 const { t } = useI18n()
 const router = useRouter()
-const toast = useToast()
+const toast = useAppToast()
 
 /**
  * 启动自动检查更新（延迟 4 秒，避开首屏 GroupsMenu/用量等 API 请求高峰）。

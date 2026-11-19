@@ -53,6 +53,7 @@ import {
 } from '../../composables/useCnbOrgSettings'
 import StateAlert from '../repo/StateAlert.vue'
 import ConfirmDialog from '../common/ConfirmDialog.vue'
+import { useAppToast } from '../../composables/useAppToast'
 
 const props = defineProps<{
   /** 组织路径（'org' 或 'org/sub'） */
@@ -63,7 +64,7 @@ const props = defineProps<{
 
 const { t } = useI18n()
 // useToast 为 Nuxt UI 全局自动导入（见 auto-imports.d.ts）
-const toast = useToast()
+const toast = useAppToast()
 
 /** 组织 Web 页地址（403/404 兜底外跳 + 危险区「前往 Web 端」） */
 const webUrl = computed(() => cnbGroupUrl(props.slug))

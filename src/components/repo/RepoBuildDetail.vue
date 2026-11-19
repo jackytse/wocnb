@@ -27,6 +27,7 @@ import StateAlert from './StateAlert.vue'
 import BuildLogDrawer from './BuildLogDrawer.vue'
 import AiUsagePanel from './AiUsagePanel.vue'
 import ConfirmDialog from '../common/ConfirmDialog.vue'
+import { useAppToast } from '../../composables/useAppToast'
 
 const props = defineProps<{
   repoPath: string
@@ -43,7 +44,7 @@ const props = defineProps<{
 
 const { t } = useI18n()
 const { backToList } = useRepoRoute()
-const toast = useToast()
+const toast = useAppToast()
 
 /** 在系统浏览器打开链接（非 Tauri 环境兜底 window.open；模板内不直接碰 window） */
 function openExternal(url: string) {
@@ -378,9 +379,9 @@ const aiPipelineIds = computed<string[]>(() => {
 
     <!-- 阶段日志抽屉（混合方案的内嵌路径） -->
     <BuildLogDrawer
-      :can-manage="canManage"
       v-if="activeStage"
       v-model:open="drawerOpen"
+      :can-manage="canManage"
       :title="activeStage.title"
       :repo-path="repoPath"
       :sn="sn"

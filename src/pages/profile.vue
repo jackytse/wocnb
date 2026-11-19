@@ -32,9 +32,10 @@ import {
 import PinnedRepoWall from '../components/org/PinnedRepoWall.vue'
 import FollowListDrawer from '../components/FollowListDrawer.vue'
 import StateAlert from '../components/repo/StateAlert.vue'
+import { useAppToast } from '../composables/useAppToast'
 
 const { t } = useI18n()
-const toast = useToast()
+const toast = useAppToast()
 const router = useRouter()
 
 /**

@@ -22,6 +22,7 @@
 import { computed, onMounted, ref } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { openUrl } from '@tauri-apps/plugin-opener'
+import { useAppToast } from '../../composables/useAppToast'
 import {
   APP_RELEASES_PAGE_URL,
   normalizeUpdateChannel,
@@ -33,7 +34,7 @@ import {
 const { t } = useI18n()
 
 // toast：热更新完成/通道不匹配时给一次性反馈（行内状态展示持续态）
-const toast = useToast()
+const toast = useAppToast()
 
 // 更新检测单例 state（与启动 toast 链路共享同一份数据）
 const {

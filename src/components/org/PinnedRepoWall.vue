@@ -27,6 +27,7 @@ import {
 import { fetchCnbGroupRepos } from '../../composables/useCnbAuth'
 import { formatRelativeTime } from '../../utils'
 import StateAlert from '../repo/StateAlert.vue'
+import { useAppToast } from '../../composables/useAppToast'
 
 const props = defineProps<{
   /** 组织路径（组织墙数据源与 PUT 目标；个人墙时忽略） */
@@ -40,7 +41,7 @@ const props = defineProps<{
 }>()
 
 const { t } = useI18n()
-const toast = useToast()
+const toast = useAppToast()
 const router = useRouter()
 
 /** 是否处于可编辑组织墙（个人墙恒只读） */
