@@ -8,7 +8,7 @@
  * - 名称：昵称（nickname），折叠时只显示头像
  * 菜单能力：查看主页（cnb.cool 个人页）、退出登录（清空本地凭证并回登录页）。
  */
-import { computed, onMounted } from 'vue'
+import { computed, onMounted, ref } from 'vue'
 import { useRouter } from 'vue-router'
 import { useI18n } from 'vue-i18n'
 import type { DropdownMenuItem } from '@nuxt/ui'
@@ -32,6 +32,21 @@ defineProps<{
 const router = useRouter()
 const colorMode = useColorMode()
 const toast = useToast()
+
+/**
+ * 手动检查更新的进行中标记：
+ * - true 时菜单条目图标切换为旋转态（animate-spin）并禁用重复点击；
+ * - 检测结束（无论成败）归 false，同时关闭整个菜单（见 handleCheckUpdate）。
+ */
+const updateChecking = ref(false)
+
+/**
+ * 下拉菜单受控开关（v-model:open）。
+ * 为什么需要受控：检查更新期间要用 onSelect 的 preventDefault 阻止
+ * reka-ui 自动收起菜单（否则图标还没转起来菜单就关了），此后没有任何
+ * 默认行为能替我们关菜单 —— 只能在拿到结果后手动置 false 收起。
+ */
+const menuOpen = ref(false)
 // 组件内翻译函数：t 在 computed 中调用，语言切换时依赖响应式 locale 自动重算
 const { t } = useI18n()
 // 检查更新动作（单例状态与关于页共享；这里只用 checkForUpdate）
@@ -88,30 +103,40 @@ async function openExternal(url: string) {
  * - 失败 → 错误色 toast 带服务端原文（403 缺 scope 时用户能直接看到）。
  */
 async function handleCheckUpdate() {
-  const result = await checkForUpdate()
-  if (result.error) {
+  // 进入旋转态：菜单条目图标切换为 animate-spin，并禁用重复点击
+  updateChecking.value = true
+  try {
+    const result = await checkForUpdate()
+    if (result.error) {
+      toast.add({
+        title: t('settings.about.checkFailed'),
+        description: result.error,
+        color: 'error',
+        duration: 6000,
+      })
+      return
+    }
+    if (result.available) {
+      toast.add({
+        title: t('settings.about.newVersionFound', { version: result.latestVersion }),
+        description: t('settings.about.autoCheckDesc', { current: result.currentVersion }),
+        color: 'primary',
+        duration: 8000,
+      })
+      return
+    }
     toast.add({
-      title: t('settings.about.checkFailed'),
-      description: result.error,
-      color: 'error',
-      duration: 6000,
+      title: t('settings.about.upToDate'),
+      color: 'neutral',
+      duration: 3000,
     })
-    return
   }
-  if (result.available) {
-    toast.add({
-      title: t('settings.about.newVersionFound', { version: result.latestVersion }),
-      description: t('settings.about.autoCheckDesc', { current: result.currentVersion }),
-      color: 'primary',
-      duration: 8000,
-    })
-    return
+  finally {
+    // 无论成败：停止旋转并关闭菜单（preventDefault 保住了菜单，
+    // 只能在这里手动收起；try/finally 保证异常时菜单也不会卡死在展开态）
+    updateChecking.value = false
+    menuOpen.value = false
   }
-  toast.add({
-    title: t('settings.about.upToDate'),
-    color: 'neutral',
-    duration: 3000,
-  })
 }
 
 /** 退出登录：清空本地令牌与用户信息，回登录页并给出操作反馈（文案随语言切换） */
@@ -198,10 +223,16 @@ const items = computed<DropdownMenuItem[][]>(() => ([[{
   icon: 'i-lucide-settings',
   to: '/settings'
 }, {
-  // 手动检查更新：随手可用的入口（详细状态与更新通道在「设置 · 关于」）
+  // 手动检查更新：随手可用的入口（详细状态与更新通道在「设置 · 关于」）。
+  // 交互：点击后图标旋转、条目禁用防重复点击，onSelect 用 preventDefault
+  // 阻止 reka-ui 立即收起菜单 —— 直到拿到结果（toast 反馈）才停转并关菜单。
   label: t('settings.about.checkUpdate'),
-  icon: 'i-lucide-refresh-cw',
-  onSelect: () => {
+  icon: updateChecking.value ? 'i-lucide-refresh-cw animate-spin' : 'i-lucide-refresh-cw',
+  disabled: updateChecking.value,
+  onSelect: (e) => {
+    // preventDefault：阻止 reka-ui 在 select 后自动收起菜单，
+    // 让旋转图标在菜单里可见，结果出来后再由 handleCheckUpdate 关闭
+    e.preventDefault()
     void handleCheckUpdate()
   }
 }], [{
@@ -211,32 +242,35 @@ const items = computed<DropdownMenuItem[][]>(() => ([[{
     // 跟随系统 = useColorMode 的 'auto'（VueUse 存储的合法值只有
     // auto/light/dark；'system' 写进去是非法值，不会命中任何模式）。
     // index.html 内联脚本首屏判定读的也是 'auto'，两处口径一致。
+    // ⚠️ 勾选状态必须读 store（用户存储的偏好）而不是 colorMode.value：
+    //    .value 是「解析后的实际模式」，跟随系统时会被解析成 light/dark，
+    //    导致选中「跟随系统」后勾选框落在 light 上（解析值永远 ≠ 'auto'）。
     // ⚠️ onSelect 不调用 preventDefault —— reka-ui 里 preventDefault 会
-    // 阻止 checkbox 内部选中状态翻转，表现为"点了没反应/不可选中"
-    // （与下方语言子菜单同一范式：checked 受 colorMode 受控，
-    // 让 reka 的默认勾选与菜单收起行为生效）
+    //    阻止 checkbox 内部选中状态翻转，表现为"点了没反应/不可选中"
+    //    （与下方语言子菜单同一范式：checked 受 store 受控，
+    //    让 reka 的默认勾选与菜单收起行为生效）
     label: t('menu.system'),
     icon: 'i-lucide-monitor',
     type: 'checkbox' as const,
-    checked: colorMode.value === 'auto',
+    checked: colorMode.store.value === 'auto',
     onSelect() {
-      colorMode.value = 'auto'
+      colorMode.store.value = 'auto'
     }
   }, {
     label: t('menu.light'),
     icon: 'i-lucide-sun',
     type: 'checkbox' as const,
-    checked: colorMode.value === 'light',
+    checked: colorMode.store.value === 'light',
     onSelect() {
-      colorMode.value = 'light'
+      colorMode.store.value = 'light'
     }
   }, {
     label: t('menu.dark'),
     icon: 'i-lucide-moon',
     type: 'checkbox' as const,
-    checked: colorMode.value === 'dark',
+    checked: colorMode.store.value === 'dark',
     onSelect() {
-      colorMode.value = 'dark'
+      colorMode.store.value = 'dark'
     }
   }]
 }], [{
@@ -256,6 +290,7 @@ const items = computed<DropdownMenuItem[][]>(() => ([[{
 
 <template>
   <UDropdownMenu
+    v-model:open="menuOpen"
     :items="items"
     :content="{ align: 'center', collisionPadding: 12 }"
     :ui="{ content: collapsed ? 'w-48' : 'w-(--reka-dropdown-menu-trigger-width)' }"
