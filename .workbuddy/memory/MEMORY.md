@@ -55,7 +55,19 @@
 - **Windows runner 的 node 不在 PATH**（rc.24 实测）：`C:\Users\Administrator\.nvm\versions\node\vX\bin\` 存在但里面没有 node.exe → `Get-Command node` 失败。475f090 起 install 做三级兜底（探测常见安装位 → npmmirror 拉 Node 22.14 到 `C:\ci-tools\node` → 前置 PATH）
 - **PowerShell 探测命令必须包 cmd /c**（rc.26~28 三连教训）：①corepack enable 只建 shim 返回成功 ≠ pnpm 可用（缓存缺失+非交互不下载 → MODULE_NOT_FOUND），必须实测；②pnpm/npm 命令缺失时 CommandNotFoundException 在 `$ErrorActionPreference='Stop'` 下是终止性错误，`*> $null` 救不了 → 一律 `cmd /c "pnpm -v >nul 2>&1"` 看退出码（缺失=9009）；③build-x64 等独立 stage 进程要重探测 node+rust+pnpm 全套（install 的 PATH 修改不跨 stage，临时 node 装在 `C:\ci-tools\node\node-*`）
 - **pipefail 下禁止提前退出的消费者**（rc.28 release-meta pack exit 141 实测）：`生产者 | head -N` / `tar -tzf | grep -q` 会吃 SIGPIPE 返回 141 被 set -e 判死；`tar|grep -q` 更会把「包正常」误判成损坏。统一改 `sed -n '1,Np'`（读到 EOF）/ herestring 喂 grep
-- **cnb CLI 监控流水线**：PATH 里有 cnb（1.18.3，已登录）；脚本化必须加 `-v` 才输出原始 JSON（默认美化文本）；`cnb build get-build-status -v --repo X --sn <sn>` 看 pipelinesStatus 逐流水线状态（总状态含 allowFailure 假 success）；`cnb releases get-release-by-tag -v` 核验附件
+- **cnb CLI 监控流水线**：PATH 里有 cnb（1.18.3，已登录）；脚本化必须加 `-v` 才输出原始 JSON（默认美化文本）；`cnb build get-build-status -v --repo X --sn <sn>` 看 pipelinesStatus 逐流水线状态（总状态含 allowFailure 假 success）；`cnb releases get-release-by-tag -v` 核验附件。**没有 `cnb build list-builds`**：用 `cnb build get-build-logs -v --page-size N` 按 `sourceRef`（=tag）找 `sn`；stage 日志在 `cnb build get-build-stage -v --sn --pipelineId -00N --stageId stage-N` 的 `data.content`（字符串数组，含 ANSI）
+- **Prepare 返回 code 0 不代表 clone 成功**（rc.43 实测）：Windows 节点 DNS 抖动 → `Could not resolve host: cnb.cool`，workspace 空，下游 install 才爆 `ERR_PNPM_NO_PKG_MANIFEST`。看到这个错先怀疑节点网络，别怀疑代码
+
+## Windows NSIS 打包与热更新（2026-11-19 rc.44 打通后固化）
+
+- **msys2 的 mingw64 NSIS 只能用 amd64-unicode**：PKGBUILD 写死 `TARGET_ARCH=amd64`，包内只有 `Stubs/*-amd64-unicode` + `Plugins/amd64-unicode`，**没有 x86 stub/插件** → 产不出 32 位安装器。强改 `Target x86-unicode` 的结果是插件按 x86 搜不到，报 `Plugin not found, cannot call nsis_tauri_utils::SemverCompare`（installer.nsi:237）
+- **NSIS 按 PE OptionalHeader.Magic 过滤插件**（plugins.cpp:143），架构不符的 DLL 被静默跳过；默认插件目录 = `NSISDIR\Plugins\<target>`（build.cpp:3766）
+- **nsisconf.nsh 落点**（makenssi.cpp:578~598）= `$NSISCONFDIR` 或 **makensis.exe 所在目录**（不是 `share\nsis`）+ `<home>\nsisconf.nsh`；bundler 不传 `/NOCONFIG`
+- **tauri cli 2.12.4 的坑**：①模板首行没有 `Target`（`installerTarget` 配置项是 dev 分支才有，tauri-utils 2.10.x 无此字段）→ target 只能靠 nsisconf；②插件目录硬编码 `Plugins\x86-unicode\additional`，`NSIS_REQUIRED_FILES` 缺它会整目录重建（会干掉我们的 64 位 makensis）；③nsis_tauri_utils 只下发 x86 变体 → amd64 变体要自己从官方 zip（v0.6.0 的 `amd64-unicode/nsis_tauri_utils.dll`，导出 SemverCompare/RunAsUser 与模板匹配）取，放进 `share\nsis\Plugins\amd64-unicode`
+- **签名私钥必须按流水线注入**：`createUpdaterArtifacts` 开启后无私钥必失败；此前只有 release-macos 有 `imports:`，Windows 侧缺失（容器化 SYSTEM 账户也没有 `~/.tauri` 回退）
+- **产物命名**：tauri v2 产出 `*-setup.exe` + 同目录 `*-setup.exe.sig`（v1 的 `.nsis.zip` 已废）；拼 sig 路径必须 `$exe.FullName + '.sig'`，用 Join-Path 会拼成「把 exe 当目录」
+- **清单平台键必须是 `windows-x86_64`**（OS-ARCH，ARCH 固定 x86_64/aarch64/i686/armv7）。写成 `windows-x64` 会让 updater 静默匹配不到平台，表现为「永远没有更新」且零报错
+- 当前 Windows 安装包是 **64 位**安装器（PE32+），首次需用户手动装一次 setup.exe 才能进入应用内更新（此前只发过 portable exe）
 
 ## CNB API 覆盖增量落地约定（2026-11-11 完成后固化）
 
