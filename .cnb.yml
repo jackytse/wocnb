@@ -689,6 +689,12 @@ v*:
         tags:                     # 必须与节点实际标签严格一致（rc.3~rc.7 五次
           - win                   # Prepare 失败的根因：配置写 windows,x64，
           - amd64                 # 而节点实际标签是 win,amd64 → 永远派不出单）
+      # 热更新签名私钥：与 release-macos 同源（CNB 密钥仓库 imports，键名即
+      # 环境变量名）。rc.40 起 Windows 打包带 --config tauri.updater.conf.json
+      # 开 createUpdaterArtifacts，bundler 会签名 setup.exe 产出 .sig ——
+      # 无私钥时打包必失败，而此前本流水线没有这项注入（macOS 是唯一注入点），
+      # 属于「NSIS 打通了也会卡在签名」的隐藏前提。
+      imports: https://cnb.cool/jackytse/secrets/-/blob/main/wocnb.yaml
       env:
         CI: "true"
         COREPACK_ENABLE_DOWNLOAD_PROMPT: "0"
@@ -1223,15 +1229,34 @@ v*:
             # 门槛「>500KB」防坏文件顶掉缓存里的可用产物（32 位真编译器也
             # 469KB，桩才 2560B —— 装配目标是桩的位置，坏文件不会误伤 Bin\）。
             #
-            # rc.39 实测的两处 msys2 适配（与官方 Windows zip 行为不同）：
+            # rc.39~rc.42 实测的三处 msys2 适配（与官方 Windows zip 行为不同）：
             # 1) 资源目录：msys2 版按 Unix 布局 <exe 上级>\share\nsis 找
             #    Stubs/Include/Plugins（报错路径 %LOCALAPPDATA%\tauri\share\nsis
             #    证实），而非 exe 同目录 → 把包内 share/nsis 复制过去；
-            # 2) 默认 target：官方 32 位 makensis 默认 x86-unicode，msys2 的
-            #    x64 构建按 host 架构默认 **amd64-unicode**（会产出 64 位安装
-            #    器）。tauri 模板按 x86 安装器语义编写，必须强制回 x86-unicode：
-            #    makensis 会自动 include exe 同目录的 nsisconf.nsh（bundler
-            #    未传 /NOCONFIG），写一行 Target 指令即可。
+            # 2) 【target 只能是 amd64-unicode】msys2 的 mingw64 包是按
+            #    TARGET_ARCH=amd64 编的（PKGBUILD 里写死），包内只有
+            #    Stubs\*-amd64-unicode 与 Plugins\amd64-unicode，**完全没有
+            #    x86 的 stub 与插件** —— 它根本产不出 32 位安装器。
+            #    rc.40/rc.41 试图用 nsisconf.nsh 强行改回 x86-unicode，结果
+            #    NSIS 按 x86 去搜插件必然落空，报
+            #    "Plugin not found, cannot call nsis_tauri_utils::SemverCompare"
+            #    （installer.nsi:237）。所以这里显式锁 amd64-unicode，与编译器
+            #    的原生能力对齐：安装器变成 64 位，但本应用本就是 x64-only
+            #    （target 只有 x86_64-pc-windows-msvc），无 32 位用户受影响。
+            # 3) 插件架构：tauri cli 2.12.4 把 nsis_tauri_utils 的目标目录
+            #    **硬编码**成 Plugins\x86-unicode\additional（源码
+            #    NSIS_REQUIRED_FILES / target_folder），下发的也是 x86 变体，
+            #    与 amd64 目标不匹配。amd64 变体只存在于官方 zip 里，故这里
+            #    自行下载 v0.6.0 的 zip，取 amd64-unicode\nsis_tauri_utils.dll
+            #    放进 <NSISDIR>\Plugins\amd64-unicode（NSIS 的默认插件搜索
+            #    路径）。实测该 dll 导出 SemverCompare / RunAsUser，正是
+            #    2.12.4 模板用到的两个函数，版本无兼容问题。
+            #
+            # nsisconf.nsh 的加载位置（源码 Source/makenssi.cpp:578~598）：
+            #   · 主配置 = $NSISCONFDIR 环境变量；未设则「makensis.exe 所在
+            #     目录」（msys2 编译时未定义 NSIS_CONFIG_CONST_DATA_PATH）
+            #   · 家目录配置 = <home>\nsisconf.nsh（Windows 下即 %APPDATA%）
+            # bundler 不传 /NOCONFIG，所以写到 exe 同目录必被 include。
             if ((Test-Path $exe64File) -and (Get-Item $exe64File).Length -gt 500KB) {
               Copy-Item $exe64File $rootExe -Force
               $share64Src = Join-Path (Join-Path $nsis64Dir 'mingw64') 'share\nsis'
@@ -1241,28 +1266,59 @@ v*:
                 Copy-Item $share64Src $share64Dst -Recurse -Force
                 Write-Output '[wocnb-ci] 已复制 msys2 NSIS 资源到 share\nsis'
               }
-              # 强制 32 位安装器目标（与 tauri 官方 32 位 makensis 产物一致）。
-              # tauri 模板不含 Target 指令、完全依赖 makensis 默认值，而 msys2
-              # 的 x64 构建默认 amd64-unicode → 插件（只有 32 位 x86-unicode
-              # 变体）找不到，报 "Plugin not found, cannot call nsis_tauri_utils"
-              # （rc.40 实测）。nsisconf.nsh 由 makensis 自动 include，但查找
-              # 位置随 NSISDIR 语义而变：
-              #   · 官方 zip：NSISDIR = exe 目录 → 写 $nsisPath
-              #   · msys2：NSISDIR = <exe 上级>\share\nsis → 写 share\nsis
-              #   · per-user：%APPDATA%\NSIS\nsisconf.nsh（文档 §3.1.3）
-              # 三处都写，任一命中即生效（内容幂等，无副作用）。
-              $nsisConfBody = 'Target x86-unicode'
+
+              # —— amd64 版 nsis_tauri_utils 插件（热更新语义依赖它）——
+              # 落点是 NSISDIR 的「系统插件目录」，makensis 按 target 自动搜；
+              # 已存在（持久缓存命中）就不再下载。
+              $plugDst = Join-Path (Join-Path $share64Dst 'Plugins') 'amd64-unicode'
+              New-Item -ItemType Directory -Force -Path $plugDst | Out-Null
+              $plugFile = Join-Path $plugDst 'nsis_tauri_utils.dll'
+              $plugOk = (Test-Path $plugFile) -and ((Get-Item $plugFile).Length -gt 10KB)
+              if (-not $plugOk) {
+                $plugZip = Join-Path $nsis64Dir 'nsis_tauri_utils-v0.6.0.zip'
+                foreach ($u in @(
+                  'https://ghfast.top/https://github.com/tauri-apps/nsis-tauri-utils/releases/download/nsis_tauri_utils-v0.6.0/nsis_tauri_utils.zip',
+                  'https://gh-proxy.com/https://github.com/tauri-apps/nsis-tauri-utils/releases/download/nsis_tauri_utils-v0.6.0/nsis_tauri_utils.zip',
+                  'https://github.com/tauri-apps/nsis-tauri-utils/releases/download/nsis_tauri_utils-v0.6.0/nsis_tauri_utils.zip'
+                )) {
+                  Write-Output "[wocnb-ci] 下载 amd64 插件包: $u"
+                  curl.exe -sSL --retry 2 --connect-timeout 15 -o $plugZip $u
+                  if ($LASTEXITCODE -eq 0 -and (Test-Path $plugZip) -and (Get-Item $plugZip).Length -gt 30KB) { break }
+                  Write-Output '[wocnb-ci]   该源失败，换下一个'
+                }
+                if ((Test-Path $plugZip) -and (Get-Item $plugZip).Length -gt 30KB) {
+                  $plugTmp = Join-Path $nsis64Dir 'ntu'
+                  Remove-Item $plugTmp -Recurse -Force -ErrorAction SilentlyContinue
+                  Expand-Archive -Path $plugZip -DestinationPath $plugTmp -Force
+                  # zip 内是三套架构目录，只取 amd64-unicode 这一份
+                  $amd64Dll = Get-ChildItem $plugTmp -Filter 'nsis_tauri_utils.dll' -Recurse -ErrorAction SilentlyContinue |
+                    Where-Object { $_.Directory.Name -eq 'amd64-unicode' } | Select-Object -First 1
+                  if ($amd64Dll) {
+                    Copy-Item $amd64Dll.FullName $plugFile -Force
+                    $plugOk = $true
+                  }
+                }
+              }
+              if ($plugOk) {
+                Write-Output ("[wocnb-ci] amd64-unicode 插件就绪: " + $plugFile + " (" + (Get-Item $plugFile).Length + " 字节)")
+              } else {
+                Write-Output '[wocnb-ci] 警告: amd64 版 nsis_tauri_utils 未就绪，NSIS 打包会因插件缺失失败'
+              }
+
+              # 锁目标架构（编译器默认已是 amd64-unicode，显式写一遍以防
+              # msys2 后续改默认值；三处落盘任一命中即生效，内容幂等）
+              $nsisConfBody = 'Target amd64-unicode'
               $confTargets = @(
                 (Join-Path $nsisPath 'nsisconf.nsh'),
                 (Join-Path $share64Dst 'nsisconf.nsh'),
-                (Join-Path (Join-Path $env:APPDATA 'NSIS') 'nsisconf.nsh')
+                (Join-Path $env:APPDATA 'nsisconf.nsh')
               )
               foreach ($c in $confTargets) {
                 $cDir = Split-Path $c
                 if (-not (Test-Path $cDir)) { New-Item -ItemType Directory -Force -Path $cDir | Out-Null }
                 Set-Content -Path $c -Value $nsisConfBody -Encoding ascii
               }
-              Write-Output ("[wocnb-ci] 已写入 nsisconf.nsh（Target x86-unicode）: " + ($confTargets -join ' | '))
+              Write-Output ("[wocnb-ci] 已写入 nsisconf.nsh（Target amd64-unicode）: " + ($confTargets -join ' | '))
               # /HDRINFO 打印编译器构建信息与 NSISDIR/NSISCONFDIR（排障用）
               $hdrOut = $null
               $prevEap2 = $ErrorActionPreference
@@ -1270,7 +1326,7 @@ v*:
               try { $hdrOut = & $rootExe /HDRINFO 2>&1 } catch { $hdrOut = @() }
               $ErrorActionPreference = $prevEap2
               if ($hdrOut) { Write-Output ("[wocnb-ci] makensis /HDRINFO -> " + (($hdrOut | Select-Object -First 12) -join ' ')) }
-              Write-Output ("[wocnb-ci] 64 位 makensis 装配完成（" + (Get-Item $exe64File).Length + " 字节，进程架构 x64，target 已锁 x86-unicode）")
+              Write-Output ("[wocnb-ci] 64 位 makensis 装配完成（" + (Get-Item $exe64File).Length + " 字节，进程架构 x64，target 已锁 amd64-unicode）")
             }
             else {
               Write-Output '[wocnb-ci] 64 位 makensis 未就绪，makensis 试跑按 32 位链路验证'
@@ -1345,6 +1401,20 @@ v*:
             # 无私钥构建报错）。不带它就不会生成 .sig 签名文件 —— Windows
             # 永远进不了 updater 清单（2026-11-19 排查时发现的隐藏前提，
             # 与 macOS build-arm64 的口径对齐）。
+            # —— 热更新签名私钥校验（nsis/msi 分支都开 createUpdaterArtifacts，
+            # 无私钥 bundler 必失败）——
+            # 来源：本流水线 imports（CNB 密钥仓库 wocnb.yaml）注入的环境变量。
+            # 这里提前判定并给出明确指引，避免 bundler 抛出难以定位的错误；
+            # 与 macOS 线不同，Windows 构建机没有 ~/.tauri 私钥文件回退（容器
+            # 化 SYSTEM 账户，家目录不可持久），所以只认 imports 这一层。
+            if (-not $env:TAURI_SIGNING_PRIVATE_KEY) {
+              Write-Output '错误: 缺少热更新签名私钥 TAURI_SIGNING_PRIVATE_KEY（应在密钥仓库 jackytse/secrets 的 wocnb.yaml 中配置）'
+              exit 1
+            }
+            Write-Output ("[wocnb-ci] 签名私钥已注入（长度 " + $env:TAURI_SIGNING_PRIVATE_KEY.Length + " 字符）")
+            # 无密码私钥也要显式置空：部分 bundler 版本会因变量缺失尝试交互式
+            # 询问密码，CI 非交互环境会卡住
+            if (-not $env:TAURI_SIGNING_PRIVATE_KEY_PASSWORD) { $env:TAURI_SIGNING_PRIVATE_KEY_PASSWORD = '' }
             $appVer = (Get-Content 'src-tauri\tauri.conf.json' -Raw | ConvertFrom-Json).version
             $isPreRelease = ("$appVer" -match '-')
             if ($nsisOk) {
@@ -1358,6 +1428,29 @@ v*:
               pnpm exec tauri build --target x86_64-pc-windows-msvc --no-bundle
             }
             if ($LASTEXITCODE) { exit $LASTEXITCODE }
+            # 产物架构自检（rc.42 新增）：target 是否真落到 amd64-unicode，
+            # 只看日志无法确认，直接读 PE 头 machine 字段（0x8664=x64 /
+            # 0x14c=x86）。仅打印不失败 —— 真出错时上一步 makensis 已报错退出。
+            if ($nsisOk) {
+              $setupExe = Get-ChildItem 'src-tauri\target' -Recurse -Filter '*-setup.exe' -ErrorAction SilentlyContinue |
+                Select-Object -First 1
+              if ($setupExe) {
+                $fs = [System.IO.File]::OpenRead($setupExe.FullName)
+                $br = New-Object System.IO.BinaryReader($fs)
+                $fs.Position = 0x3C
+                $peOff = $br.ReadInt32()
+                $fs.Position = $peOff + 4
+                $machine = $br.ReadUInt16()
+                $br.Close()
+                $fs.Close()
+                $archName = switch ($machine) { 0x8664 { 'x64' } 0x14c { 'x86(32位)' } default { ('0x{0:x}' -f $machine) } }
+                Write-Output ("[wocnb-ci] setup.exe 架构: $archName -> " + $setupExe.Name)
+                if ($machine -ne 0x8664) { Write-Output '[wocnb-ci] 警告: setup.exe 非 x64，说明 Target 指令未生效' }
+              }
+              else {
+                Write-Output '[wocnb-ci] 警告: 未找到 *-setup.exe 产物'
+              }
+            }
             powershell -NoProfile -File scripts/ci/collect-windows.ps1 -Triple x86_64-pc-windows-msvc -Arch x64
             if ($LASTEXITCODE) { exit $LASTEXITCODE }
     #
