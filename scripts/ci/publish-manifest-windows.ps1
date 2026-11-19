@@ -75,15 +75,26 @@ Write-Host "==> 签名文件：$($sigPath.Name)"
 Write-Host "==> 更新包 URL：$assetUrl"
 
 # ---------------------------------------------------------------------------
-# 3) 下载现网清单（匿名；失败/404 一律按"无现清单"处理，不阻断）
+# 3) 下载现网清单（匿名；带重试）
+#    ⚠️ 这一步绝不能"失败即当空清单"：DNS 抖动一次就误判为空 → 覆盖上传
+#    会静默丢掉 darwin-* 条目（比上传失败更危险的静默故障）。3 次重试后
+#    仍失败才按空清单处理（此时大概率真的是首次发版/清单服务异常）。
 # ---------------------------------------------------------------------------
 $existing = $null
-try {
-    $resp = Invoke-WebRequest -UseBasicParsing -Uri 'https://cnb.cool/jackytse/wocnb/-/releases/download/updater-manifest/latest.json' -TimeoutSec 60
-    $existing = $resp.Content | ConvertFrom-Json
-    Write-Host "==> 现网清单 version: $($existing.version)"
-} catch {
-    Write-Host "==> 现网清单不可达（首次发版或网络波动），按空清单处理：$($_.Exception.Message)"
+for ($dl = 1; $dl -le 3; $dl++) {
+    try {
+        $resp = Invoke-WebRequest -UseBasicParsing -Uri 'https://cnb.cool/jackytse/wocnb/-/releases/download/updater-manifest/latest.json' -TimeoutSec 60
+        $existing = $resp.Content | ConvertFrom-Json
+        Write-Host "==> 现网清单 version: $($existing.version)"
+        break
+    }
+    catch {
+        Write-Host "==> 现网清单下载第 $dl/3 次失败：$($_.Exception.Message)"
+        if ($dl -lt 3) { Start-Sleep -Seconds 5 }
+    }
+}
+if ($null -eq $existing) {
+    Write-Host '==> 现网清单重试后仍不可达（首次发版或网络异常），按空清单处理'
 }
 
 # ---------------------------------------------------------------------------
@@ -129,10 +140,25 @@ if ($LASTEXITCODE) { exit $LASTEXITCODE }
 
 # ---------------------------------------------------------------------------
 # 6) 上传后回读自校验：windows-x86_64 必须在列（防上传竞态静默丢条目）
+#    回读带 3 次重试（rc.48 实测 asset.cnb.cool DNS 抖动会让单次回读失败
+#    被误判为"竞态覆盖"，实际清单可能已正常落库）
 # ---------------------------------------------------------------------------
 Start-Sleep -Seconds 5
-$check = Invoke-WebRequest -UseBasicParsing -Uri 'https://cnb.cool/jackytse/wocnb/-/releases/download/updater-manifest/latest.json' -TimeoutSec 60
-$checkManifest = $check.Content | ConvertFrom-Json
+$checkManifest = $null
+for ($i = 1; $i -le 3; $i++) {
+    try {
+        $check = Invoke-WebRequest -UseBasicParsing -Uri 'https://cnb.cool/jackytse/wocnb/-/releases/download/updater-manifest/latest.json' -TimeoutSec 60
+        $checkManifest = $check.Content | ConvertFrom-Json
+        break
+    }
+    catch {
+        Write-Host "==> 自校验回读第 $i/3 次失败：$($_.Exception.Message)"
+        if ($i -lt 3) { Start-Sleep -Seconds 10 }
+    }
+}
+if ($null -eq $checkManifest) {
+    throw '自校验失败：清单回读 3 次均失败（网络/CDN 异常），无法确认 windows-x86_64 条目是否落库'
+}
 if ($null -eq $checkManifest.platforms.'windows-x86_64') {
     throw '自校验失败：上传后回读清单仍无 windows-x86_64 条目（疑似与 macOS publish-manifest 竞态互相覆盖）'
 }

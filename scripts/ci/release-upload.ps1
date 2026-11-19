@@ -86,9 +86,18 @@ if ($null -eq $releaseId) {
 }
 
 # ---------------------------------------------------------------------------
-# 2) 逐个文件上传
+# 2) 逐个文件上传（每文件最多 $UploadAttempts 次尝试）
+#
+# 为什么循环体里包整段重试而不是每个请求各自重试：
+#   三段式（申请地址 -> PUT 字节 -> verify）是一个原子业务动作，任何一段
+#   失败后旧地址/旧会话都可能失效（rc.48 实测 DNS 抖动打挂 publish-manifest，
+#   单次尝试零兜底直接 fail 整个 stage）。统一"整段重来 + 每次重新申请
+#   上传地址"与 release-upload.sh 的重试语义完全对齐。
 # ---------------------------------------------------------------------------
 $failed = 0
+$UploadAttempts = 3        # 每文件最大尝试次数：覆盖 DNS 抖动 / TLS 断链等瞬时故障
+$RetryIntervalSec = 5      # 相邻两次尝试的间隔，给 DNS/连接池恢复留时间
+
 foreach ($file in $files) {
     $name = $file.Name
     $size = $file.Length
@@ -100,47 +109,48 @@ foreach ($file in $files) {
         overwrite  = $true
     } | ConvertTo-Json
 
-    try {
-        $resp = Invoke-RestMethod -Method Post -Uri "$api/-/releases/$releaseId/asset-upload-url" `
-            -Headers $headers -ContentType 'application/json' -Body $body -TimeoutSec 60
-    }
-    catch {
-        Write-Host "    错误：申请上传地址失败：$($_.Exception.Message)" -ForegroundColor Red
-        $failed++
-        continue
+    $done = $false
+    for ($attempt = 1; $attempt -le $UploadAttempts; $attempt++) {
+        if ($attempt -gt 1) {
+            Write-Host "    第 $attempt/$UploadAttempts 次尝试（上次失败，等待 ${RetryIntervalSec}s 后重试）"
+            Start-Sleep -Seconds $RetryIntervalSec
+        }
+        try {
+            # (a) 申请直传地址：每次尝试都重新申请（不复用上次的地址）
+            $resp = Invoke-RestMethod -Method Post -Uri "$api/-/releases/$releaseId/asset-upload-url" `
+                -Headers $headers -ContentType 'application/json' -Body $body -TimeoutSec 60
+            if ([string]::IsNullOrWhiteSpace($resp.upload_url) -or [string]::IsNullOrWhiteSpace($resp.verify_url)) {
+                throw '响应中缺少 upload_url / verify_url'
+            }
+
+            # (b) PUT 原始字节：用 HttpWebRequest 以免 Invoke-RestMethod 对二进制 body 做序列化
+            $req = [System.Net.HttpWebRequest]::Create($resp.upload_url)
+            $req.Method = 'PUT'
+            $req.ContentType = 'application/octet-stream'
+            $req.ContentLength = $size
+            $req.Timeout = 600000
+            $stream = $req.GetRequestStream()
+            $bytes = [System.IO.File]::ReadAllBytes($file.FullName)
+            $stream.Write($bytes, 0, $bytes.Length)
+            $stream.Close()
+            $putResp = $req.GetResponse()
+            $putResp.Close()
+
+            # (c) verify：让服务端确认字节落库（失败等同未上传成功）
+            Invoke-RestMethod -Method Post -Uri $resp.verify_url -Headers $headers -TimeoutSec 60 | Out-Null
+
+            $done = $true
+            break
+        }
+        catch {
+            # 记录后进入下一轮尝试；$ErrorActionPreference=Stop 下 catch 能
+            # 接住 Invoke-RestMethod / HttpWebRequest 的终止性错误
+            Write-Host "    尝试 $attempt 失败：$($_.Exception.Message)" -ForegroundColor Yellow
+        }
     }
 
-    if ([string]::IsNullOrWhiteSpace($resp.upload_url) -or [string]::IsNullOrWhiteSpace($resp.verify_url)) {
-        Write-Host '    错误：响应中缺少 upload_url / verify_url' -ForegroundColor Red
-        $failed++
-        continue
-    }
-
-    try {
-        # PUT 原始字节：用 HttpWebRequest 以免 Invoke-RestMethod 对二进制 body 做序列化
-        $req = [System.Net.HttpWebRequest]::Create($resp.upload_url)
-        $req.Method = 'PUT'
-        $req.ContentType = 'application/octet-stream'
-        $req.ContentLength = $size
-        $req.Timeout = 600000
-        $stream = $req.GetRequestStream()
-        $bytes = [System.IO.File]::ReadAllBytes($file.FullName)
-        $stream.Write($bytes, 0, $bytes.Length)
-        $stream.Close()
-        $putResp = $req.GetResponse()
-        $putResp.Close()
-    }
-    catch {
-        Write-Host "    错误：上传字节失败：$($_.Exception.Message)" -ForegroundColor Red
-        $failed++
-        continue
-    }
-
-    try {
-        Invoke-RestMethod -Method Post -Uri $resp.verify_url -Headers $headers -TimeoutSec 60 | Out-Null
-    }
-    catch {
-        Write-Host "    错误：确认上传失败：$($_.Exception.Message)" -ForegroundColor Red
+    if (-not $done) {
+        Write-Host "    错误：$name 连续 $UploadAttempts 次尝试均失败，放弃该文件" -ForegroundColor Red
         $failed++
         continue
     }

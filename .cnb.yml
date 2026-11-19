@@ -531,7 +531,11 @@ v*:
     # # 下面这行是分隔标记：取消注释后它会变成 YAML 注释，不影响解析，可以保留。
     # ↓↓↓ 取消注释从这里开始 ↓↓↓
     - name: release-macos
-      allowFailure: true          # 节点临时离线时不把整体构建打红（接入后才有意义）
+      # allowFailure 已移除（2026-11-19）：其语义是「流水线失败不上报、总状态
+      # 仍算 success」——当初接入节点是为了"节点临时离线别把构建打红"，但
+      # 实际效果是把真实故障也一并吞掉（rc.24 Windows 缺附件被当通过、
+      # rc.48 publish-manifest 失败总状态仍绿，两次误判都源于它）。现在
+      # 节点已稳定 + wait-gate 门禁兜底，失败就该如实打红，运维修节点。
       runner:
         namespace: group          # 必需：使用根组织下配置的自托管节点
         tags:                     # 与节点标签是「与」关系，节点标签须为超集
@@ -734,7 +738,9 @@ v*:
     # # 同样只上传附件，不创建/更新 Release（§7.3），不用 attachments 插件（§7.4）。
     # # ↓↓↓ 取消注释从这里开始 ↓↓↓
     - name: release-windows
-      allowFailure: true
+      # allowFailure 已移除（2026-11-19，与 release-macos 同因）：它让
+      # "publish-manifest 失败但总状态 success"（rc.48 实测），验收只看
+      # 总状态必然漏判。失败如实上报 + 验收逐流水线核对。
       runner:
         namespace: group
         tags:                     # 必须与节点实际标签严格一致（rc.3~rc.7 五次

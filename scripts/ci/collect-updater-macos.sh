@@ -120,7 +120,7 @@ PUB_DATE="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
 ASSET_URL="https://cnb.cool/jackytse/wocnb/-/releases/download/v${VERSION}/${DEST_TAR_NAME}"
 
 python3 - "$VERSION" "$PUB_DATE" "$ASSET_URL" "$SIG_FILE" "${OUT_DIR}/latest.json" <<'PY'
-import json, sys, urllib.request
+import json, sys, time, urllib.request
 
 version, pub_date, url, sig_path, out_path = sys.argv[1:6]
 with open(sig_path, 'r', encoding='utf-8') as f:
@@ -142,19 +142,29 @@ manifest = {
 # 保留其中非 darwin 平台条目（windows-x86_64 由 release-windows 的
 # publish-manifest 阶段写入）。两边各自"保留对方条目"即可消除
 # "后上传者覆盖先上传者"的竞态丢失窗口；版本不同（上一版旧清单）则整份替换。
-try:
-    with urllib.request.urlopen(
-        'https://cnb.cool/jackytse/wocnb/-/releases/download/updater-manifest/latest.json',
-        timeout=30,
-    ) as resp:
-        existing = json.load(resp)
-    if isinstance(existing, dict) and existing.get('version') == version:
-        for key, value in (existing.get('platforms') or {}).items():
-            if key != 'darwin-aarch64' and key not in manifest['platforms']:
-                manifest['platforms'][key] = value
-        print(f"==> 合并现网清单条目：{', '.join(manifest['platforms'].keys())}")
-except Exception as err:  # 首次发版 / 网络波动：按无现清单处理，不阻断
-    print(f"==> 现网清单不可读，按空清单处理：{err}")
+# ⚠️ 下载带 3 次重试（2026-11-19）：单次 DNS 抖动失败就"当空清单"会让
+# darwin-only 清单覆盖现网、静默丢掉 windows 条目（比上传失败更危险）。
+existing = None
+for attempt in range(1, 4):
+    try:
+        with urllib.request.urlopen(
+            'https://cnb.cool/jackytse/wocnb/-/releases/download/updater-manifest/latest.json',
+            timeout=30,
+        ) as resp:
+            existing = json.load(resp)
+        break
+    except Exception as err:
+        print(f"==> 现网清单下载第 {attempt}/3 次失败：{err}")
+        if attempt < 3:
+            time.sleep(5)
+if isinstance(existing, dict) and existing.get('version') == version:
+    for key, value in (existing.get('platforms') or {}).items():
+        if key != 'darwin-aarch64' and key not in manifest['platforms']:
+            manifest['platforms'][key] = value
+    print(f"==> 合并现网清单条目：{', '.join(manifest['platforms'].keys())}")
+else:
+    # 首次发版（清单不存在）/ 重试后仍网络异常：按无现清单处理，不阻断
+    print("==> 现网清单不可读，按空清单处理")
 
 with open(out_path, 'w', encoding='utf-8') as f:
     json.dump(manifest, f, ensure_ascii=False, indent=2)
