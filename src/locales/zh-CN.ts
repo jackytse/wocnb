@@ -106,6 +106,8 @@ export default {
     create: '创建组织',
     manage: '管理组织',
     refresh: '刷新组织',
+    // 切换选中组织成功后的 toast 提示（仅实际变更时弹出）
+    switched: '已切换到组织：{name}',
   },
   home: {
     title: '首页',

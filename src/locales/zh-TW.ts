@@ -106,6 +106,8 @@ export default {
     create: '建立組織',
     manage: '管理組織',
     refresh: '重新整理組織',
+    // 切換選中組織成功後的 toast 提示（僅實際變更時彈出）
+    switched: '已切換到組織：{name}',
   },
   home: {
     title: '首頁',

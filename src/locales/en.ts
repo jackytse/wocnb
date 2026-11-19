@@ -109,6 +109,8 @@ export default {
     create: 'Create group',
     manage: 'Manage groups',
     refresh: 'Refresh groups',
+    // Toast shown after switching the selected group (only when it actually changes)
+    switched: 'Switched to group: {name}',
   },
   home: {
     title: 'Home',

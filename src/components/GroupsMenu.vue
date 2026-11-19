@@ -56,6 +56,8 @@ defineProps<{
 
 // 界面文案翻译（加载中/空态/失败重试/操作项均随语言切换）
 const { t } = useI18n()
+// toast：切换组织成功后的反馈（顶部居中，由 UApp 统一渲染）
+const toast = useToast()
 
 /**
  * 用户所在的组织列表 —— 读**共享状态** `cnbGroups`（useCnbAuth）。
@@ -165,6 +167,16 @@ const items = computed<DropdownMenuItem[][]>(() => {
         type: 'checkbox' as const,
         checked: selectedGroup.value?.id === group.id,
         onSelect() {
+          // 仅在实际切换到不同组织时 toast：首次加载默认选中、重复点击
+          // 当前组织不弹无意义通知。切换后组织维度的页面（首页/成员/用量等）
+          // 会随 selectedGroup 联动重载，toast 让用户明确感知上下文已变更
+          if (selectedGroup.value?.id !== group.id) {
+            toast.add({
+              title: t('groups.switched', { name: group.name }),
+              color: 'success',
+              duration: 2500,
+            })
+          }
           selectedGroup.value = group
         },
       }))
