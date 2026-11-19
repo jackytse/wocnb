@@ -130,7 +130,19 @@ try {
     #    必失败。裸 exe / msi 路径没有 sig（不参与热更新），静默跳过。
     # ------------------------------------------------------------------
     if ($srcFile.Directory.Name -eq 'nsis') {
-        $sigFile = Join-Path $srcFile.FullName ($srcFile.Name + '.sig')
+        # ⚠️ 别用 Join-Path 拼 sig：tauri 的 .sig 与 setup.exe **同目录**且
+        # 文件名是「setup.exe + .sig」后缀叠加，不是放在 setup.exe 目录里。
+        # rc.42 实测踩过：Join-Path $exe.FullName "$name.sig" 会拼成
+        # ...\WOCNB_..._x64-setup.exe\WOCNB_..._x64-setup.exe.sig（把 exe
+        # 当目录），Test-Path 恒为假 → 签名收集静默失败 → 清单缺 windows
+        # 条目 → Windows 热更新静默失效（构建全绿但功能不在）。
+        $sigFile = $srcFile.FullName + '.sig'
+        if (-not (Test-Path $sigFile)) {
+            # 兜底：同目录下按文件名再找一次（路径大小写/junction 差异）
+            $found = Get-ChildItem $srcFile.Directory -Filter ($srcFile.Name + '.sig') -ErrorAction SilentlyContinue |
+                Select-Object -First 1
+            if ($found) { $sigFile = $found.FullName }
+        }
         if (Test-Path $sigFile) {
             $destSig = Join-Path $outPath "$destName.sig"
             Copy-Item -Path $sigFile -Destination $destSig -Force

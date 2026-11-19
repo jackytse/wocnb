@@ -56,7 +56,16 @@ $sigPath = Get-ChildItem -Path $dirPath -Filter '*.sig' -File -ErrorAction Silen
     Where-Object { $_.Name -like 'wocnb-*-setup.exe.sig' } |
     Sort-Object LastWriteTime -Descending | Select-Object -First 1
 if (-not $sigPath) {
-    Write-Host "==> 未找到 *-setup.exe.sig（打包走了降级链路），跳过 windows-x86_64 清单发布"
+    # 区分两种「没有 .sig」：真的没安装包（裸 exe/msi 降级，本该跳过）vs
+    # 有安装包却漏收签名（收集脚本 bug，必须报错）。rc.42 实测踩过后者：
+    # collect-windows.ps1 把 .sig 路径拼成 ...\setup.exe\setup.exe.sig，
+    # 收集静默失败，本脚本也静默跳过 → 构建全绿但 Windows 热更新不生效。
+    $setupExe = Get-ChildItem -Path $dirPath -Filter 'wocnb-*-setup.exe' -File -ErrorAction SilentlyContinue |
+        Select-Object -First 1
+    if ($setupExe) {
+        throw "发现安装包 $($setupExe.Name) 却没有对应的 .sig —— 热更新清单会静默缺 windows-x86_64 条目，按失败处理（请检查 collect-windows.ps1 的签名收集路径）"
+    }
+    Write-Host '==> 未找到 setup 安装包（走了裸 exe/msi 降级链路），跳过 windows-x86_64 清单发布'
     exit 0
 }
 $signature = (Get-Content -Raw -Path $sigPath.FullName).Trim()
