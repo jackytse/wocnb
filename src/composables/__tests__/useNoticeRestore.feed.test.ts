@@ -98,6 +98,7 @@ describe('applyRestoredBuildNotices（SQLite 回灌）', () => {
     expect(buildNoticeFeed.value).toHaveLength(50)
     expect(buildNoticeFeed.value[0]?.id).toBe('m-29')
     // 裁掉的是最旧的 10 条历史（h-9~h-0），第 50 条是 h-10
-    expect(buildNoticeFeed.value.at(-1)?.id).toBe('h-10')
+    // （tsconfig lib 为 ES2020 无 Array.prototype.at，用下标取末位）
+    expect(buildNoticeFeed.value[buildNoticeFeed.value.length - 1]?.id).toBe('h-10')
   })
 })

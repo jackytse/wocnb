@@ -113,7 +113,7 @@ describe('applyRestoredAppNotices（SQLite 回灌）', () => {
     // 回灌 10 条更旧的历史：合并 25 条 → 裁剪到 20
     const rows: StoredAppNotice[] = []
     for (let i = 0; i < 10; i++) {
-      rows.push(row(`h${i}`, i - 100))
+      rows.push(row(`h${i}`, i - 100, true))
     }
     applyRestoredAppNotices(rows)
     expect(appNoticeFeed.value).toHaveLength(20)

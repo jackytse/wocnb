@@ -414,6 +414,19 @@ setUnauthorizedHandler((fromPath) => {
   router.push({ path: '/login', query: { redirect: fromPath, expired: '1' } })
 })
 
+// macOS 应用菜单栏「关于 WOCNB」点击：Rust 侧 handle_app_menu_event emit
+// `cnb://menu-about`，这里转成应用内路由跳转到「设置 · 关于」页（含检查
+// 更新入口，比系统原生 about 面板更有用）。菜单事件在 Rust 主线程，拿不到
+// webview 路由，必须经 IPC 转交；浏览器 dev 无 Tauri runtime，跳过注册。
+if ('__TAURI_INTERNALS__' in window) {
+  import('@tauri-apps/api/event')
+    .then(({ listen }) => listen('cnb://menu-about', () => router.push('/settings/about')))
+    .catch((err) => {
+      // 注册失败只影响"菜单直达关于页"这一个入口，不阻断启动
+      console.warn('[wocnb] 注册应用菜单「关于」跳转失败：', err)
+    })
+}
+
 // 自动路由热更新兜底（dev 专用）：
 // vue-router 的 auto-routes HMR 回调内部会先 router.clearRoutes() 再逐条重放
 // "由文件生成的路由"，因此手工追加的 legacy-org 会被一并清除 —— 现象是 dev 下

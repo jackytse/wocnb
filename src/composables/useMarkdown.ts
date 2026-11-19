@@ -58,6 +58,54 @@ function resolveImageUrl(src: string, ctx: MarkdownContext): string | null {
 }
 
 /**
+ * 将 Markdown 链接的相对 href 解析为 cnb.cool 绝对地址（纯函数，可单测）。
+ *
+ * # 为什么需要（issue/PR 附件链接白屏事故）
+ *
+ * CNB issue 评论里上传的附件（录音/日志/压缩包等）生成的链接是**根相对
+ * 路径**（如 `[x.wav](/-/files/issues/.../x.wav)`），渲染后 <a href> 不带
+ * 域名。main.ts 的全局外链拦截器只拦 `http(s)` 开头的 href —— 相对路径
+ * 链接被放行，Tauri Webview 直接整页导航到应用不存在的路径 → **白屏**
+ * （Vue 应用路由根本没这个地址，且导航丢掉了整个 SPA 状态）。
+ *
+ * # 改写规则（与 CNB 官方 API 约定对齐）
+ *
+ * - 绝对 http(s) / 协议相对 / data: / # 锚点 → 原样返回 null（不改写）；
+ * - `/` 开头（根相对，issue 附件 `/-/files/...`、图片 `/-/imgs/...` 等）：
+ *   完整 URL = `https://cnb.cool/{repo}{path}` —— CNB 的附件/图片路径
+ *   取 `/` 开头完整尾段拼在仓库路径后（官方 cnb CLI 文档约定）；
+ *   无 ctx（调用方未传仓库上下文）时退化为拼站点根，虽可能 404 但仍
+ *   远好于白屏（浏览器里能看到 404 页，应用状态不丢）；
+ * - `./`、`../`、裸相对（仓库内文件语义，与图片同款 raw 解析规则）→
+ *   `https://cnb.cool/{repo}/-/raw/{ref}/{dir}/{path}`（依赖 ctx，无 ctx
+ *   时返回 null 保持原样）。
+ *
+ * 改写为绝对 URL 后，点击统一走 main.ts 全局拦截器 → 系统浏览器打开
+ * （浏览器里有 CNB 登录态可正常播放/下载 wav 等附件），Webview 内不再
+ * 发生任何整页导航。
+ *
+ * @returns 绝对地址；返回 null 表示不需要/无法改写（调用方保持原 href）
+ */
+export function resolveLinkUrl(href: string, ctx: MarkdownContext | null): string | null {
+  // 绝对地址/协议相对/data URL/纯锚点：不属于"仓库内相对链接"，不改写
+  if (/^(https?:)?\/\//i.test(href) || href.startsWith('data:') || href.startsWith('#')) {
+    return null
+  }
+  if (href.startsWith('/')) {
+    // 根相对路径：优先拼仓库前缀（附件/图片的官方 URL 结构），无仓库
+    // 上下文时拼站点根兜底
+    return ctx && ctx.repoPath
+      ? `https://cnb.cool/${ctx.repoPath}${href}`
+      : `https://cnb.cool${href}`
+  }
+  // ./ / ../ / 裸相对：仓库内文件，复用图片的 raw 解析规则（需要 ctx）
+  if (ctx) {
+    return resolveImageUrl(href, ctx)
+  }
+  return null
+}
+
+/**
  * 渲染 Markdown 为安全的 HTML（同步返回）。
  *
  * 流程：marked 解析（GFM 表格/任务列表）→ DOMPurify 消毒（白名单策略 +
@@ -88,6 +136,17 @@ export function renderMarkdown(markdown: string, ctx: MarkdownContext | null): s
         const safe = /^(https?:\/\/|\/|#|\.\/)/i.test(href)
         if (!safe) {
           node.removeAttribute('href')
+        }
+        else {
+          // 相对链接改写为 cnb.cool 绝对地址（issue 附件白屏修复，规则见
+          // resolveLinkUrl 注释）：改写后点击统一走 main.ts 全局外链拦截器
+          // → 系统浏览器打开，Webview 内不再发生整页导航（白屏根源）
+          const absolute = resolveLinkUrl(href, ctx)
+          if (absolute && absolute !== href) {
+            node.setAttribute('href', absolute)
+            // 浏览器 dev（无拦截器）下新标签页打开，不丢失应用页面
+            node.setAttribute('target', '_blank')
+          }
         }
         node.setAttribute('rel', 'noopener')
       }

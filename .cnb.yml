@@ -548,6 +548,17 @@ v*:
         CI: "true"
         COREPACK_ENABLE_DOWNLOAD_PROMPT: "0"
       stages:
+        # ⚡ 门禁等待（必须是第一个 stage，放在 install 之前）：三条流水线
+        # 并行跑、平台又无流水线依赖编排（官方语法无 dependsOn/gate），
+        # release-meta 的 typecheck/lint/test 失败后 mac 侧会照常空跑编译
+        # （rc.46 实测空耗近 10 分钟才被平台取消）。本 stage 轮询同一构建
+        # 里 release-meta 的状态：成功 → 放行；失败/取消 → 立即终止本流水线
+        #（连 install 的环境准备都省掉）；超时 900s 兜底退出。
+        # 脚本细节与踩坑记录见 scripts/ci/wait-gate.sh 头注释。
+        - name: wait-gate
+          script: |
+            set -eu
+            bash scripts/ci/wait-gate.sh release-meta
         - name: install
           script: |
             set -eu
@@ -739,6 +750,14 @@ v*:
         CI: "true"
         COREPACK_ENABLE_DOWNLOAD_PROMPT: "0"
       stages:
+        # ⚡ 门禁等待（必须是第一个 stage，放在 install 之前）：release-meta
+        # 门禁失败时立即终止本流水线，不再空跑 node/rust/pnpm 环境准备与
+        # 编译（与 release-macos 的 wait-gate 同职责；rc.46 教训）。
+        # 注意 .ps1 必须 UTF-8 BOM（PowerShell 5.1 无 BOM 按 GBK 解码会炸，
+        # rc.20 教训），详见 scripts/ci/wait-gate.ps1 头注释。
+        - name: wait-gate
+          script: |
+            powershell -NoProfile -ExecutionPolicy Bypass -File scripts/ci/wait-gate.ps1 -TargetPipeline release-meta
         - name: install
           script: |
             $ErrorActionPreference = 'Stop'
