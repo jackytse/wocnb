@@ -93,6 +93,8 @@ export default {
     logout: '退出登录',
     loggedOut: '已退出登录',
     loggedOutDesc: '本地凭证已清除，重新登录即可继续使用',
+    logoutConfirmTitle: '确认退出登录？',
+    logoutConfirmDesc: '将清除本机保存的访问令牌与账号信息，需要重新登录才能继续使用。',
     notLoggedIn: '未登录',
   },
   // 侧面栏组织（Group）菜单：中文统一用「组织」，键名与 en 完全对齐。

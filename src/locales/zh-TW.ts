@@ -93,6 +93,8 @@ export default {
     logout: '登出',
     loggedOut: '已登出',
     loggedOutDesc: '本機憑證已清除，重新登入即可繼續使用',
+    logoutConfirmTitle: '確認要登出？',
+    logoutConfirmDesc: '將清除本機儲存的存取權杖與帳號資訊，需要重新登入才能繼續使用。',
     notLoggedIn: '未登入',
   },
   // 側面欄組織（Group）選單：中文統一用「組織」，鍵名與 en 完全對齊。

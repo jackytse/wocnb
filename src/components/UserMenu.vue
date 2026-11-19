@@ -53,6 +53,13 @@ const updateChecking = ref(false)
  */
 const menuOpen = ref(false)
 
+/**
+ * 退出登录确认弹窗开关。
+ * 为什么需要二次确认：退出会清空本机访问令牌与账号信息，误触代价是
+ * "全部重新登录"；菜单条目紧挨常用操作且动作不可撤销，加一道确认弹窗。
+ */
+const logoutConfirmOpen = ref(false)
+
 // 组件内翻译函数：t 在 computed 中调用，语言切换时依赖响应式 locale 自动重算
 const { t } = useI18n()
 // 检查更新动作（单例状态与关于页共享：检查结果、安装进度都落同一份 state，
@@ -223,7 +230,7 @@ function goDownloadPage() {
 }
 
 /** 退出登录：清空本地令牌与用户信息，回登录页并给出操作反馈（文案随语言切换） */
-async function handleLogout() {
+async function confirmLogout() {
   // OAuth 登录方式：同步清理 CLI 侧令牌（cnb logout --host），保证应用与
   // CLI 两端一致；失败不阻塞本地登出（与 settings/token.vue 同策略）
   if (cnbAuthMethod.value === 'oauth') {
@@ -367,11 +374,11 @@ const items = computed<DropdownMenuItem[][]>(() => ([[{
   icon: 'i-lucide-languages',
   children: languageItems.value,
 }], [{
-  // 退出登录：清空本地凭证后跳转登录页
+  // 退出登录：先弹二次确认窗（清空凭证不可撤销，防误触），确认才执行
   label: t('menu.logout'),
   icon: 'i-lucide-log-out',
   onSelect: () => {
-    void handleLogout()
+    logoutConfirmOpen.value = true
   }
 }]]))
 </script>
@@ -505,6 +512,41 @@ const items = computed<DropdownMenuItem[][]>(() => ([[{
             icon="i-lucide-download"
             :label="t('settings.about.installNow')"
             @click="startInstallFromModal"
+          />
+        </div>
+      </div>
+    </template>
+  </UModal>
+
+  <!--
+    退出登录二次确认弹窗：
+    退出动作会清空本机令牌与账号信息且不可撤销，菜单条目一次点击就执行
+    代价太高 —— 用 UModal 拦一道：「取消」仅关闭弹窗，「退出登录」先关
+    弹窗再执行 confirmLogout（原 handleLogout 逻辑原样保留）。
+  -->
+  <UModal v-model:open="logoutConfirmOpen" :ui="{ content: 'max-w-sm' }">
+    <template #content>
+      <div class="p-6">
+        <h2 class="text-base font-semibold text-highlighted leading-6">
+          {{ t('menu.logoutConfirmTitle') }}
+        </h2>
+        <p class="mt-2 text-sm text-muted">
+          {{ t('menu.logoutConfirmDesc') }}
+        </p>
+        <div class="mt-6 flex justify-end gap-2">
+          <UButton
+            size="sm"
+            color="neutral"
+            variant="ghost"
+            :label="t('common.cancel')"
+            @click="logoutConfirmOpen = false"
+          />
+          <UButton
+            size="sm"
+            color="error"
+            icon="i-lucide-log-out"
+            :label="t('menu.logout')"
+            @click="logoutConfirmOpen = false; void confirmLogout()"
           />
         </div>
       </div>

@@ -95,6 +95,8 @@ export default {
     logout: 'Sign out',
     loggedOut: 'Signed out',
     loggedOutDesc: 'Local credentials cleared. Sign in again to continue.',
+    logoutConfirmTitle: 'Log out?',
+    logoutConfirmDesc: 'This clears the locally stored token and account info. Sign in again to continue.',
     notLoggedIn: 'Not signed in',
   },
   // 侧面栏组织（Group）菜单：全部文案统一 Group / Groups 口径，
