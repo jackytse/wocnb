@@ -204,6 +204,146 @@ fn rebuild_tray_menu(locale: &str) {
     TRAY_NATIVE_MENU.with(|slot| *slot.borrow_mut() = Some(menu));
 }
 
+// ---------------------------------------------------------------------------
+// macOS 应用菜单栏（屏幕顶部 menu bar）多语言
+// ---------------------------------------------------------------------------
+
+/// 应用菜单栏可翻译文案集合（纯数据，单测锁定三语齐全）。
+///
+/// 只收录**自定义**条目的文案；系统预定义条目（拷贝/粘贴/最小化等
+/// PredefinedMenuItem）的文案由 macOS 按系统语言渲染，应用不可定制，
+/// 也不应定制（跟随系统是 macOS 平台惯例）。子菜单标题（编辑/窗口）
+/// 是我们自己创建的，需要三语。
+#[derive(Debug, PartialEq, Eq)]
+struct AppMenuTexts {
+    /// 应用菜单里"关于 WOCNB"条目
+    about: &'static str,
+    /// 应用菜单里"退出 WOCNB"条目（⌘Q，行为 = 托盘"退出应用"）
+    quit: &'static str,
+    /// "编辑"子菜单标题（内含拷贝/粘贴等系统预定义项）
+    edit: &'static str,
+    /// "窗口"子菜单标题（内含最小化/关闭等系统预定义项）
+    window: &'static str,
+}
+
+/// 应用菜单栏文案三语映射（纯函数，单测锁定）。
+///
+/// 语言口径与 tray_menu_texts 完全一致（en / zh-TW / 其余回落 zh-CN），
+/// 两者共用 set_tray_locale 的同一份归一化结果，切语言时同步重建。
+fn app_menu_texts(locale: &str) -> AppMenuTexts {
+    match locale {
+        "en" => AppMenuTexts {
+            about: "About WOCNB",
+            quit: "Quit WOCNB",
+            edit: "Edit",
+            window: "Window",
+        },
+        "zh-TW" => AppMenuTexts {
+            about: "關於 WOCNB",
+            quit: "退出 WOCNB",
+            edit: "編輯",
+            window: "視窗",
+        },
+        _ => AppMenuTexts {
+            about: "关于 WOCNB",
+            quit: "退出 WOCNB",
+            edit: "编辑",
+            window: "窗口",
+        },
+    }
+}
+
+/// 菜单条目 id：应用菜单"关于"（点击后 emit 事件给前端跳转关于页）
+const APP_MENU_ABOUT_ID: &str = "app-about";
+/// 菜单条目 id：应用菜单"退出"（点击后 app.exit(0)，与托盘退出一致）
+const APP_MENU_QUIT_ID: &str = "app-quit";
+
+/// 按 locale 构建 macOS 应用菜单栏（顶部 menu bar）。
+///
+/// 结构（自定义条目用应用语言，PredefinedMenuItem 跟随系统语言）：
+///   [WOCNB]  关于 WOCNB ／ ─ ／ 隐藏（系统）／ 退出 WOCNB ⌘Q
+///   [编辑]   撤销/重做/剪切/拷贝/粘贴/全选（系统预定义，自动带快捷键）
+///   [窗口]   最小化/关闭（系统预定义）
+///
+/// 必须在主线程调用（NSMenu 线程约束，同托盘菜单）。
+#[cfg(target_os = "macos")]
+fn build_app_menu(
+    app: &tauri::AppHandle,
+    locale: &str,
+) -> tauri::Result<tauri::menu::Menu<tauri::Wry>> {
+    use tauri::menu::{Menu, MenuItem, PredefinedMenuItem, Submenu};
+
+    let texts = app_menu_texts(locale);
+
+    // —— 应用子菜单 ——
+    // "关于"用自定义条目而非 PredefinedMenuItem::about：系统 about 面板
+    // 的语言/内容不可控，且我们希望点击直达应用内"设置 · 关于"页
+    //（含检查更新入口），比原生面板更有用
+    let about_item = MenuItem::with_id(app, APP_MENU_ABOUT_ID, texts.about, true, None::<&str>)?;
+    let quit_item = MenuItem::with_id(app, APP_MENU_QUIT_ID, texts.quit, true, Some("Cmd+Q"))?;
+    let app_submenu = Submenu::with_items(
+        app,
+        "WOCNB",
+        true,
+        &[
+            &about_item,
+            &PredefinedMenuItem::separator(app)?,
+            // 隐藏/隐藏其他：纯系统行为（NSApp hide），文案跟随系统语言
+            &PredefinedMenuItem::hide(app, None)?,
+            &PredefinedMenuItem::hide_others(app, None)?,
+            &PredefinedMenuItem::separator(app)?,
+            &quit_item,
+        ],
+    )?;
+
+    // —— 编辑子菜单：全部系统预定义项（文本处理快捷键由系统自动挂载）——
+    let edit_submenu = Submenu::with_items(
+        app,
+        texts.edit,
+        true,
+        &[
+            &PredefinedMenuItem::undo(app, None)?,
+            &PredefinedMenuItem::redo(app, None)?,
+            &PredefinedMenuItem::separator(app)?,
+            &PredefinedMenuItem::cut(app, None)?,
+            &PredefinedMenuItem::copy(app, None)?,
+            &PredefinedMenuItem::paste(app, None)?,
+            &PredefinedMenuItem::select_all(app, None)?,
+        ],
+    )?;
+
+    // —— 窗口子菜单 ——
+    let window_submenu = Submenu::with_items(
+        app,
+        texts.window,
+        true,
+        &[
+            &PredefinedMenuItem::minimize(app, None)?,
+            &PredefinedMenuItem::separator(app)?,
+            &PredefinedMenuItem::close_window(app, None)?,
+        ],
+    )?;
+
+    Menu::with_items(app, &[&app_submenu, &edit_submenu, &window_submenu])
+}
+
+/// 应用菜单条目点击的统一处理（setup 里注册一次，id 与语言无关）。
+///
+/// - app-quit：与托盘"退出应用"同路径 app.exit(0)（不走 CloseRequested，
+///   关窗即隐藏的行为不会拦截真正退出）；
+/// - app-about：emit 事件给前端，由前端路由跳转"设置 · 关于"页 ——
+///   菜单事件在主线程，不持有 webview 路由，必须经 IPC 转交。
+#[cfg(target_os = "macos")]
+fn handle_app_menu_event(app: &tauri::AppHandle, id: &str) {
+    match id {
+        APP_MENU_QUIT_ID => app.exit(0),
+        APP_MENU_ABOUT_ID => {
+            let _ = app.emit("cnb://menu-about", ());
+        }
+        _ => {}
+    }
+}
+
 /// 前端语言切换时同步托盘菜单语言（useAppLocale → 本命令）。
 ///
 /// 处理流程：归一 → 写内存 → 持久化 → 主线程重建菜单（macOS）。
@@ -220,12 +360,25 @@ fn set_tray_locale(app: tauri::AppHandle, locale: String) -> Result<(), String> 
     }
     // 持久化：失败不阻断（下次启动回落默认文案）
     write_tray_locale(&app, &locale);
-    // macOS：菜单重建必须回主线程（muda/NSMenu 线程约束，见模块注释）
+    // macOS：菜单重建必须回主线程（muda/NSMenu 线程约束，见模块注释）。
+    // 同步重建两处菜单：托盘右键菜单 + 顶部应用菜单栏（menu bar）——
+    // 两者共用同一份归一化语言，切语言必须一起换，否则会出现"托盘中文、
+    // 菜单栏英文"的撕裂。
     #[cfg(target_os = "macos")]
     {
         let loc = locale.clone();
-        app.run_on_main_thread(move || rebuild_tray_menu(&loc))
-            .map_err(|e| format!("run_on_main_thread failed: {e}"))?;
+        let app_handle = app.clone();
+        app.run_on_main_thread(move || {
+            rebuild_tray_menu(&loc);
+            // 应用菜单栏重建：set_menu 会替换现有菜单；失败（极端场景，
+            // 如菜单条目构建出错）静默降级保留旧语言菜单，不打断切换流程
+            if let Ok(menu) = build_app_menu(&app_handle, &loc) {
+                if let Err(err) = app_handle.set_menu(menu) {
+                    log::warn!("[tray] 重建应用菜单栏失败: {err}");
+                }
+            }
+        })
+        .map_err(|e| format!("run_on_main_thread failed: {e}"))?;
     }
     Ok(())
 }
@@ -1192,6 +1345,25 @@ pub fn run() {
                 // 存入主线程 thread_local：保持菜单存活（弹出时引用 NSMenu），
                 // 供托盘事件回调读取（见 TRAY_NATIVE_MENU 注释）
                 TRAY_NATIVE_MENU.with(|slot| *slot.borrow_mut() = Some(tray_menu));
+                // 应用菜单栏（顶部 menu bar）：此前未设置，macOS 只显示
+                // 系统默认项（英文），不随应用内语言切换 —— 现按持久化
+                // 语言构建三语菜单（条目文案见 app_menu_texts；语言切换
+                // 时由 set_tray_locale 同步重建）
+                match build_app_menu(app.handle(), &tray_locale) {
+                    Ok(menu) => {
+                        if let Err(err) = app.set_menu(menu) {
+                            log::warn!("[menu] 设置应用菜单栏失败: {err}");
+                        }
+                    }
+                    Err(err) => log::warn!("[menu] 构建应用菜单栏失败: {err}"),
+                }
+                // 应用菜单条目点击事件（id 与语言无关，注册一次即可）：
+                // 关于 → emit 给前端跳转；退出 → app.exit(0)（与托盘退出
+                // 同路径，不经过 CloseRequested，关窗隐藏逻辑不会拦截）
+                let handle = app.handle().clone();
+                app.on_menu_event(move |_app, event| {
+                    handle_app_menu_event(&handle, event.id().0.as_str());
+                });
             }
 
             // 2. 构建托盘图标：字母 W 的 PNG（编译期嵌入）。
@@ -1291,9 +1463,10 @@ pub fn run() {
 #[cfg(test)]
 mod tests {
     use super::{
-        build_header_map, clamp_window_size, greet, is_allowed_api_url, is_allowed_image_url,
-        next_available_path, normalize_tray_locale, parse_window_size, sanitize_archive_name,
-        tray_menu_texts, BUILD_NOTIFY_ACTION_TYPE_ID, MIN_WINDOW_HEIGHT, MIN_WINDOW_WIDTH,
+        app_menu_texts, build_header_map, clamp_window_size, greet, is_allowed_api_url,
+        is_allowed_image_url, next_available_path, normalize_tray_locale, parse_window_size,
+        sanitize_archive_name, tray_menu_texts, APP_MENU_ABOUT_ID, APP_MENU_QUIT_ID,
+        BUILD_NOTIFY_ACTION_TYPE_ID, MIN_WINDOW_HEIGHT, MIN_WINDOW_WIDTH,
     };
     use std::collections::HashMap;
 
@@ -1384,6 +1557,31 @@ mod tests {
         // 三种语言的文案互不相同（同一语言不可两种显示）
         assert_ne!((open_en, quit_en), (open_tw, quit_tw));
         assert_ne!((open_cn, quit_cn), (open_en, quit_en));
+    }
+
+    /// 应用菜单栏三语文案映射锁定（macOS 顶部 menu bar 多语言）：
+    /// 三种显式语言各自命中独立文案；所有字段非空（空串条目渲染异常）；
+    /// about/quit 文案必须包含应用名 WOCNB（macOS 惯例：菜单条目带应用名）。
+    #[test]
+    fn test_app_menu_texts_locales() {
+        for locale in ["en", "zh-CN", "zh-TW"] {
+            let t = app_menu_texts(locale);
+            assert!(!t.about.is_empty() && t.about.contains("WOCNB"), "locale={locale}");
+            assert!(!t.quit.is_empty() && t.quit.contains("WOCNB"), "locale={locale}");
+            assert!(!t.edit.is_empty() && !t.window.is_empty(), "locale={locale}");
+        }
+        // 三种语言互不相同（防止复制粘贴漏改某语言）
+        assert_ne!(app_menu_texts("en"), app_menu_texts("zh-CN"));
+        assert_ne!(app_menu_texts("zh-TW"), app_menu_texts("zh-CN"));
+        assert_ne!(app_menu_texts("en"), app_menu_texts("zh-TW"));
+    }
+
+    /// 应用菜单条目 id 常量锁定：与 setup 里的 on_menu_event 注册、构建时的
+    /// with_id 是同一对字面量（两侧漂移会导致点击无响应且无任何报错）。
+    #[test]
+    fn test_app_menu_ids() {
+        assert_eq!(APP_MENU_ABOUT_ID, "app-about");
+        assert_eq!(APP_MENU_QUIT_ID, "app-quit");
     }
 
     /// 托盘语言归一化：合法值原样保留（大小写不敏感），脏值回落 zh-CN
