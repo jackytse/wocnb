@@ -176,16 +176,16 @@ const links = computed((): NavigationMenuItem[][] => [[{
   // `target === '_blank'` 时于标签后自动渲染 ↗ 图标
   // （appConfig.ui.icons.external）。删掉 target 不仅会让链接改在应用内
   // 导航（Webview 白屏/无返回入口），外链标识也会随之消失。
+  label: t('layout.feedback'),
+  icon: 'i-lucide-message-circle',
+  // 本仓库「新建 Issue」页：使用反馈直达
+  to: 'https://cnb.cool/jackytse/wocnb/-/issues/new',
+  target: '_blank'
+}, {
   label: t('layout.repo'),
   icon: 'i-cnb-logo',
   // 本应用源码仓库（CNB 平台自身的客户端，logo 用官方 CNB 图标）
   to: 'https://cnb.cool/jackytse/wocnb',
-  target: '_blank'
-}, {
-  label: t('layout.bestPractices'),
-  icon: 'i-lucide-lightbulb',
-  // CNB 官方完整示例/最佳实践集（构建、部署、AI 等各场景）
-  to: 'https://cnb.cool/examples/showcase',
   target: '_blank'
 }]])
 
