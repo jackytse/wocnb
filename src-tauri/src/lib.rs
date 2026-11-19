@@ -1128,6 +1128,198 @@ fn show_main_window(app: &tauri::AppHandle) {
     }
 }
 
+// ---------------------------------------------------------------------------
+// 托盘左键快捷面板（tray-panel 窗口）：显示活跃项目 + 底部状态栏
+// ---------------------------------------------------------------------------
+
+/// 托盘面板窗口的 label（与 tauri.conf.json 的 windows 数组对应）。
+const TRAY_PANEL_LABEL: &str = "tray-panel";
+
+/// 左键切换面板的防抖窗口（毫秒）：macOS 上快速连点两次会派发两个
+/// Down 事件，无防抖时表现为面板"闪现即消失"（开→关）。
+const TRAY_PANEL_TOGGLE_DEBOUNCE_MS: u128 = 300;
+
+/// 上一次左键切换面板的时刻（防抖状态）。
+/// OnceLock<Mutex<Option<Instant>>>：首次访问惰性初始化；托盘事件回调
+/// 在主线程，但 Mutex 保证了万一跨线程也无数据竞争。
+static TRAY_PANEL_LAST_TOGGLE: std::sync::OnceLock<
+    std::sync::Mutex<Option<std::time::Instant>>,
+> = std::sync::OnceLock::new();
+
+/// 上一次「面板因失焦被自动隐藏」的时刻。
+///
+/// 解决"点托盘图标关不掉面板"的交互悖论：面板可见时点击托盘图标，
+/// macOS 先派发失焦（Focused(false) → 隐藏），紧接着才是托盘 Click
+/// 事件 —— 此时 is_visible 已是 false，切换逻辑会把它重新打开，用户
+/// 看到的是"闪一下又出来"。因此记录失焦隐藏时刻，短时间内（250ms）
+/// 的托盘点击视为"用户想关面板"，直接忽略这次 show。
+static TRAY_PANEL_LAST_BLUR_HIDE: std::sync::OnceLock<
+    std::sync::Mutex<Option<std::time::Instant>>,
+> = std::sync::OnceLock::new();
+
+/// 失焦隐藏的判定窗口（毫秒）：太短会漏判（事件到达顺序抖动），
+/// 太长会把"刚切走再点开"的正常操作也吞掉。
+const TRAY_PANEL_BLUR_HIDE_WINDOW_MS: u128 = 250;
+
+/// 记录一次失焦自动隐藏（由窗口事件 Focused(false) 分支调用）。
+fn note_tray_panel_blur_hide() {
+    if let Ok(mut guard) = TRAY_PANEL_LAST_BLUR_HIDE
+        .get_or_init(|| std::sync::Mutex::new(None))
+        .lock()
+    {
+        *guard = Some(std::time::Instant::now());
+    }
+}
+
+/// 面板是否刚刚因失焦被隐藏（250ms 内）。
+fn tray_panel_just_blur_hidden() -> bool {
+    let Ok(guard) = TRAY_PANEL_LAST_BLUR_HIDE
+        .get_or_init(|| std::sync::Mutex::new(None))
+        .lock()
+    else {
+        return false;
+    };
+    guard
+        .map(|t| t.elapsed().as_millis() < TRAY_PANEL_BLUR_HIDE_WINDOW_MS)
+        .unwrap_or(false)
+}
+
+/// 防抖判定 + 记录本次触发时刻。返回 true 表示本次点击应被忽略
+/// （距上次切换不足 TRAY_PANEL_TOGGLE_DEBOUNCE_MS）。
+fn tray_panel_toggle_debounced() -> bool {    let now = std::time::Instant::now();
+    let slot = TRAY_PANEL_LAST_TOGGLE
+        .get_or_init(|| std::sync::Mutex::new(None))
+        .lock();
+    let Ok(mut guard) = slot else {
+        // Mutex 中毒（极端情况）不应让托盘点击失效：放行本次点击
+        return false;
+    };
+    let skip = guard
+        .map(|t| now.duration_since(t).as_millis() < TRAY_PANEL_TOGGLE_DEBOUNCE_MS)
+        .unwrap_or(false);
+    if !skip {
+        *guard = Some(now);
+    }
+    skip
+}
+
+/// 在托盘图标正下方定位面板窗口（物理坐标直算，不做缩放换算）。
+///
+/// 坐标口径：TrayIconEvent 的 position/rect 均为**物理像素**（主屏左上
+/// 原点，y 向下）；窗口 set_position/outer_size 也吃物理坐标，全程同一
+/// 口径最不易错。水平方向让面板中心对齐图标中心，垂直方向贴图标底边
+/// 留 6px 间距；最后夹取到光标所在显示器范围内（防面板一半飘出屏幕）。
+fn position_tray_panel(
+    app: &tauri::AppHandle,
+    panel: &tauri::WebviewWindow,
+    cursor_x: f64,
+    cursor_y: f64,
+    icon_x: f64,
+    icon_y: f64,
+    icon_w: f64,
+    icon_h: f64,
+) {
+    // 面板自身物理尺寸（配置 360x440 逻辑单位 × 该屏缩放系数）
+    let panel_size = panel.outer_size().unwrap_or(tauri::PhysicalSize::new(360, 440));
+    let panel_w = panel_size.width as f64;
+    let panel_h = panel_size.height as f64;
+
+    let mut px = icon_x + icon_w / 2.0 - panel_w / 2.0;
+    let mut py = icon_y + icon_h + 6.0;
+
+    // 夹取到光标所在显示器（monitor_from_point 吃物理坐标）：
+    // 状态栏图标可能贴着屏幕边缘，不夹取面板会飘出可视区域
+    if let Ok(Some(monitor)) = app.monitor_from_point(cursor_x, cursor_y) {
+        let m = monitor.position();
+        let ms = monitor.size();
+        let m_x = m.x as f64;
+        let m_y = m.y as f64;
+        let m_w = ms.width as f64;
+        let m_h = ms.height as f64;
+        if m_w > panel_w + 16.0 {
+            px = px.clamp(m_x + 8.0, m_x + m_w - panel_w - 8.0);
+        }
+        if m_h > panel_h + 16.0 {
+            py = py.clamp(m_y + 8.0, m_y + m_h - panel_h - 8.0);
+        }
+    }
+
+    let _ = panel.set_position(tauri::PhysicalPosition::new(px.round() as i32, py.round() as i32));
+}
+
+/// 把 TrayIconEvent.rect 的 Position/Size 归一为物理像素 (x, y, w, h)。
+///
+/// tray-icon 在 macOS 上报的是逻辑坐标经 to_physical 的物理值，但 Tauri
+/// 包装成 `tauri::Position`/`tauri::Size` 枚举（物理/逻辑两态），直接取
+/// 字段不存在 —— 必须按枚举分支换算。scale 取托盘图标所在屏的缩放系数
+/// （调用方已用光标点推断）；仅逻辑态分支真正用到它。
+fn tray_rect_physical(scale: f64, pos: tauri::Position, size: tauri::Size) -> (f64, f64, f64, f64) {
+    let (x, y) = match pos {
+        tauri::Position::Physical(p) => (p.x as f64, p.y as f64),
+        tauri::Position::Logical(l) => (l.x * scale, l.y * scale),
+    };
+    let (w, h) = match size {
+        tauri::Size::Physical(s) => (s.width as f64, s.height as f64),
+        tauri::Size::Logical(s) => (s.width * scale, s.height * scale),
+    };
+    (x, y, w, h)
+}
+
+/// 托盘左键单击：切换（显示/隐藏）活跃项目快捷面板。
+/// 已显示 → 隐藏；隐藏 → 按"托盘图标正下方"重新定位后显示并聚焦。
+fn toggle_tray_panel(
+    app: &tauri::AppHandle,
+    cursor_x: f64,
+    cursor_y: f64,
+    icon_x: f64,
+    icon_y: f64,
+    icon_w: f64,
+    icon_h: f64,
+) {
+    let Some(panel) = app.get_webview_window(TRAY_PANEL_LABEL) else {
+        // 配置缺窗口（理论上不会发生）：降级回旧行为——直接开主窗口
+        log::warn!("[tray-panel] 窗口不存在，降级为主窗口");
+        show_main_window(app);
+        return;
+    };
+    // is_visible 失败按"不可见"处理（走显示分支）
+    if panel.is_visible().unwrap_or(false) {
+        let _ = panel.hide();
+        return;
+    }
+    // 刚刚因失焦被隐藏（同一操作的"先失焦后点击"事件序）：
+    // 本次点击意图是关闭面板，不再重新弹出
+    if tray_panel_just_blur_hidden() {
+        return;
+    }
+    position_tray_panel(app, &panel, cursor_x, cursor_y, icon_x, icon_y, icon_w, icon_h);
+    let _ = panel.show();
+    let _ = panel.set_focus();
+}
+
+/// 隐藏托盘面板（面板页 Esc 键 / 失焦由窗口事件自动处理）。
+#[tauri::command]
+fn hide_tray_panel(app: tauri::AppHandle) -> Result<(), String> {
+    if let Some(panel) = app.get_webview_window(TRAY_PANEL_LABEL) {
+        let _ = panel.hide();
+    }
+    Ok(())
+}
+
+/// 面板内"点击项目 / 发现新版本去查看"：隐藏面板 → 前置主窗口 →
+/// emit 导航事件（主窗口 main.ts 监听 cnb://panel-navigate 后 router.push）。
+/// path 为完整路由字符串（含 query，如 /repos/a%2Fb?tab=builds&sn=xxx）。
+#[tauri::command]
+fn tray_panel_open_target(app: tauri::AppHandle, path: String) -> Result<(), String> {
+    if let Some(panel) = app.get_webview_window(TRAY_PANEL_LABEL) {
+        let _ = panel.hide();
+    }
+    show_main_window(&app);
+    // 只发给主窗口（面板窗口不注册该监听，但精准投递更稳）
+    app.emit_to("main", "cnb://panel-navigate", &path)
+        .map_err(|e| format!("emit panel-navigate failed: {e}"))
+}
+
 /// 应用入口：构建 Tauri Builder 并启动事件循环。
 /// - 注册 greet 命令供前端 invoke
 /// - 初始化系统托盘（W 图标、左键打开应用、右键弹菜单）
@@ -1144,6 +1336,9 @@ pub fn run() {
             cnb_download_archive,
             // —— 托盘菜单语言（跟随前端应用语言设置，见托盘 locale 模块注释）——
             set_tray_locale,
+            // —— 托盘左键快捷面板（活跃项目 + 检测更新 + 退出）——
+            hide_tray_panel,
+            tray_panel_open_target,
             // —— cnb-cli 集成（OAuth 设备授权登录）——
             cnb_cli::cnb_cli_detect,
             cnb_cli::cnb_cli_install,
@@ -1368,10 +1563,12 @@ pub fn run() {
 
             // 2. 构建托盘图标：字母 W 的 PNG（编译期嵌入）。
             //    交互设计：
-            //    - 左键单击：直接打开应用主窗口（on_tray_icon_event 中处理），
-            //      不弹出菜单 —— 这是用户最常用的"回到应用"路径，一步直达；
+            //    - 左键单击：切换活跃项目快捷面板（tray-panel 窗口，图标
+            //      正下方弹出；再点一次隐藏）—— 项目状态速览 + 检测更新
+            //      + 退出的轻量入口，不必打开完整主窗口；
             //    - 右键单击：按光标位置弹出原生菜单（见 popup_menu_at_cursor
-            //      的多显示器修复说明），条目事件走 on_menu_event 回调；
+            //      的多显示器修复说明），条目事件走 on_menu_event 回调，
+            //      "打开应用"仍在此菜单中（开完整主窗口）；
             //    托盘实例由 App 的 TrayIconManager 内部持有，构建后即保持存活
             TrayIconBuilder::with_id(TRAY_ID)
                 .icon(tauri::image::Image::from_bytes(include_bytes!(concat!(
@@ -1385,13 +1582,39 @@ pub fn run() {
                     if let TrayIconEvent::Click {
                         button,
                         button_state: tauri::tray::MouseButtonState::Down,
+                        position,
+                        rect,
                         ..
                     } = event
                     {
                         match button {
-                            // 左键单击：显示并聚焦主窗口（幂等的 show + set_focus）
+                            // 左键单击：切换快捷面板（防抖：连点两次只算一次，
+                            // 否则面板"闪现即消失"；rect 的 Position/Size 是
+                            // "可能物理可能逻辑"的枚举，先归一为物理像素）
                             tauri::tray::MouseButton::Left => {
-                                show_main_window(tray.app_handle());
+                                if tray_panel_toggle_debounced() {
+                                    return;
+                                }
+                                // 缩放系数取光标所在屏（与托盘图标同屏）；
+                                // 推断失败按平台默认值兜底（macOS Retina 2.0）
+                                let scale = tray
+                                    .app_handle()
+                                    .monitor_from_point(position.x, position.y)
+                                    .ok()
+                                    .flatten()
+                                    .map(|m| m.scale_factor())
+                                    .unwrap_or(if cfg!(target_os = "macos") { 2.0 } else { 1.0 });
+                                let (icon_x, icon_y, icon_w, icon_h)
+                                    = tray_rect_physical(scale, rect.position, rect.size);
+                                toggle_tray_panel(
+                                    tray.app_handle(),
+                                    position.x,
+                                    position.y,
+                                    icon_x,
+                                    icon_y,
+                                    icon_w,
+                                    icon_h,
+                                );
                             }
                             // 右键单击：在光标位置弹出原生菜单（多屏定位正确）
                             tauri::tray::MouseButton::Right => {
@@ -1424,6 +1647,29 @@ pub fn run() {
             Ok(())
         })
         .on_window_event(|window, event| {
+            // 托盘面板窗口（tray-panel）行为独立：失焦自动隐藏（点外部
+            // 关面板的惯例交互）、固定尺寸不参与记忆、关闭请求只隐藏。
+            // 必须先于通用逻辑分流，否则面板尺寸会被主窗口的记忆逻辑
+            // 处理（MIN 1024x600 会把它撑大）。
+            if window.label() == TRAY_PANEL_LABEL {
+                match event {
+                    // 点击面板外任何地方（面板失去焦点）→ 自动隐藏。
+                    // 同时记录时刻：紧随其后的托盘点击应视为"关面板"，
+                    // 不重新弹出（见 tray_panel_just_blur_hidden 注释）
+                    tauri::WindowEvent::Focused(false) => {
+                        note_tray_panel_blur_hide();
+                        let _ = window.hide();
+                    }
+                    // Esc / 面板内关闭请求：只隐藏不销毁（复用已加载的
+                    // 页面，下次弹出无白屏闪烁）
+                    tauri::WindowEvent::CloseRequested { api, .. } => {
+                        let _ = window.hide();
+                        api.prevent_close();
+                    }
+                    _ => {}
+                }
+                return;
+            }
             match event {
                 // 尺寸变化：只更新内存缓存。拖拽窗口会连续触发几十次，
                 // 逐次写盘既慢又无意义，真正落盘放到关窗/退出时
@@ -1465,8 +1711,8 @@ mod tests {
     use super::{
         app_menu_texts, build_header_map, clamp_window_size, greet, is_allowed_api_url,
         is_allowed_image_url, next_available_path, normalize_tray_locale, parse_window_size,
-        sanitize_archive_name, tray_menu_texts, APP_MENU_ABOUT_ID, APP_MENU_QUIT_ID,
-        BUILD_NOTIFY_ACTION_TYPE_ID, MIN_WINDOW_HEIGHT, MIN_WINDOW_WIDTH,
+        sanitize_archive_name, tray_menu_texts, tray_rect_physical, APP_MENU_ABOUT_ID,
+        APP_MENU_QUIT_ID, BUILD_NOTIFY_ACTION_TYPE_ID, MIN_WINDOW_HEIGHT, MIN_WINDOW_WIDTH,
     };
     use std::collections::HashMap;
 
@@ -1541,6 +1787,29 @@ mod tests {
             Some(MIN_WINDOW_HEIGHT),
             "minHeight 与 MIN_WINDOW_HEIGHT 不一致"
         );
+    }
+
+    /// tray_rect_physical 两种坐标态的换算锁定：物理态原样透传（不乘
+    /// 缩放，否则 Retina 下面板定位翻倍偏移）、逻辑态按 scale 展开。
+    /// 这是托盘面板"图标正下方弹出"定位公式的输入端，错一口径面板
+    /// 就会飘到屏幕外。
+    #[test]
+    fn test_tray_rect_physical() {
+        use tauri::{LogicalPosition, LogicalSize, PhysicalPosition, PhysicalSize, Position, Size};
+        // 物理态：直接透传，scale 不参与
+        let (x, y, w, h) = tray_rect_physical(
+            2.0,
+            Position::Physical(PhysicalPosition::new(100, 40)),
+            Size::Physical(PhysicalSize::new(22, 22)),
+        );
+        assert_eq!((x, y, w, h), (100.0, 40.0, 22.0, 22.0));
+        // 逻辑态：按 scale 展开（Mac 状态栏图标 rect 常为逻辑单位）
+        let (x, y, w, h) = tray_rect_physical(
+            2.0,
+            Position::Logical(LogicalPosition::new(50.0, 20.0)),
+            Size::Logical(LogicalSize::new(11.0, 11.0)),
+        );
+        assert_eq!((x, y, w, h), (100.0, 40.0, 22.0, 22.0));
     }
 
     /// 托盘菜单三语文案映射锁定：三种显式语言各自命中独立文案，

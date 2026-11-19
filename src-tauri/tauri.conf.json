@@ -20,6 +20,21 @@
         "backgroundThrottling": "disabled",
         "minWidth": 1024,
         "minHeight": 600
+      },
+      {
+        "label": "tray-panel",
+        "title": "WOCNB",
+        "url": "index.html",
+        "width": 360,
+        "height": 440,
+        "resizable": false,
+        "fullscreen": false,
+        "visible": false,
+        "decorations": false,
+        "skipTaskbar": true,
+        "alwaysOnTop": true,
+        "focus": false,
+        "shadow": true
       }
     ],
     "security": {

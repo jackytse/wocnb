@@ -157,6 +157,20 @@ export default {
     updateBadge: 'Update',
   },
   // ---------------------------------------------------------------------------
+  // Tray quick panel (tray left-click popup: recent projects + status bar)
+  // ---------------------------------------------------------------------------
+  trayPanel: {
+    title: 'Recent Projects',
+    empty: 'No projects yet. Open one in the main window.',
+    checkUpdate: 'Check updates',
+    checking: 'Checking…',
+    latest: 'You\'re up to date',
+    newer: 'Update {version}',
+    failed: 'Check failed',
+    settings: 'Settings',
+    quit: 'Quit app',
+  },
+  // ---------------------------------------------------------------------------
   // App update check (useAppUpdate: new version → system notification + panel record)
   // ---------------------------------------------------------------------------
   appUpdate: {

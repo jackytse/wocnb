@@ -24,6 +24,7 @@ import {
   type RepoDetail,
 } from '../../composables/useCnbRepo'
 import { parsePositiveInt, useRepoRoute } from '../../composables/useRepoRoute'
+import { recordRecentRepo } from '../../composables/useRecentRepos'
 import StateAlert from '../../components/repo/StateAlert.vue'
 import RepoHeader from '../../components/repo/RepoHeader.vue'
 import RepoTabs from '../../components/repo/RepoTabs.vue'
@@ -80,6 +81,15 @@ async function loadRepo() {
     ])
     detail.value = d
     head.value = h
+    // 记录到「最近的项目」（托盘快捷面板数据源）：成功打开才记录，
+    // 404/403 的仓库不该出现在最近列表里。带上语言色，面板左侧
+    // 色块用仓库主语言着色（无语言时面板回退中性色）。
+    recordRecentRepo({
+      repoPath: repoPath.value,
+      name: d.name,
+      language: d.language,
+      languageColor: d.languageColor,
+    })
   }
   catch (err) {
     detail.value = null
