@@ -15,15 +15,18 @@
  * 保存成功后 useCnbAuth 内部会同步本地登录态（头像等），
  * 侧边栏用户菜单等界面随之立即更新。
  *
- * 写权限预判（2026-11-19）：OAuth 设备授权登录（cnb login）签发的令牌
+ * 写权限预判（2026-11-19 v2）：OAuth 设备授权登录（cnb login）签发的令牌
  * 不含 account-profile:rw，保存资料必然 403。CNB 不提供令牌 scope 查询
- * 端点、令牌本体也是不透明字符串（非 JWT，无法本地解析），因此采用
- * 「幂等探测」——资料加载成功后，用服务端刚返回的原始值静默回写一次
- * （写入相同数据，语义无副作用）：
- * - 探测成功 / 400（校验失败但鉴权已通过）→ 表单可编辑；
- * - 探测 403 → 禁用表单，StateAlert 403 分支展示缺失 scope + 管理令牌
- *   外跳 + CNB 网页端个人设置入口（403 绝不引导登出，红线）。
- * 非 403 的其余失败（网络抖动等）不拦截编辑，保存时仍有 toast 兜底。
+ * 端点、令牌本体也是不透明字符串（非 JWT），但 **OAuth token 端点的响应
+ * 本身带 scope 字段**（cnb-cli 收到后丢弃；应用侧 Rust 刷新命令已捕获）。
+ * 因此判定链路为（零探测写请求）：
+ * - PAT 登录：令牌权限用户自建自选、无查询端点 → 乐观放行，
+ *   保存时 403 再兜底禁用（真实保存请求即探测）；
+ * - OAuth + scope 已采集：本地 hasScope() 静态判定，无任何额外请求；
+ * - OAuth + scope 未知（存量会话）：force 刷新一次采集真值后判定；
+ *   采集失败则按实测默认禁用（cnb_cli 客户端固定无 account-profile:rw）。
+ * 禁用时给出 scope 说明 + 管理令牌外跳 + CNB 网页端个人设置入口
+ * （403 绝不引导登出，红线）。
  */
 import * as z from 'zod'
 import { computed, onMounted, reactive, ref, watch } from 'vue'
@@ -38,6 +41,11 @@ import {
   CNB_PROFILE_SETTINGS_URL,
   type CnbProfilePayload,
 } from '../composables/useCnbAuth'
+import {
+  cnbAuthMethod,
+  hasCnbScope,
+  harvestCnbScopes,
+} from '../composables/useCnbCliAuth'
 import {
   fetchMyStarredRepos,
   type StarredRepoItem,
@@ -182,8 +190,8 @@ async function loadProfile() {
   try {
     const data: CnbProfilePayload = await fetchCnbUserProfile()
     Object.assign(profile, data)
-    // 资料就绪后立即探测写权限（不阻塞社交区块等页面的其他内容渲染）
-    void probeWritePermission()
+    // 资料就绪后立即做写权限静态判定（不阻塞社交区块等页面的其他内容渲染）
+    void resolveWritePermission()
   }
   catch {
     loadError.value = true
@@ -198,21 +206,30 @@ onMounted(() => {
 })
 
 // ---------------------------------------------------------------------------
-// 写权限预判（幂等探测）：禁止没有权限的资料编辑操作
+// 写权限预判（scope 静态判定）：禁止没有权限的资料编辑操作
 // ---------------------------------------------------------------------------
+
+/** 编辑资料所需的令牌权限（POST /user 的必需要求，实测 403 响应确认） */
+const PROFILE_WRITE_SCOPE = 'account-profile:rw'
 
 /**
  * 表单可编辑状态机：
- * - checking：探测中（保存按钮禁用，输入框暂不锁定 —— 探测通常 <1s）；
- * - ok：探测通过（写入成功 / 400 校验失败均代表鉴权已通过）；
- * - forbidden：探测 403（令牌缺 account-profile:rw）→ 输入框与保存按钮
- *   全部禁用，StateAlert 给出 scope 说明与外跳引导。
+ * - checking：判定中（scope 已知时瞬时完成；未知时含一次 force 刷新采集）；
+ * - ok：判定通过 → 表单可编辑；
+ * - forbidden：判定不含 account-profile:rw → 输入框与保存按钮全部禁用，
+ *   顶部提示条给出 scope 说明与 CNB 网页端引导。
  */
 const canEdit = ref<'checking' | 'ok' | 'forbidden'>('checking')
-/** 探测得到的 403 错误（供 StateAlert 403 分支展示缺失 scope 与引导按钮） */
-const probeError = ref<CnbApiError | null>(null)
+/**
+ * 禁用原因里的 scope 名（提示条展示用）。静态判定命中时就是
+ * PROFILE_WRITE_SCOPE；保存时 403 兜底命中时取错误响应解析出的
+ * missingScope（更精确 —— 若服务端日后调整要求可自动跟随）。
+ */
+const forbiddenScope = ref<string>(PROFILE_WRITE_SCOPE)
 
-/** 构造提交负载（探测与正式保存共用，保证两者语义一致；nickname 不提交） */
+/**
+ * 构造提交负载（正式保存用；nickname 不提交 —— API 不支持修改）
+ */
 function buildProfilePayload() {
   return {
     nickname: cnbUser.value?.nickname || '',
@@ -226,36 +243,30 @@ function buildProfilePayload() {
 }
 
 /**
- * 静默探测资料写权限：用服务端刚返回的原始值幂等回写一次。
+ * 写权限判定（scope 静态判定链路，零探测写请求）：
  *
- * 为什么用「回写原始值」而不是专门的探测接口：CNB Open API 没有
- * scope 查询端点，POST /user 也没有 dry-run 模式；写入相同数据是唯一
- * 无副作用的判定手段。
- *
- * 结果判定：
- * - 成功 → ok；
- * - CnbApiError 403（kind=forbidden）→ forbidden（记录错误供 StateAlert 用）；
- * - 其他 4xx/5xx（如 400 site 格式非法）→ ok —— 请求已通过鉴权，
- *   只是业务校验失败，说明权限在，不能误禁表单；
- * - 网络类异常 → ok —— 无法判定时保持可用，保存失败时 toast 兜底。
+ * 1. PAT 登录：令牌权限由用户建令牌时自选、无任何查询端点 → 无法预判，
+ *    乐观放行（ok），保存时 403 再兜底禁用 —— 真实保存请求即探测；
+ * 2. OAuth 且 scope 已采集过：hasCnbScope 本地判定，零请求；
+ * 3. OAuth 且 scope 未知（存量会话/新版首次）：force 刷新一次采集真值
+ *    （token 轮换无副作用，Rust 侧写回保持 CLI 同步）；
+ * 4. OAuth 且采集后仍未知（刷新失败/响应无 scope）：按实测默认禁用 ——
+ *    cnb_cli 客户端的授权范围由服务端固定、实测不含 account-profile:rw，
+ *    未知时"默认禁用"比"乐观放行再失败"少一次注定失败的用户输入。
  */
-async function probeWritePermission() {
+async function resolveWritePermission() {
   canEdit.value = 'checking'
-  probeError.value = null
-  try {
-    await updateCnbProfile(buildProfilePayload())
+  if (cnbAuthMethod.value !== 'oauth') {
+    // PAT / 未标注登录方式（旧版本数据）：乐观放行 + 保存 403 兜底
     canEdit.value = 'ok'
+    return
   }
-  catch (err) {
-    if (err instanceof CnbApiError && err.kind === 'forbidden') {
-      probeError.value = err
-      canEdit.value = 'forbidden'
-    }
-    else {
-      // 权限没问题（校验失败）或无法判定（网络）：放行编辑，不误伤
-      canEdit.value = 'ok'
-    }
+  if (hasCnbScope(PROFILE_WRITE_SCOPE) === null) {
+    // scope 未知：强制采集一次（失败静默，保持未知）
+    await harvestCnbScopes()
   }
+  // 已知 → 按成员判定；仍未知 → 默认禁用（false 分支覆盖 null）
+  canEdit.value = hasCnbScope(PROFILE_WRITE_SCOPE) === true ? 'ok' : 'forbidden'
 }
 
 /** 保存资料：POST /user 成功后给出成功反馈（本地登录态由 useCnbAuth 同步） */
@@ -276,6 +287,14 @@ async function onSubmit() {
     })
   }
   catch (err) {
+    // 保存时 403 兜底（PAT 乐观放行 / 服务端权限策略变化）：转入禁用态并
+    // 展示提示条 —— 若错误响应解析出了确切缺失的 scope，优先展示它
+    if (err instanceof CnbApiError && err.kind === 'forbidden') {
+      canEdit.value = 'forbidden'
+      if (err.missingScope) {
+        forbiddenScope.value = err.missingScope
+      }
+    }
     toast.add({
       title: t('profile.saveFailed'),
       description: err instanceof Error ? err.message : t('profile.saveFailedDesc'),
@@ -340,7 +359,7 @@ async function onSubmit() {
           class="w-full"
           @submit="onSubmit"
         >
-          <!-- 单行权限提示条：探测确认令牌缺 account-profile:rw 时显示。
+          <!-- 单行权限提示条：scope 判定确认令牌缺 account-profile:rw 时显示。
                只占一行（文本超长截断），右侧内联链接直达 CNB 网页端资料设置；
                403 绝不引导登出（红线） -->
           <div
@@ -349,7 +368,7 @@ async function onSubmit() {
           >
             <UIcon name="i-lucide-shield-alert" class="size-4 shrink-0" />
             <span class="min-w-0 truncate">
-              {{ t('profile.noPermInline', { scope: probeError?.missingScope || 'account-profile:rw' }) }}
+              {{ t('profile.noPermInline', { scope: forbiddenScope }) }}
             </span>
             <UButton
               size="xs"

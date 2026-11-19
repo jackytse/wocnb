@@ -84,6 +84,12 @@ export interface CliRefreshResult {
   accessToken: string
   expiresAt: number
   refreshed: boolean
+  /**
+   * OAuth 授权范围（token 端点响应的 `scope` 字段，空格分隔；cnb-cli 收到
+   * 后直接丢弃，应用侧 Rust 已捕获）。仅在发生真实刷新时有值；
+   * refreshed=false（令牌仍有效未刷新）时为 null。
+   */
+  scope?: string | null
 }
 
 // ---------------------------------------------------------------------------
@@ -94,6 +100,14 @@ export interface CliRefreshResult {
 export const cnbAuthMethod = useStorage<'oauth' | 'pat' | ''>('cnb-auth-method', '')
 /** OAuth access_token 过期时间（Unix 秒；PAT 登录恒为 0） */
 export const cnbTokenExpiresAt = useStorage<number>('cnb-token-expires-at', 0)
+/**
+ * OAuth 令牌授权范围（token 端点响应的 `scope` 原文，空格分隔）。
+ *
+ * '' 表示"未知"（未登录 / PAT / 尚未采集过）—— 空串不可能是合法的 scope
+ * 原文（OAuth 至少授予一个范围），因此不需要额外的"已知为空"哨兵值。
+ * 采集来源：cnb_cli_refresh_token（force 刷新）响应的 scope 字段。
+ */
+export const cnbTokenScopes = useStorage<string>('cnb-token-scopes', '')
 
 /** 轮询间隔 2s；整体超时 5 分钟（设备码有效期更长，但 5 分钟足够完成授权） */
 const LOGIN_POLL_INTERVAL_MS = 2000
@@ -232,6 +246,9 @@ export async function applyCliToken(info: CliTokenInfo): Promise<CnbUser> {
     cnbUser.value = normalized
     cnbAuthMethod.value = 'oauth'
     cnbTokenExpiresAt.value = info.expiresAt
+    // 新授权的 scope 必须重置：CLI 落盘的令牌文件不含 scope，本次授权的
+    // 授权范围要在首次采集后才知道；残留旧会话的缓存会导致权限误判
+    cnbTokenScopes.value = ''
     return normalized
   } catch (err) {
     // 校验失败：回滚令牌与登录方式（过期时间置 0），保持未登录状态干净
@@ -255,6 +272,85 @@ export async function applyCliToken(info: CliTokenInfo): Promise<CnbUser> {
 export function markPatLogin(): void {
   cnbAuthMethod.value = 'pat'
   cnbTokenExpiresAt.value = 0
+  // PAT 与 OAuth 是两套令牌体系：清掉可能残留的 OAuth scope 缓存
+  // （hasCnbScope 对 pat 恒返回 null，这里清理是为了数据整洁与防串用）
+  cnbTokenScopes.value = ''
+}
+
+/**
+ * 判断 scope 原文是否包含指定权限（纯函数，导出供单元测试）。
+ *
+ * OAuth2 scope 列表以空白分隔；兼容服务端改用逗号分隔的可能
+ * （split 两种分隔符都按词切）。空原文返回 false —— 调用方需先用
+ * hasCnbScope 的 null 语义区分"未知"与"确定不含"。
+ */
+export function scopeIncludes(rawScopes: string, name: string): boolean {
+  if (!rawScopes.trim()) {
+    return false
+  }
+  return rawScopes
+    .split(/[\s,]+/)
+    .filter(Boolean)
+    .includes(name)
+}
+
+/**
+ * 当前令牌是否拥有指定权限（三态）：
+ * - true / false：已知（OAuth 登录且已采集过 scope），可做静态判定；
+ * - null：未知（PAT 登录 / OAuth 尚未采集 / 未登录）—— 调用方按各自
+ *   策略回退（如资料页 OAuth 未知时强制采集一次，PAT 乐观放行）。
+ */
+export function hasCnbScope(name: string): boolean | null {
+  if (cnbAuthMethod.value !== 'oauth' || !cnbTokenScopes.value) {
+    return null
+  }
+  return scopeIncludes(cnbTokenScopes.value, name)
+}
+
+/**
+ * 从 OAuth token 响应解析 scope 列表（纯函数，导出供单元测试）。
+ * 返回 null 表示响应中无有效 scope（调用方应保持"未知"状态，不清空缓存）。
+ */
+export function parseScopesFromTokenResponse(scope: string | null | undefined): string | null {
+  if (typeof scope !== 'string' || !scope.trim()) {
+    return null
+  }
+  return scope.trim()
+}
+
+/**
+ * 强制刷新一次 OAuth 令牌以采集授权范围（scope 采集入口）。
+ *
+ * 为什么需要：CNB 无 scope 查询端点，唯一能拿到"本令牌有哪些权限"真值的
+ * 地方是 token 端点响应 —— 应用只在真实刷新时才能看到它。存量会话
+ * （scope 缓存为空）首次需要判定权限时，force 刷新一次即可采集
+ * （access_token / refresh_token 轮换后 Rust 侧已写回 CLI 令牌文件，
+ * 两端保持同步；令牌本就可用，轮换无副作用）。
+ *
+ * 失败语义：返回 false 但**不清登录态** —— 与 refreshCliTokenIfNeeded 的
+ * "刷新失败即登出"不同，这里的采集是权限判定用途，失败只回退到
+ * "scope 未知"状态，由调用方按默认策略处理（如资料页 OAuth 默认禁用）。
+ */
+export async function harvestCnbScopes(): Promise<boolean> {
+  if (!isTauriEnv() || cnbAuthMethod.value !== 'oauth' || !cnbToken.value) {
+    return false
+  }
+  try {
+    const result = await invokeCli<CliRefreshResult>('cnb_cli_refresh_token', { force: true })
+    cnbToken.value = result.accessToken
+    cnbTokenExpiresAt.value = result.expiresAt
+    const scopes = parseScopesFromTokenResponse(result.scope)
+    if (scopes) {
+      cnbTokenScopes.value = scopes
+      return true
+    }
+    // 响应没有 scope 字段：保持未知（不写缓存），让调用方走默认策略
+    return false
+  }
+  catch {
+    // 采集失败（网络/refresh_token 失效）：静默回退"未知"，不误清登录态
+    return false
+  }
 }
 
 /**
@@ -277,6 +373,11 @@ export async function refreshCliTokenIfNeeded(): Promise<boolean> {
     const result = await refreshCliToken()
     cnbToken.value = result.accessToken
     cnbTokenExpiresAt.value = result.expiresAt
+    // 顺手采集授权范围：真实刷新的响应里带 scope（见 harvestCnbScopes 注释）
+    const scopes = parseScopesFromTokenResponse(result.scope)
+    if (scopes) {
+      cnbTokenScopes.value = scopes
+    }
     return true
   } catch {
     // 刷新失败：令牌已不可用，清除登录态引导重新授权（不清 CLI 侧令牌 ——
@@ -284,6 +385,8 @@ export async function refreshCliTokenIfNeeded(): Promise<boolean> {
     logout()
     cnbAuthMethod.value = ''
     cnbTokenExpiresAt.value = 0
+    // 登录态已清，scope 缓存同步失效（避免下个会话误用旧令牌的权限结论）
+    cnbTokenScopes.value = ''
     return true
   }
 }

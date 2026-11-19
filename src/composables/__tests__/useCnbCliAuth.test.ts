@@ -19,7 +19,12 @@ vi.mock('../i18n', () => ({
   i18n: { global: { t: (key: string) => key } },
 }))
 
-import { extractUserCode, isTokenExpiring } from '../useCnbCliAuth'
+import {
+  extractUserCode,
+  isTokenExpiring,
+  parseScopesFromTokenResponse,
+  scopeIncludes,
+} from '../useCnbCliAuth'
 
 // ---------------------------------------------------------------------------
 // isTokenExpiring：OAuth 令牌临期/过期判定（<10min 临界，与 Rust 侧语义一致）
@@ -89,5 +94,58 @@ describe('extractUserCode', () => {
   it('非法 URL → 空串（子进程输出按不可信文本处理）', () => {
     expect(extractUserCode('not a url')).toBe('')
     expect(extractUserCode('')).toBe('')
+  })
+})
+
+// ---------------------------------------------------------------------------
+// scopeIncludes：OAuth scope 原文（空格分隔）的成员判定
+// ---------------------------------------------------------------------------
+
+describe('scopeIncludes', () => {
+  it('标准空格分隔列表：命中', () => {
+    expect(scopeIncludes('repo-code:r account-profile:rw', 'account-profile:rw')).toBe(true)
+  })
+
+  it('未授予的权限：不命中', () => {
+    expect(scopeIncludes('repo-code:r repo-issue:r', 'account-profile:rw')).toBe(false)
+  })
+
+  it('前缀相同但语义不同的 scope：不误判（精确匹配整词）', () => {
+    // repo-code:r 不是 repo-code:rw 的前缀命中 —— 必须整词相等
+    expect(scopeIncludes('repo-code:r', 'repo-code:rw')).toBe(false)
+    expect(scopeIncludes('repo-code:rw', 'repo-code:r')).toBe(false)
+  })
+
+  it('兼容逗号分隔（服务端格式变化的宽容处理）', () => {
+    expect(scopeIncludes('repo-code:r,account-profile:rw', 'account-profile:rw')).toBe(true)
+  })
+
+  it('多余空白不影响判定', () => {
+    expect(scopeIncludes('  repo-code:r   account-profile:rw  ', 'account-profile:rw')).toBe(true)
+  })
+
+  it('空原文：false（"未知"语义由 hasCnbScope 的 null 分支承载）', () => {
+    expect(scopeIncludes('', 'account-profile:rw')).toBe(false)
+    expect(scopeIncludes('  ', 'account-profile:rw')).toBe(false)
+  })
+})
+
+// ---------------------------------------------------------------------------
+// parseScopesFromTokenResponse：token 响应 scope 字段解析（宽容归一）
+// ---------------------------------------------------------------------------
+
+describe('parseScopesFromTokenResponse', () => {
+  it('正常字符串：trim 后原样返回', () => {
+    expect(parseScopesFromTokenResponse('repo-code:r account-profile:rw')).toBe(
+      'repo-code:r account-profile:rw',
+    )
+    expect(parseScopesFromTokenResponse('  repo-code:r  ')).toBe('repo-code:r')
+  })
+
+  it('缺失 / 空串 / 纯空白：null（保持"未知"状态，不清空缓存）', () => {
+    expect(parseScopesFromTokenResponse(undefined)).toBeNull()
+    expect(parseScopesFromTokenResponse(null)).toBeNull()
+    expect(parseScopesFromTokenResponse('')).toBeNull()
+    expect(parseScopesFromTokenResponse('   ')).toBeNull()
   })
 })

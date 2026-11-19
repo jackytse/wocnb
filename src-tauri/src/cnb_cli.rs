@@ -19,7 +19,10 @@
 //! - 令牌刷新（refreshAccessToken，dist/index.js @948223 附近）：POST
 //!   `{platform_url}/oauth2/token`，form `grant_type=refresh_token` +
 //!   `refresh_token` + `client_id` —— 设备流 client 无 secret，**不用** Basic
-//!   认证；响应含 access_token / expires_in / refresh_token（可选）；
+//!   认证；响应含 access_token / expires_in / refresh_token（可选）以及
+//!   `scope`（OAuth 授权范围，空格分隔）—— CLI 收到 scope 后直接丢弃、
+//!   也不落盘，应用侧必须自行捕获（cnb_cli_refresh_token 已捕获并随
+//!   CliRefreshResult 返回，供前端做写权限静态判定，见 CliRefreshResult）；
 //! - 令牌文件（getTokenPath，dist/index.js @943693 附近）：`homedir/.cnb/token`，
 //!   JSON `{ "auths": { "<host>": { access_token, refresh_token?, expires_at,
 //!   platform_url, client_id, login_host } } }`（2 空格缩进、0600 权限）；
@@ -1992,6 +1995,16 @@ pub struct CliRefreshResult {
     pub expires_at: i64,
     /// 是否真的发生了刷新（false = 令牌仍有效）
     pub refreshed: bool,
+    ///
+    /// OAuth 授权范围（token 端点响应的 `scope` 字段，空格分隔）。
+    ///
+    /// 为什么捕获它：CNB 没有 scope 查询端点、令牌本体是不透明字符串
+    /// （非 JWT），唯一能拿到"本令牌有哪些权限"真值的地方就是 token
+    /// 端点的响应 —— cnb-cli 收到后直接丢弃，应用侧必须自己捕获。
+    /// 前端据此做写权限静态判定（如 account-profile:rw → 资料可否编辑），
+    /// 彻底替代"幂等回写探测"。仅在发生真实刷新时才有值（未刷新时
+    /// 响应不可得，返回 None）。
+    pub scope: Option<String>,
 }
 
 /// Tauri 命令：按需刷新 OAuth 令牌（临期 <10min 或已过期时）。
@@ -1999,26 +2012,37 @@ pub struct CliRefreshResult {
 /// 端点与参数依据 cnb-cli 源码 refreshAccessToken（dist/index.js @948223 附近）：
 /// POST `{platform_url}/oauth2/token`，form `grant_type=refresh_token` +
 /// `refresh_token` + `client_id`（设备流 client 无 secret，**不用** Basic 认证）；
-/// 响应 200 JSON 含 access_token / expires_in / refresh_token（可选）。
+/// 响应 200 JSON 含 access_token / expires_in / refresh_token（可选）以及
+/// `scope`（OAuth 授权范围，见 CliRefreshResult.scope 注释）。
 /// 刷新成功后写回 ~/.cnb/token 保持 CLI 侧登录态同步。
+///
+/// # 参数 force（写权限静态判定的采集入口）
+///
+/// `force=true` 时跳过"临期才刷新"的短路，无条件执行一次真实刷新。
+/// 用途：前端在 scope 未知时强制采集一次授权范围（换 token 是无副作用的
+/// —— access_token 轮换、refresh_token 轮换后写回文件，两端保持同步），
+/// 之后即可在本地做 `hasScope()` 静态判定，不再需要任何探测性写请求。
 ///
 /// 分步说明（每一步的失败都返回可读错误，绝不静默降级）：
 /// 1. 读令牌文件 → 无令牌：直接报"请先授权登录"；
-/// 2. 未临期（距过期 >10min）→ 直接返回现值，refreshed=false（零网络开销）；
+/// 2. 未临期（距过期 >10min）且未 force → 直接返回现值，refreshed=false（零网络开销）；
 /// 3. 无 refresh_token（如手写 PAT）→ 无法刷新，引导重新授权；
 /// 4. 发刷新请求 → 非 200 只透出状态码（绝不打印令牌）；
 /// 5. 解析响应 → 缺 access_token 视为失败；
 /// 6. 写回令牌文件（保留其余 host 条目）。
 #[tauri::command]
-pub async fn cnb_cli_refresh_token() -> Result<CliRefreshResult, String> {
+pub async fn cnb_cli_refresh_token(force: Option<bool>) -> Result<CliRefreshResult, String> {
     let entry = read_token_entry().ok_or("未找到 CNB 登录令牌（~/.cnb/token），请先授权登录")?;
     let now = now_unix_secs();
-    if !is_token_expired_or_expiring(entry.expires_at, now, REFRESH_MARGIN_SECS) {
-        // 仍有效且距过期超过 10 分钟：无需刷新
+    if !force.unwrap_or(false)
+        && !is_token_expired_or_expiring(entry.expires_at, now, REFRESH_MARGIN_SECS)
+    {
+        // 仍有效且距过期超过 10 分钟、且未被强制采集：无需刷新
         return Ok(CliRefreshResult {
             access_token: entry.access_token,
             expires_at: entry.expires_at,
             refreshed: false,
+            scope: None,
         });
     }
     let Some(refresh_token) = entry.refresh_token.clone().filter(|s| !s.is_empty()) else {
@@ -2083,6 +2107,8 @@ pub async fn cnb_cli_refresh_token() -> Result<CliRefreshResult, String> {
         .map(String::from)
         .filter(|s| !s.is_empty())
         .or_else(|| entry.refresh_token.clone());
+    // scope 字段：OAuth2 标准为空格分隔的授权范围列表；空串/缺失一律归 None
+    let scope = extract_scope_from_body(&body);
 
     // 写回令牌文件保持 CLI 同步（保留其余 host 的登录态）
     update_token_entry(
@@ -2096,7 +2122,19 @@ pub async fn cnb_cli_refresh_token() -> Result<CliRefreshResult, String> {
         access_token: new_access_token,
         expires_at: new_expires_at,
         refreshed: true,
+        scope,
     })
+}
+
+/// 从 token 端点响应体中提取 `scope` 字段（独立成纯函数便于单测）。
+///
+/// 宽容解析：字符串按原文返回（空串归 None），数组/其他类型不硬性拒绝
+/// —— 服务端格式变化时宁可少给（前端回退默认判定），不要因解析崩溃。
+pub(crate) fn extract_scope_from_body(body: &serde_json::Value) -> Option<String> {
+    match body.get("scope") {
+        Some(serde_json::Value::String(s)) if !s.trim().is_empty() => Some(s.trim().to_string()),
+        _ => None,
+    }
 }
 
 /// Tauri 命令：在 CLI 侧退出登录（两端一致）。
@@ -3744,6 +3782,43 @@ mod tests {
 
             cleanup_login_session(handle);
             let _ = std::fs::remove_dir_all(&dir);
+        }
+
+        // -------------------------------------------------------------------
+        // extract_scope_from_body：token 端点响应 scope 字段的宽容解析
+        // -------------------------------------------------------------------
+
+        #[test]
+        fn test_extract_scope_normal_string() {
+            // 标准形态：OAuth2 空格分隔的授权范围列表（cnb_cli 客户端实测形态）
+            let body: serde_json::Value =
+                serde_json::json!({"access_token": "x", "scope": "repo-code:r account-profile:r"});
+            assert_eq!(
+                extract_scope_from_body(&body).as_deref(),
+                Some("repo-code:r account-profile:r")
+            );
+        }
+
+        #[test]
+        fn test_extract_scope_trims_whitespace() {
+            // 前后空白：trim 后返回（前端 split 时按空白切分，多余空白无意义）
+            let body = serde_json::json!({"scope": "  repo-code:r  "});
+            assert_eq!(extract_scope_from_body(&body).as_deref(), Some("repo-code:r"));
+        }
+
+        #[test]
+        fn test_extract_scope_missing_or_empty_is_none() {
+            // 缺失 / 空串 / 纯空白：一律 None（前端按"未知"处理，回退默认判定）
+            assert_eq!(extract_scope_from_body(&serde_json::json!({})), None);
+            assert_eq!(extract_scope_from_body(&serde_json::json!({"scope": ""})), None);
+            assert_eq!(extract_scope_from_body(&serde_json::json!({"scope": "  "})), None);
+        }
+
+        #[test]
+        fn test_extract_scope_non_string_is_none() {
+            // 类型异常（服务端格式变化）：不崩溃，归 None —— 宁可少给不误判
+            assert_eq!(extract_scope_from_body(&serde_json::json!({"scope": 42})), None);
+            assert_eq!(extract_scope_from_body(&serde_json::json!({"scope": null})), None);
         }
     }
 }
