@@ -5,14 +5,14 @@
 #   macOS 线在 release-macos 的 publish-manifest 阶段生成并上传 latest.json
 #   （此前只有 darwin-aarch64 条目）。Windows 线现在也能产出 NSIS 安装包 +
 #   .sig 签名（64 位 makensis 装配解锁，见 .cnb.yml build-x64 注释），需要在
-#   自己的流水线末尾把 windows-x64 条目合并进同一份清单。
+#   自己的流水线末尾把 windows-x86_64 条目合并进同一份清单。
 #
 # 合并策略（双向防覆盖）：
 #   1) 下载现网 updater-manifest Release 的 latest.json（匿名可读）；
 #   2) version 与本次一致 → 保留其 platforms 里已有的其他条目（darwin-*）；
 #      version 不同（上一版本的旧清单）→ 只发 windows 条目；
 #      下载失败（首次发版/网络）→ 只发 windows 条目；
-#   3) 写入/覆盖 windows-x64 条目 → 上传（只上传不删除，与 macOS 同构）。
+#   3) 写入/覆盖 windows-x86_64 条目 → 上传（只上传不删除，与 macOS 同构）。
 #   时序假设：Windows build-x64 耗时远大于 macOS 全流水线（实测 ~11min vs
 #   ~2min），Windows 合并时现网清单几乎必然已是本次版本；macOS 端
 #   collect-updater-macos.sh 也有对称的合并逻辑兜底反向竞态。
@@ -56,7 +56,7 @@ $sigPath = Get-ChildItem -Path $dirPath -Filter '*.sig' -File -ErrorAction Silen
     Where-Object { $_.Name -like 'wocnb-*-setup.exe.sig' } |
     Sort-Object LastWriteTime -Descending | Select-Object -First 1
 if (-not $sigPath) {
-    Write-Host "==> 未找到 *-setup.exe.sig（打包走了降级链路），跳过 windows-x64 清单发布"
+    Write-Host "==> 未找到 *-setup.exe.sig（打包走了降级链路），跳过 windows-x86_64 清单发布"
     exit 0
 }
 $signature = (Get-Content -Raw -Path $sigPath.FullName).Trim()
@@ -84,7 +84,7 @@ $platforms = New-Object PSObject
 if ($null -ne $existing -and $existing.version -eq $Version) {
     foreach ($prop in $existing.platforms.PSObject.Properties) {
         # 跳过本条目自身（下方强制写入最新值）与 darwin 条目保留
-        if ($prop.Name -ne 'windows-x64') {
+        if ($prop.Name -ne 'windows-x86_64') {
             $platforms | Add-Member -MemberType NoteProperty -Name $prop.Name -Value $prop.Value
         }
     }
@@ -92,7 +92,7 @@ if ($null -ne $existing -and $existing.version -eq $Version) {
 $winEntry = New-Object PSObject
 $winEntry | Add-Member -MemberType NoteProperty -Name 'signature' -Value $signature
 $winEntry | Add-Member -MemberType NoteProperty -Name 'url' -Value $assetUrl
-$platforms | Add-Member -MemberType NoteProperty -Name 'windows-x64' -Value $winEntry
+$platforms | Add-Member -MemberType NoteProperty -Name 'windows-x86_64' -Value $winEntry
 
 $manifest = New-Object PSObject
 $manifest | Add-Member -MemberType NoteProperty -Name 'version' -Value $Version
@@ -119,13 +119,13 @@ powershell -NoProfile -File (Join-Path $ScriptDir 'release-upload.ps1') -Dir $ou
 if ($LASTEXITCODE) { exit $LASTEXITCODE }
 
 # ---------------------------------------------------------------------------
-# 6) 上传后回读自校验：windows-x64 必须在列（防上传竞态静默丢条目）
+# 6) 上传后回读自校验：windows-x86_64 必须在列（防上传竞态静默丢条目）
 # ---------------------------------------------------------------------------
 Start-Sleep -Seconds 5
 $check = Invoke-WebRequest -UseBasicParsing -Uri 'https://cnb.cool/jackytse/wocnb/-/releases/download/updater-manifest/latest.json' -TimeoutSec 60
 $checkManifest = $check.Content | ConvertFrom-Json
-if ($null -eq $checkManifest.platforms.'windows-x64') {
-    throw '自校验失败：上传后回读清单仍无 windows-x64 条目（疑似与 macOS publish-manifest 竞态互相覆盖）'
+if ($null -eq $checkManifest.platforms.'windows-x86_64') {
+    throw '自校验失败：上传后回读清单仍无 windows-x86_64 条目（疑似与 macOS publish-manifest 竞态互相覆盖）'
 }
-Write-Host '==> 自校验通过：windows-x64 条目已在 updater-manifest 清单中'
+Write-Host '==> 自校验通过：windows-x86_64 条目已在 updater-manifest 清单中'
 Write-Host ("    平台条目：" + (($checkManifest.platforms.PSObject.Properties.Name) -join ', '))

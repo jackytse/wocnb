@@ -139,7 +139,7 @@ manifest = {
 }
 
 # 双向合并（2026-11-19 起 Windows 也参与热更新）：现网清单若已是本次版本，
-# 保留其中非 darwin 平台条目（windows-x64 由 release-windows 的
+# 保留其中非 darwin 平台条目（windows-x86_64 由 release-windows 的
 # publish-manifest 阶段写入）。两边各自"保留对方条目"即可消除
 # "后上传者覆盖先上传者"的竞态丢失窗口；版本不同（上一版旧清单）则整份替换。
 try:

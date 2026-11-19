@@ -15,9 +15,12 @@
  * 更新器必须依赖 NSIS/MSI 安装器产物替换，而 Windows 构建节点曾因
  * **32 位 makensis 在容器里起不来**（Windows Server 容器禁用 WoW64，
  * 0xC0000135）只能出裸 exe → 无签名产物 → 进不了 updater 清单。
- * 现已改用 MSYS2 的 64 位 makensis（与 tauri 同版本 3.13、静态链接）装配，
- * Windows 出 NSIS 安装包 + .sig 并写入清单 windows-x64 条目（见 .cnb.yml
+ * 现已改用 MSYS2 的 64 位 makensis 装配（与 tauri 同版本 3.13、静态链接，
+ * 且编译目标必须是 amd64-unicode —— 该编译器只带 amd64 的 stub/插件），
+ * Windows 出 NSIS 安装包 + .sig 并写入清单 windows-x86_64 条目（见 .cnb.yml
  * build-x64 与 scripts/ci/publish-manifest-windows.ps1）。
+ * ⚠️ 清单平台键必须是 OS-ARCH 形式（windows-x86_64），写成 windows-x64 时
+ * updater 匹配不到平台，表现为「永远没有更新」且不报错。
  * ⚠️ 旧版本客户端 / CI 降级链路仍可能遇到清单缺 windows 条目的情况，
  * installUpdate 捕获后降级为「前往 Releases 手动下载」的兜底逻辑**保留**。
  *
@@ -53,7 +56,7 @@
  * update.version 必须等于当前通道检测出的 latestVersion，不等则拒绝安装
  * 并引导手动下载。
  *
- * Windows 端降级（兜底保留）：自 2026-11-19 起清单含 windows-x64 条目
+ * Windows 端降级（兜底保留）：自 2026-11-19 起清单含 windows-x86_64 条目
  * （NSIS setup.exe + .sig），Windows 与 macOS 一样走应用内更新；仅当
  * 清单缺条目（旧版清单 / CI 降级链路出裸 exe）时 check() 失败或找不到
  * 平台项，installUpdate 捕获后走 failed 分支，UI 引导手动下载。

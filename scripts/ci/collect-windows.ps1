@@ -126,7 +126,7 @@ try {
     # ------------------------------------------------------------------
     # 4) 收集热更新签名（NSIS + createUpdaterArtifacts 时产生 *.sig）
     #    Windows 热更新链路（2026-11-19）：setup.exe 进 updater 清单的
-    #    windows-x64 条目必须带 .sig（minisign 签名），缺失时客户端验签
+    #    windows-x86_64 条目必须带 .sig（minisign 签名），缺失时客户端验签
     #    必失败。裸 exe / msi 路径没有 sig（不参与热更新），静默跳过。
     # ------------------------------------------------------------------
     if ($srcFile.Directory.Name -eq 'nsis') {
