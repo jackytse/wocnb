@@ -19,7 +19,7 @@
  */
 import { computed, ref } from 'vue'
 import { useI18n } from 'vue-i18n'
-import { openUrl } from '@tauri-apps/plugin-opener'
+import { openUrl, openPath, revealItemInDir } from '@tauri-apps/plugin-opener'
 import { CNB_API_BASE, cnbToken } from '../../composables/useCnbAuth'
 import { downloadArchive, isTauri } from '../../utils/tauriDownload'
 import { repoSiteUrl } from '../../composables/useCnbRepo'
@@ -70,6 +70,46 @@ function webArchiveUrl(format: ArchiveFormat): string {
   return repoSiteUrl(props.repoPath, `/-/git/archive/${encodeURIComponent(props.gitRef)}.${format}`)
 }
 
+/**
+ * 在系统文件管理器中定位文件（「在文件所在目录显示」动作）。
+ *
+ * 走 opener 插件 revealItemInDir（打开目录并选中该文件，与浏览器
+ * 「打开所在文件夹」体验一致）；失败只弹警告 toast 不打断交互。
+ */
+async function onRevealFile(path: string): Promise<void> {
+  try {
+    await revealItemInDir(path)
+  }
+  catch (err) {
+    console.warn('[wocnb] 定位文件失败:', err)
+    toast.add({
+      title: t('repo.code.downloadActionFailed'),
+      color: 'warning',
+      duration: 4000,
+    })
+  }
+}
+
+/**
+ * 用系统默认程序打开下载的压缩包（「打开文件」动作）。
+ *
+ * 走 opener 插件 openPath（macOS → Finder 默认解压程序 / Windows →
+ * 资源管理器或压缩工具，由系统 association 决定）；失败同样只警告。
+ */
+async function onOpenFile(path: string): Promise<void> {
+  try {
+    await openPath(path)
+  }
+  catch (err) {
+    console.warn('[wocnb] 打开文件失败:', err)
+    toast.add({
+      title: t('repo.code.downloadActionFailed'),
+      color: 'warning',
+      duration: 4000,
+    })
+  }
+}
+
 /** 执行下载：成功 toast + 失败透出错误；unsupported 时外跳网页端 */
 async function onDownload(format: ArchiveFormat) {
   if (downloading.value || !refReady.value || isSecret.value) {
@@ -95,11 +135,24 @@ async function onDownload(format: ArchiveFormat) {
       }
     }
     else if (result.ok) {
+      // 下载成功：提示弹窗带两个动作（2026-11-20 需求）——
+      // 「在文件所在目录显示」定位到文件 / 「打开文件」系统默认程序打开；
+      // 时长放宽到 8s 给用户反应时间，超时自动消失不打扰
       toast.add({
         title: t('repo.code.downloadSuccess'),
         description: result.path,
         color: 'success',
-        duration: 4000,
+        duration: 8000,
+        actions: [
+          {
+            label: t('repo.code.downloadReveal'),
+            onClick: () => void onRevealFile(result.path),
+          },
+          {
+            label: t('repo.code.downloadOpen'),
+            onClick: () => void onOpenFile(result.path),
+          },
+        ],
       })
     }
     else {
