@@ -24,7 +24,7 @@
  * - docker 的 dto.ContainerTag **没有 size/digest/status** → 从 images[]
  *   派生：size = Σ images[].size、digest = images[0]?.digest、arches = images[].arch。
  */
-import { cnbFetch, CnbApiError } from './useCnbAuth'
+import { cnbFetch, cnbFetchVoid, CnbApiError } from './useCnbAuth'
 
 /**
  * 制品类型枚举（dto.PackageType，swagger 13 值）—— 从路由层取的原因（§8.2
@@ -516,9 +516,14 @@ export async function fetchPackageProvenance(
 /**
  * 删除制品（DELETE /{slug}/-/packages/{type}/{name}）。
  * 破坏性操作 —— UI 必须经 ConfirmDialog 输入制品名确认。
+ *
+ * 必须走 cnbFetchVoid（空 body 写端点红线）：swagger 标注 200 响应体为空，
+ * 走 cnbFetch 会在 response.json() 解析空 body 处抛异常 —— WKWebView 报
+ * "The string did not match the expected pattern."，制品实际已删除成功
+ * 却被 toast 误报失败（2026-11-20 用户实测踩坑）。
  */
 export async function deletePackage(slug: string, type: PackageType, name: string): Promise<void> {
-  await cnbFetch(
+  await cnbFetchVoid(
     `/${encodeSlug(slug)}/-/packages/${encodeURIComponent(type)}/${encodeURIComponent(name)}`,
     { method: 'DELETE' },
   )
@@ -527,6 +532,7 @@ export async function deletePackage(slug: string, type: PackageType, name: strin
 /**
  * 删除制品标签（DELETE …/-/tag/{tag}）。
  * 破坏性操作 —— UI 必须经 ConfirmDialog 输入 tag 名确认。
+ * 空 body 走 cnbFetchVoid 的原因同 deletePackage 注释。
  */
 export async function deletePackageTag(
   slug: string,
@@ -534,7 +540,7 @@ export async function deletePackageTag(
   name: string,
   tag: string,
 ): Promise<void> {
-  await cnbFetch(
+  await cnbFetchVoid(
     `/${encodeSlug(slug)}/-/packages/${encodeURIComponent(type)}/${encodeURIComponent(name)}/-/tag/${encodeURIComponent(tag)}`,
     { method: 'DELETE' },
   )

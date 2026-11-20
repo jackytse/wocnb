@@ -10,6 +10,8 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
 const cnbFetchMock = vi.fn()
+// cnbFetchVoid mock：删除制品/标签走空 body 通道（2026-11-20 修复），断言同 cnbFetch
+const cnbFetchVoidMock = vi.fn()
 
 vi.mock('../useCnbAuth', () => {
   class FakeCnbApiError extends Error {
@@ -23,6 +25,7 @@ vi.mock('../useCnbAuth', () => {
   }
   return {
     cnbFetch: (...args: unknown[]) => cnbFetchMock(...args),
+    cnbFetchVoid: (...args: unknown[]) => cnbFetchVoidMock(...args),
     cnbFetchText: vi.fn(),
     CnbApiError: FakeCnbApiError,
   }
@@ -39,6 +42,7 @@ import {
 
 beforeEach(() => {
   cnbFetchMock.mockReset()
+  cnbFetchVoidMock.mockReset()
 })
 
 // ---------------------------------------------------------------------------
@@ -196,9 +200,10 @@ describe('fetchPackages fanout（R13）', () => {
 
 describe('deletePackageTag', () => {
   it('DELETE 到 …/-/tag/{tag}，type/tag 逐段编码、name 整段编码', async () => {
-    cnbFetchMock.mockResolvedValueOnce({})
+    // 删除走 cnbFetchVoid（空 body 写端点红线，2026-11-20 修复误报失败）
+    cnbFetchVoidMock.mockResolvedValueOnce(undefined)
     await deletePackageTag('org/repo', 'docker', 'my/app', 'v1.0.0')
-    const [path, options] = cnbFetchMock.mock.calls[0] as [string, { method: string }]
+    const [path, options] = cnbFetchVoidMock.mock.calls[0] as [string, { method: string }]
     // 制品名（如 docker 的 my/app）含 '/'，但 swagger 把 {name} 声明为单个
     // path 段 —— 必须整段编码成 %2F 才不破坏路径结构（与 fetchPackageDetail
     // 同一口径），故期望 my%2Fapp 而非 my/app
