@@ -1382,6 +1382,8 @@ export default {
       title: '快捷键',
       desc: '应用内已注册的键盘快捷键（如实列出，无虚假键位）。',
       search: '打开全局搜索',
+      openSettings: '打开设置',
+      closeWindow: '关闭主窗口（隐藏到托盘）',
       esc: '关闭弹窗 / 抽屉 / 下拉菜单',
       goHome: '跳转首页',
       goSettings: '跳转设置',

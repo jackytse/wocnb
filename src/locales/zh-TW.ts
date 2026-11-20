@@ -1355,6 +1355,8 @@ export default {
       title: '快速鍵',
       desc: '應用內已註冊的鍵盤快速鍵（如實列出，無虛假鍵位）。',
       search: '開啟全域搜尋',
+      openSettings: '開啟設定',
+      closeWindow: '關閉主視窗（隱藏到系統匣）',
       esc: '關閉彈窗 / 側邊抽屜 / 下拉選單',
       goHome: '跳轉首頁',
       goSettings: '跳轉設定',

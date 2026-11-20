@@ -60,6 +60,10 @@ tauri-plugin-process = "2"
 # window-state：关闭时记住窗口尺寸/位置，下次启动恢复（保持用户上次
 # 关闭时的窗口大小；tauri.conf.json 的 minWidth/minHeight 仍然生效）
 tauri-plugin-window-state = "2"
+# single-instance：应用全局只允许一个实例。第二个实例启动时由插件把
+# 命令行参数/工作目录转交给已运行实例后自行退出，已运行实例在 init 回调
+# 里把主窗口唤到前台（与托盘"打开应用"同路径 show_main_window）
+tauri-plugin-single-instance = "2"
 # rusqlite：本地 SQLite 通知持久化（构建通知 + 应用通知）。
 # bundled：静态编译 SQLite C 源码，不依赖系统 libsqlite3（避免用户机器
 # 缺库导致启动失败）；表内以 username 列做账号数据隔离，登出默认保留

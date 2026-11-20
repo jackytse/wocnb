@@ -1,6 +1,7 @@
 import { ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { createSharedComposable } from '@vueuse/core'
+import { getCurrentWindow } from '@tauri-apps/api/window'
 
 /**
  * 通知面板开关 ref。
@@ -25,10 +26,21 @@ const _useDashboard = () => {
 
   // 快捷键（与设置页「快捷键」列表一致，新增/删除需同步 settings/shortcuts.vue）：
   // 注：g-i / g-c（收件箱/客户）已随模板清理移除，不再指向已删除页面
+  // 注：meta_ 前缀在 Nuxt UI 里跨平台自适应 —— macOS 触发 ⌘，Windows/Linux
+  // 自动改写为 Ctrl（见其 shortcuts 源码 !macOS && metaKey → ctrlKey），
+  // 所以这里只写一份 meta_,，三个平台各自拿到 ⌘+, / Ctrl+,（系统设置惯例键位）
   defineShortcuts({
     'g-h': () => router.push('/'),
     'g-s': () => router.push('/settings'),
-    'n': () => isNotificationsSlideoverOpen.value = !isNotificationsSlideoverOpen.value
+    'meta_,': () => router.push('/settings'),
+    'n': () => isNotificationsSlideoverOpen.value = !isNotificationsSlideoverOpen.value,
+    // Ctrl+W（macOS ⌘W）：关闭主窗口。语义与点窗口 X 按钮一致 —— 走
+    // getCurrentWindow().close() 触发 Tauri CloseRequested，Rust 侧
+    // on_window_event 里 hide + prevent_close（隐藏到托盘、后台常驻），
+    // 应用不会退出；真正退出走托盘菜单「退出应用」（app.exit(0)）。
+    // 权限依赖 capabilities/default.json 的 core:window:allow-close
+    // （core:default 只含窗口只读查询，close 不在其中，缺权限会静默拒绝）。
+    'meta_w': () => getCurrentWindow().close(),
   })
 
   watch(() => route.fullPath, () => {

@@ -1365,6 +1365,8 @@ export default {
       title: 'Keyboard shortcuts',
       desc: 'Keyboard shortcuts registered in the app (real bindings only).',
       search: 'Open global search',
+      openSettings: 'Open settings',
+      closeWindow: 'Close main window (hide to tray)',
       esc: 'Close modal / drawer / dropdown',
       goHome: 'Go to Home',
       goSettings: 'Go to Settings',

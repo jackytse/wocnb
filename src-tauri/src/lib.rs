@@ -382,6 +382,143 @@ fn rebuild_tray_menu() {
     TRAY_NATIVE_MENU.with(|slot| *slot.borrow_mut() = Some(menu));
 }
 
+/// 构建 Windows/Linux 托盘右键菜单（tauri::menu::Menu，Send+Sync 可挂托盘）。
+///
+/// # 为什么与 macOS 分两套构建函数
+///
+/// macOS 用 muda::Menu（非 Send/Sync）配合 AppKit 在光标处手动弹出，修复
+/// 多显示器弹错屏（见 popup_menu_at_cursor 注释），这套不能挂到托盘图标；
+/// Windows/Linux 则相反——把菜单挂到 TrayIconBuilder 上由系统按右键位置弹出
+/// 才是原生行为，且 Tauri 的 `.menu()` / `set_menu()` 要求 `ContextMenu`
+/// （Send+Sync），muda::Menu 不满足，必须用 tauri::menu::Menu。
+///
+/// 两条路径共用 `tray_menu_texts` 文案映射与**完全一致的 MenuId**，所以
+/// `on_menu_event` 那份跨平台分发逻辑（open/login/quit/...）两边都复用，
+/// 前端零改动。条目结构变化时必须同步改这里与 macOS 版，避免行为漂移。
+#[cfg(not(target_os = "macos"))]
+fn build_tray_menu_win(
+    app: &tauri::AppHandle,
+    locale: &str,
+    username: &str,
+) -> Result<tauri::menu::Menu<tauri::Wry>, String> {
+    use tauri::menu::{Menu, MenuId, MenuItem, PredefinedMenuItem};
+    let texts = tray_menu_texts(locale);
+    // 用 Result 收集构建错误：Tauri 菜单构建走主线程消息通道，理论上会
+    // 失败（如事件循环已停），任一环节失败即整体返回 Err，由调用方降级
+    let menu = Menu::new(app).map_err(|e| e.to_string())?;
+
+    // 打开应用（最高频入口置顶）
+    let open = MenuItem::with_id(
+        app,
+        MenuId::new("open"),
+        texts.open,
+        true,
+        None::<&str>,
+    )
+    .map_err(|e| e.to_string())?;
+    menu.append(&open).map_err(|e| e.to_string())?;
+
+    menu.append(&PredefinedMenuItem::separator(app).map_err(|e| e.to_string())?)
+        .map_err(|e| e.to_string())?;
+
+    if username.is_empty() {
+        let login = MenuItem::with_id(
+            app,
+            MenuId::new("login"),
+            texts.login,
+            true,
+            None::<&str>,
+        )
+        .map_err(|e| e.to_string())?;
+        menu.append(&login).map_err(|e| e.to_string())?;
+    } else {
+        // 禁态条目：仅展示当前账号（与 macOS 版一致）
+        let account = MenuItem::with_id(
+            app,
+            MenuId::new("account"),
+            username,
+            false,
+            None::<&str>,
+        )
+        .map_err(|e| e.to_string())?;
+        menu.append(&account).map_err(|e| e.to_string())?;
+        let profile = MenuItem::with_id(
+            app,
+            MenuId::new("profile"),
+            texts.profile,
+            true,
+            None::<&str>,
+        )
+        .map_err(|e| e.to_string())?;
+        menu.append(&profile).map_err(|e| e.to_string())?;
+        let logout = MenuItem::with_id(
+            app,
+            MenuId::new("logout"),
+            texts.logout,
+            true,
+            None::<&str>,
+        )
+        .map_err(|e| e.to_string())?;
+        menu.append(&logout).map_err(|e| e.to_string())?;
+    }
+
+    menu.append(&PredefinedMenuItem::separator(app).map_err(|e| e.to_string())?)
+        .map_err(|e| e.to_string())?;
+    let settings = MenuItem::with_id(
+        app,
+        MenuId::new("settings"),
+        texts.settings,
+        true,
+        None::<&str>,
+    )
+    .map_err(|e| e.to_string())?;
+    menu.append(&settings).map_err(|e| e.to_string())?;
+    let check = MenuItem::with_id(
+        app,
+        MenuId::new("check-update"),
+        texts.check_update,
+        true,
+        None::<&str>,
+    )
+    .map_err(|e| e.to_string())?;
+    menu.append(&check).map_err(|e| e.to_string())?;
+
+    menu.append(&PredefinedMenuItem::separator(app).map_err(|e| e.to_string())?)
+        .map_err(|e| e.to_string())?;
+    let quit = MenuItem::with_id(app, MenuId::new("quit"), texts.quit, true, None::<&str>)
+        .map_err(|e| e.to_string())?;
+    menu.append(&quit).map_err(|e| e.to_string())?;
+
+    Ok(menu)
+}
+
+/// Windows/Linux：重建并替换托盘图标上的菜单（语言/登录态变化时调用）。
+/// 通过 Manager::tray_by_id 拿到已构建的托盘实例，set_menu 原子替换；
+/// 失败只记日志、保留旧菜单，不打断语言/登录态切换主流程。
+#[cfg(not(target_os = "macos"))]
+fn rebuild_tray_menu_win(app: &tauri::AppHandle) {
+    let locale = tray_locale_slot()
+        .lock()
+        .map(|g| g.clone())
+        .unwrap_or_default();
+    let username = tray_auth_slot()
+        .lock()
+        .map(|g| g.clone())
+        .unwrap_or_default();
+    match build_tray_menu_win(app, &locale, &username) {
+        Ok(menu) => {
+            if let Some(tray) = app.tray_by_id(TRAY_ID) {
+                if let Err(err) = tray.set_menu(Some(menu)) {
+                    log::warn!("[tray] 替换托盘菜单失败: {err}");
+                }
+            } else {
+                log::warn!("[tray] 托盘实例未找到，菜单未更新");
+            }
+        }
+        Err(err) => log::warn!("[tray] 重建托盘菜单失败: {err}"),
+    }
+}
+
 // ---------------------------------------------------------------------------
 // macOS 应用菜单栏（屏幕顶部 menu bar）多语言
 // ---------------------------------------------------------------------------
@@ -611,6 +748,11 @@ fn set_tray_locale(app: tauri::AppHandle, locale: String) -> Result<(), String> 
         })
         .map_err(|e| format!("run_on_main_thread failed: {e}"))?;
     }
+    // Windows/Linux：菜单挂在托盘图标上，重建后 set_menu 替换即可。
+    // Tauri 菜单构建走主线程消息通道，这里直接调用内部会 run_main_thread，
+    // 故无需再包一层 run_on_main_thread（重复包会死锁）。
+    #[cfg(not(target_os = "macos"))]
+    rebuild_tray_menu_win(&app);
     Ok(())
 }
 
@@ -639,6 +781,9 @@ fn set_tray_auth(app: tauri::AppHandle, username: String) -> Result<(), String> 
         app.run_on_main_thread(rebuild_tray_menu)
             .map_err(|e| format!("run_on_main_thread failed: {e}"))?;
     }
+    // Windows/Linux：登录态变了要同步换菜单的登录/账号条目（同 set_tray_locale）
+    #[cfg(not(target_os = "macos"))]
+    rebuild_tray_menu_win(&app);
     Ok(())
 }
 
@@ -1462,7 +1607,9 @@ fn tray_panel_toggle_debounced() -> bool {    let now = std::time::Instant::now(
     skip
 }
 
-/// 在托盘图标正下方定位面板窗口（物理坐标直算，不做缩放换算）。
+/// 在托盘图标旁定位面板窗口（物理坐标直算，不做缩放换算）。
+/// 垂直方向由 `tray_panel_anchor` 按可用空间智能选「图标下方 / 图标上方」：
+/// Windows 任务栏在屏幕底部时自动翻到图标上方，避免面板贴着屏幕底边弹出。
 ///
 /// 坐标口径：TrayIconEvent 的 position/rect 均为**物理像素**（主屏左上
 /// 原点，y 向下）；窗口 set_position/outer_size 也吃物理坐标，全程同一
@@ -1479,6 +1626,67 @@ fn tray_panel_toggle_debounced() -> bool {    let now = std::time::Instant::now(
 /// macOS 上把目标点按**目标屏**的缩放系数转成逻辑坐标后走
 /// `set_position(LogicalPosition)`；Windows 的物理全局空间是原生 DPI
 /// 感知坐标（无此换算），保持 Physical 直传不引入额外误差。
+
+/// 图标与面板之间的垂直间距（物理像素，与托盘事件 rect 同口径）
+const TRAY_PANEL_GAP: f64 = 6.0;
+/// 面板与屏幕边缘的最小留白（物理像素）
+const TRAY_PANEL_EDGE_PADDING: f64 = 8.0;
+
+/// 计算托盘面板左上角的物理坐标（纯函数，便于多场景单测锁定）。
+///
+/// 垂直方向采用「智能翻转」：
+/// - 图标下方空间充足 → 面板贴在图标正下方（macOS 任务栏在顶部，天然如此）；
+/// - 下方空间不足（Windows 任务栏在底部，托盘图标就在屏幕最下沿）→ 翻到图标
+///   正上方，面板底边距图标顶边 `TRAY_PANEL_GAP`。
+///
+/// 修复前「永远向下 + clamp 到屏幕底边」会让面板贴着屏幕底边弹出，视觉上
+/// 「沉」进任务栏、观感偏低；翻转后是 Windows 托盘面板的标准行为（音量/
+/// 网络面板均如此）。
+///
+/// 两侧空间都不够（超小屏）时保持向下、跳过垂直夹取，避免 Rust 的
+/// `clamp(min, max)` 在 min > max 时 panic。
+fn tray_panel_anchor(
+    icon_x: f64,
+    icon_y: f64,
+    icon_w: f64,
+    icon_h: f64,
+    panel_w: f64,
+    panel_h: f64,
+    screen_x: f64,
+    screen_y: f64,
+    screen_w: f64,
+    screen_h: f64,
+) -> (f64, f64) {
+    // 水平：面板中心对齐图标中心
+    let mut px = icon_x + icon_w / 2.0 - panel_w / 2.0;
+    // 垂直：默认贴图标下方
+    let mut py = icon_y + icon_h + TRAY_PANEL_GAP;
+
+    // 翻转判定：下方能否完整容纳面板（含间距与边缘留白）
+    let needed = panel_h + TRAY_PANEL_GAP + TRAY_PANEL_EDGE_PADDING;
+    let below_space = screen_y + screen_h - (icon_y + icon_h);
+    let above_space = icon_y - screen_y;
+    if below_space < needed && above_space >= needed {
+        py = icon_y - panel_h - TRAY_PANEL_GAP;
+    }
+
+    // 夹取到目标屏范围内，避免贴边图标导致面板半幅飘出可视区域
+    if screen_w > panel_w + TRAY_PANEL_EDGE_PADDING * 2.0 {
+        px = px.clamp(
+            screen_x + TRAY_PANEL_EDGE_PADDING,
+            screen_x + screen_w - panel_w - TRAY_PANEL_EDGE_PADDING,
+        );
+    }
+    if screen_h > panel_h + TRAY_PANEL_EDGE_PADDING * 2.0 {
+        py = py.clamp(
+            screen_y + TRAY_PANEL_EDGE_PADDING,
+            screen_y + screen_h - panel_h - TRAY_PANEL_EDGE_PADDING,
+        );
+    }
+
+    (px, py)
+}
+
 fn position_tray_panel(
     app: &tauri::AppHandle,
     panel: &tauri::WebviewWindow,
@@ -1516,25 +1724,26 @@ fn position_tray_panel(
         })
         .unwrap_or((panel_size.width as f64, panel_size.height as f64));
 
-    let mut px = icon_x + icon_w / 2.0 - panel_w / 2.0;
-    let mut py = icon_y + icon_h + 6.0;
-
-    // 夹取到光标所在显示器（monitor_from_point 吃物理坐标）：
-    // 状态栏图标可能贴着屏幕边缘，不夹取面板会飘出可视区域
     if let Some(m) = monitor {
+        // 仅在 macOS 的物理→逻辑换算分支用到；Windows 直传物理坐标不需要，
+        // 用 cfg 限定声明避免 Windows 编译下的 unused 警告
+        #[cfg(target_os = "macos")]
         let target_scale = m.scale_factor();
         let mo = m.position();
         let ms = m.size();
-        let m_x = mo.x as f64;
-        let m_y = mo.y as f64;
-        let m_w = ms.width as f64;
-        let m_h = ms.height as f64;
-        if m_w > panel_w + 16.0 {
-            px = px.clamp(m_x + 8.0, m_x + m_w - panel_w - 8.0);
-        }
-        if m_h > panel_h + 16.0 {
-            py = py.clamp(m_y + 8.0, m_y + m_h - panel_h - 8.0);
-        }
+        // 按目标屏可用空间智能选「图标下方 / 图标上方」并夹取到屏幕内
+        let (px, py) = tray_panel_anchor(
+            icon_x,
+            icon_y,
+            icon_w,
+            icon_h,
+            panel_w,
+            panel_h,
+            mo.x as f64,
+            mo.y as f64,
+            ms.width as f64,
+            ms.height as f64,
+        );
         // macOS：物理 → 目标屏逻辑坐标（见函数头「多显示器坐标回归」）。
         // LogicalPosition 不经过窗口当前屏的缩放换算，跨屏落点始终正确
         #[cfg(target_os = "macos")]
@@ -1547,7 +1756,9 @@ fn position_tray_panel(
 
     // monitor_from_point 失败（极端环境）：按未夹取的原始物理坐标兜底，
     // 单屏场景与修复前行为一致（多屏场景可能漂移，但不会比原来更差）
-    let _ = panel.set_position(tauri::PhysicalPosition::new(px.round() as i32, py.round() as i32));
+    let fallback_x = (icon_x + icon_w / 2.0 - panel_w / 2.0).round() as i32;
+    let fallback_y = (icon_y + icon_h + TRAY_PANEL_GAP).round() as i32;
+    let _ = panel.set_position(tauri::PhysicalPosition::new(fallback_x, fallback_y));
 }
 
 /// 把 TrayIconEvent.rect 的 Position/Size 归一为物理像素 (x, y, w, h)。
@@ -1635,6 +1846,15 @@ fn tray_panel_open_target(app: tauri::AppHandle, path: String) -> Result<(), Str
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     let app = tauri::Builder::default()
+        // single-instance：全局只允许一个实例。第二个实例启动时，插件把
+        // 它的 argv / cwd 转交给当前实例后自行退出；当前实例在回调里把主
+        // 窗口 show + focus（复用托盘"打开应用"的同一路径），实现"再次
+        // 双击图标 → 唤回已运行窗口"而非开两个进程。
+        // 注意：回调参数 _args/_cwd 暂不消费（应用无命令行启动参数语义），
+        // 前缀下划线避免 unused 警告；主窗口 label 与 tauri.conf.json 一致。
+        .plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| {
+            show_main_window(app);
+        }))
         .invoke_handler(tauri::generate_handler![
             greet,
             cnb_http_request,
@@ -1949,6 +2169,29 @@ pub fn run() {
                 });
             }
 
+            // Windows/Linux：初始化语言/登录态槽位（与 macOS 块同源），
+            // 构建挂到托盘图标的右键菜单。菜单必须是 Send+Sync 的
+            // tauri::menu::Menu（见 build_tray_menu_win 注释）。构建失败
+            // 时降级为 None（右键无菜单，但左键快捷面板不受影响）。
+            #[cfg(not(target_os = "macos"))]
+            let win_tray_menu = {
+                let tray_locale = read_tray_locale(app.handle());
+                if let Ok(mut guard) = tray_locale_slot().lock() {
+                    *guard = tray_locale.clone();
+                }
+                let tray_username = read_tray_auth(app.handle());
+                if let Ok(mut guard) = tray_auth_slot().lock() {
+                    *guard = tray_username.clone();
+                }
+                match build_tray_menu_win(app.handle(), &tray_locale, &tray_username) {
+                    Ok(menu) => Some(menu),
+                    Err(err) => {
+                        log::warn!("[tray] 构建托盘右键菜单失败（右键菜单不可用）: {err}");
+                        None
+                    }
+                }
+            };
+
             // 2. 构建托盘图标：字母 W 的 PNG（编译期嵌入）。
             //    交互设计：
             //    - 左键单击：切换活跃项目快捷面板（tray-panel 窗口，图标
@@ -1958,12 +2201,42 @@ pub fn run() {
             //      的多显示器修复说明），条目事件走 on_menu_event 回调，
             //      "打开应用"仍在此菜单中（开完整主窗口）；
             //    托盘实例由 App 的 TrayIconManager 内部持有，构建后即保持存活
-            TrayIconBuilder::with_id(TRAY_ID)
+            // macOS 不挂菜单（手动弹出修多屏）、用黑白 W 图标（菜单栏惯例，
+            // 透明底单色更贴合系统菜单栏观感）；
+            // Windows/Linux 挂 win_tray_menu 由系统按右键位置弹出、直接用
+            // **应用图标 32x32.png**（与任务栏/开始菜单里的应用图标一致，
+            // 用户一眼能把托盘项和已安装应用对上号）。用 cfg 拆成两条完整
+            // 链：既隔离跨平台类型差异（muda::Menu vs tauri::menu::Menu），
+            // 也隔离图标选择——两个平台的图标语义不同，不共用常量。
+            #[cfg(target_os = "macos")]
+            let tray_builder = TrayIconBuilder::with_id(TRAY_ID)
                 .icon(tauri::image::Image::from_bytes(include_bytes!(concat!(
                     env!("CARGO_MANIFEST_DIR"),
                     "/icons/tray-icon.png"
                 )))?)
-                .tooltip("WOCNB")
+                .tooltip("WOCNB");
+
+            #[cfg(not(target_os = "macos"))]
+            let tray_builder = {
+                // 用应用图标（64x64 源图）：Windows 托盘按 DPI 缩放显示
+                // （100% 约 16px、150% 约 24px），给大图下采样比 32px 原图
+                // 放大清晰得多；图形与任务栏/开始菜单的应用图标完全一致。
+                let base = TrayIconBuilder::with_id(TRAY_ID)
+                    .icon(tauri::image::Image::from_bytes(include_bytes!(concat!(
+                        env!("CARGO_MANIFEST_DIR"),
+                        "/icons/64x64.png"
+                    )))?)
+                    .tooltip("WOCNB");
+                // 菜单挂在托盘上：Windows 系统收到右键自动在光标处弹出。
+                // 构建失败（win_tray_menu=None）时不挂菜单、降级为左键可用，
+                // 绝不因菜单问题拖垮整个应用启动。
+                match win_tray_menu.as_ref() {
+                    Some(menu) => base.menu(menu),
+                    None => base,
+                }
+            };
+
+            tray_builder
                 .on_tray_icon_event(|tray, event| {
                     // 仅响应 Down（按下）状态；macOS 会额外派发 Up（抬起）
                     // 事件，不过滤会触发两次
@@ -2004,7 +2277,11 @@ pub fn run() {
                                     icon_h,
                                 );
                             }
-                            // 右键单击：在光标位置弹出原生菜单（多屏定位正确）
+                            // 右键单击：
+                            // - macOS：菜单未挂托盘（见 TRAY_NATIVE_MENU 注释），
+                            //   这里手动在光标处弹出（多屏定位正确）；
+                            // - Windows/Linux：菜单已挂托盘图标，系统自行弹出，
+                            //   本分支为刻意空操作（即使事件仍派发也无需处理）。
                             tauri::tray::MouseButton::Right => {
                                 #[cfg(target_os = "macos")]
                                 {
@@ -2099,7 +2376,8 @@ mod tests {
     use super::{
         app_menu_texts, build_header_map, clamp_window_size, greet, is_allowed_api_url,
         is_allowed_image_url, next_available_path, normalize_tray_locale, parse_window_size,
-        sanitize_archive_name, tray_menu_texts, tray_rect_physical, APP_MENU_ABOUT_ID,
+        sanitize_archive_name, tray_menu_texts, tray_panel_anchor, tray_rect_physical,
+        APP_MENU_ABOUT_ID,
         APP_MENU_QUIT_ID, BUILD_NOTIFY_ACTION_TYPE_ID, MIN_WINDOW_HEIGHT, MIN_WINDOW_WIDTH,
     };
     use std::collections::HashMap;
@@ -2198,6 +2476,47 @@ mod tests {
             Size::Logical(LogicalSize::new(11.0, 11.0)),
         );
         assert_eq!((x, y, w, h), (100.0, 40.0, 22.0, 22.0));
+    }
+
+    /// 托盘面板「智能翻转」定位回归：Windows 任务栏在底部时面板必须翻到
+    /// 图标上方，否则会被夹到贴着屏幕底边、观感偏低且被任务栏遮挡。
+    #[test]
+    fn test_tray_panel_anchor_flip_and_clamp() {
+        // Windows 典型场景：1920x1080，托盘图标在底部任务栏右侧
+        let (x, y) = tray_panel_anchor(
+            1800.0, 1032.0, 32.0, 32.0, // icon（贴屏幕底边）
+            380.0, 500.0, // panel
+            0.0, 0.0, 1920.0, 1080.0, // screen
+        );
+        // 下方仅剩 16px → 翻到上方：py = 1032 - 500 - 6 = 526
+        assert_eq!(y, 526.0, "Windows 底部任务栏应翻到图标上方");
+        // 水平夹取：1800+16-190=1626 超出右边界，收进 1920-380-8=1532
+        assert_eq!(x, 1532.0, "贴右边缘的图标应把面板夹回屏幕内");
+
+        // macOS 典型场景：图标在顶部菜单栏 → 保持向下弹
+        let (_, y) = tray_panel_anchor(
+            1400.0, 4.0, 22.0, 22.0,
+            380.0, 500.0,
+            0.0, 0.0, 1512.0, 982.0,
+        );
+        assert_eq!(y, 32.0, "上方图标应保持向下弹出（4+22+6）");
+
+        // 多显示器：副屏整体偏移 (1920,100)，夹取边界要跟着偏移
+        let (x, y) = tray_panel_anchor(
+            3000.0, 1032.0, 32.0, 32.0,
+            380.0, 500.0,
+            1920.0, 100.0, 1920.0, 1080.0,
+        );
+        assert_eq!(y, 526.0, "副屏纵向偏移不应破坏翻转结果");
+        assert_eq!(x, 2826.0, "副屏水平中心对齐且未被夹取");
+
+        // 超小屏：两侧都放不下，保持向下并跳过垂直夹取（不得 panic）
+        let (_, y) = tray_panel_anchor(
+            500.0, 180.0, 32.0, 20.0,
+            380.0, 500.0,
+            0.0, 0.0, 1024.0, 400.0,
+        );
+        assert_eq!(y, 206.0, "两侧空间不足时保持向下弹出（180+20+6）");
     }
 
     /// 托盘菜单三语文案映射锁定：三种显式语言各自命中独立文案，

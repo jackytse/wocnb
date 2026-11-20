@@ -22,7 +22,7 @@
  *   结果内联在底部状态栏；
  * - Settings：同一个通道打开主窗口的设置页；
  * - 电源按钮：plugin-process exit(0) 真正退出应用；
- * - Esc：隐藏面板（失焦隐藏由 Rust 窗口事件负责，双保险）。
+ * - Esc / Ctrl+W（⌘W）：隐藏面板（Rust 端只隐藏不销毁；失焦隐藏双保险）。
  *
  * # 数据刷新
  *
@@ -177,9 +177,19 @@ async function onQuit(): Promise<void> {
   }
 }
 
-/** Esc 隐藏面板（失焦隐藏由 Rust 负责；这里只处理键盘意图） */
+/**
+ * Esc / Ctrl+W / ⌘W 隐藏面板（失焦隐藏由 Rust 负责；这里只处理键盘意图）。
+ *
+ * Ctrl+W（macOS ⌘W）与主窗口关窗键位保持一致：面板是"弹出即用即走"的
+ * 浮层，关闭 = 隐藏（hide_tray_panel，不销毁窗口），下次弹出无白屏。
+ * Ctrl/W 修饰键同时判 ctrlKey（Windows/Linux）与 metaKey（macOS），
+ * 不走主窗口那套 defineShortcuts：本页面是独立引导的迷你应用，
+ * 不在 Nuxt UI 的 useDashboard 快捷键作用域里。
+ */
 function onKeydown(event: KeyboardEvent): void {
-  if (event.key === 'Escape') {
+  const isCloseKey = (event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 'w'
+  if (event.key === 'Escape' || isCloseKey) {
+    event.preventDefault()
     void invoke('hide_tray_panel').catch(() => {})
   }
 }
