@@ -48,14 +48,14 @@
 #
 #   0) 【脚本禁止 set -o pipefail / 只用 POSIX sh 语法】CNB runner 用 `sh` 执行
 #      stage 脚本（官方《语法手册》Job.script 一节明说"流水线默认使用 sh 作为
-#      命令行解释器"），而 node:22 镜像里 /bin/sh 是 dash —— 实测 dash 不支持
+#      命令行解释器"），而 node:22/24/26 镜像里 /bin/sh 是 dash（同为 Debian） —— 实测 dash 不支持
 #      `set -o pipefail`，第一条命令就报 `Illegal option -o pipefail`，整个
 #      stage 直接变红（2026-11-10 真实事故）。因此：
 #        · 所有内联脚本只写 `set -eu`（POSIX）；
 #        · 确实需要 pipefail / bash 特性的逻辑，放进独立 .sh 文件（有 bash
 #          shebang），如 scripts/ci/check-version.sh，再由 stage 调用 `bash xxx.sh`；
 #        · 本文件脚本里没有任何依赖 pipefail 语义的管道，删掉它不改变行为。
-#        · 附带坑（2026-11-10 实测）：node:22 里 corepack enable 建好 pnpm shim
+#        · 附带坑（2026-11-10 实测）：node:22/24/26 里 corepack enable 建好 pnpm shim
 #          后仍可能非零退出（其它 shim 失败），触发 `npm i -g` 兜底时报
 #          EEXIST（/usr/local/bin/pnpm 已存在）→ 必须用 --force 覆盖。
 #
@@ -87,7 +87,7 @@ main:
       runner:
         tags: cnb:arch:amd64
       docker:
-        image: node:22
+        image: node:26
         volumes:
           # pnpm store 落在这里（pnpm 默认 store 为 ~/.local/share/pnpm/store），
           # 挂父目录可一并缓存 store 与 pnpm 全局 bin。
@@ -156,7 +156,7 @@ main:
       runner:
         tags: cnb:arch:amd64
       docker:
-        image: node:22
+        image: node:26
         volumes:
           # 分支 / PR 场景只读缓存：能读热缓存加速，写入在流水线结束后丢弃（官方卷类型说明）
           - wocnb-pnpm:/root/.local/share/pnpm:copy-on-write-read-only
@@ -205,7 +205,7 @@ $:
       runner:
         tags: cnb:arch:amd64
       docker:
-        image: node:22
+        image: node:26
         volumes:
           # 分支 / PR 场景只读主干缓存：能读热缓存加速，但本次写入在流水线结束后丢弃，
           # 不污染主干缓存（官方《语法手册》数据卷类型说明）。
@@ -248,7 +248,7 @@ $:
       runner:
         tags: cnb:arch:amd64
       docker:
-        image: node:22
+        image: node:26
         volumes:
           # 分支 / PR 场景只读主干缓存：能读热缓存加速，但本次写入在流水线结束后丢弃，
           # 不污染主干缓存（官方《语法手册》数据卷类型说明）。
@@ -305,7 +305,7 @@ v*:
       runner:
         tags: cnb:arch:amd64
       docker:
-        image: node:22
+        image: node:26
         volumes:
           - wocnb-pnpm:/root/.local/share/pnpm:read-write
           - wocnb-cache:/root/.cache:read-write

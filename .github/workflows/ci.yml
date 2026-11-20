@@ -45,18 +45,18 @@ jobs:
     timeout-minutes: 20
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
 
       # 版本由 package.json 的 packageManager 字段（pnpm@12.14.0）决定，不在这里硬编码，
       # 避免与本地/CNB 出现版本漂移
       - name: Setup pnpm
-        uses: pnpm/action-setup@v4
+        uses: pnpm/action-setup@v6
 
       - name: Setup Node
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v6
         with:
-          # 与 CNB 的 node:22 容器、本地开发环境保持一致
-          node-version: 22
+          # 与 CNB 的 node:26 容器保持一致（Node 26 = 最新 LTS，2026-10 起）
+          node-version: 26
           cache: pnpm
 
       - name: Install dependencies
@@ -81,15 +81,15 @@ jobs:
     timeout-minutes: 30
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
 
       - name: Setup pnpm
-        uses: pnpm/action-setup@v4
+        uses: pnpm/action-setup@v6
 
       - name: Setup Node
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v6
         with:
-          node-version: 22
+          node-version: 26
           cache: pnpm
 
       - name: Install dependencies
