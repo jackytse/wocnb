@@ -195,7 +195,10 @@ onBeforeUnmount(() => {
 </script>
 
 <template>
-  <div class="h-screen w-screen flex flex-col bg-default text-default overflow-hidden select-none">
+  <!-- 根元素圆角裁切：窗口 transparent: true 后，圆角外区域是真正透明、
+       直接透出桌面（黑边框与方角一并消失）；overflow-hidden 把头部/
+       底部以及条目 hover 背景裁进圆角内。12px 与 macOS 原生浮层观感一致。 -->
+  <div class="h-screen w-screen rounded-[12px] flex flex-col bg-default text-default overflow-hidden select-none">
     <!-- 头部：应用图标 + 标题 + 数量徽标（无拖拽区域：位置跟随托盘图标） -->
     <header class="shrink-0 flex items-center gap-2.5 px-4 h-[46px] border-b border-default">
       <img
