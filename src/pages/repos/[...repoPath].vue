@@ -245,11 +245,14 @@ const invalidNumber = computed(() => {
             />
           </template>
 
-          <!-- 提交页签：空仓库同样显示引导态（否则会误报「资源不存在」） -->
+          <!-- 提交页签：空仓库显示「暂无提交」空态（2026-11-20 用户反馈：
+               完整引导面板在提交页签太重，对齐 Issue 页签的轻量空态形式） -->
           <template v-else-if="tab === 'commits'">
-            <RepoEmptyRepo
+            <StateAlert
               v-if="repoUninitialized"
-              :repo-path="repoPath"
+              state="empty"
+              :empty-text="t('repo.commits.empty')"
+              :empty-desc="t('repo.commits.emptyDesc')"
             />
             <RepoCommits
               v-else
