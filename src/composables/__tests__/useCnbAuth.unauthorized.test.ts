@@ -77,3 +77,32 @@ describe('cnbFetch：401 才登出', () => {
     expect(unauthorizedCalls).toEqual([])
   })
 })
+
+describe('cnbFetch：空 body 兜底（2026-11-20 系统性加固）', () => {
+  it('2xx + 空响应体 → 返回 undefined，不抛 JSON 解析错（POST /user 场景）', async () => {
+    ;(globalThis as unknown as { fetch: unknown }).fetch = vi.fn(async () =>
+      new Response('', { status: 200 }))
+
+    // 旧行为：WKWebView 下 JSON.parse('') 抛 "The string did not match the
+    // expected pattern."，把空 body 写端点的成功误报成失败
+    const result = await cnbFetch<unknown>('/user', { method: 'POST', body: '{}' })
+    expect(result).toBeUndefined()
+  })
+
+  it('2xx + 空白字符响应体 → 同样返回 undefined（部分网关会带换行）', async () => {
+    ;(globalThis as unknown as { fetch: unknown }).fetch = vi.fn(async () =>
+      new Response('  \n', { status: 201 }))
+
+    const result = await cnbFetch<unknown>('/x/y', { method: 'POST' })
+    expect(result).toBeUndefined()
+  })
+
+  it('2xx + 非空 body → 正常 JSON 解析（读端点不受兜底影响）', async () => {
+    ;(globalThis as unknown as { fetch: unknown }).fetch = vi.fn(async () =>
+      responseOf(200, { username: 'someone', nickname: '张三' }))
+
+    const result = await cnbFetch<{ username: string, nickname: string }>('/user')
+    expect(result.username).toBe('someone')
+    expect(result.nickname).toBe('张三')
+  })
+})

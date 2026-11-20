@@ -127,23 +127,25 @@ function normalizeAsset(raw: RawReleaseAsset): ReleaseAsset {
  * - publishedAt 为空 → 回退 createdAt（草稿 Release 无发布时间）；
  * - tag 无值的条目仍保留（id 为空时 UI 不可编辑/删除，仅展示）。
  */
-export function normalizeRelease(raw: RawRelease): ReleaseItem {
-  const tagName = raw.tag_name || ''
+export function normalizeRelease(raw?: RawRelease | null): ReleaseItem {
+  // raw 兜底 undefined/null（cnbFetch 空 body 兜底后可能返回 undefined，
+  // 2026-11-20 加固）：字段全走可选链，空体归一为空 ReleaseItem
+  const tagName = raw?.tag_name || ''
   return {
-    id: raw.id || '',
+    id: raw?.id || '',
     tagName,
-    tagCommitish: raw.tag_commitish || '',
-    name: raw.name || tagName,
-    body: raw.body || '',
-    isDraft: !!raw.draft,
-    isPrerelease: !!raw.prerelease,
-    isLatest: !!raw.is_latest,
-    createdAt: raw.created_at || '',
-    publishedAt: raw.published_at || raw.created_at || '',
-    updatedAt: raw.updated_at || '',
-    authorName: raw.author?.nickname || raw.author?.username || '',
-    authorAvatar: raw.author?.avatar || '',
-    assets: Array.isArray(raw.assets) ? raw.assets.map(normalizeAsset) : [],
+    tagCommitish: raw?.tag_commitish || '',
+    name: raw?.name || tagName,
+    body: raw?.body || '',
+    isDraft: !!raw?.draft,
+    isPrerelease: !!raw?.prerelease,
+    isLatest: !!raw?.is_latest,
+    createdAt: raw?.created_at || '',
+    publishedAt: raw?.published_at || raw?.created_at || '',
+    updatedAt: raw?.updated_at || '',
+    authorName: raw?.author?.nickname || raw?.author?.username || '',
+    authorAvatar: raw?.author?.avatar || '',
+    assets: Array.isArray(raw?.assets) ? raw.assets.map(normalizeAsset) : [],
   }
 }
 

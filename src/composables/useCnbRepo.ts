@@ -1370,31 +1370,33 @@ export interface RawPull {
  * 评审人增删/标签写端点返回的也是 api.Pull，必须走同一套归一化，
  * 否则同一条 PR 在列表页与评审区的字段口径会漂移）。
  */
-export function normalizePull(raw: RawPull): RepoPull {
+export function normalizePull(raw?: RawPull | null): RepoPull {
+  // raw 兜底 undefined/null（cnbFetch 空 body 兜底后可能返回 undefined，
+  // 2026-11-20 加固）：全部字段走可选链，空体归一为空 RepoPull
   return {
-    number: raw.number || '',
-    title: raw.title || '',
-    state: raw.state === 'merged' ? 'merged' : raw.state === 'closed' ? 'closed' : 'open',
-    body: raw.body,
-    isWip: !!raw.is_wip,
-    isMerged: !!raw.is_merged,
-    mergeableState: raw.mergeable_state || '',
-    blockedOn: raw.blocked_on || undefined,
-    baseRef: stripRefsHeads(raw.base?.ref),
-    baseRepoPath: raw.base?.repo?.path || '',
-    headRef: stripRefsHeads(raw.head?.ref),
-    headRepoPath: raw.head?.repo?.path || '',
-    authorName: raw.author?.nickname || raw.author?.username || '',
-    commentCount: raw.comment_count ?? 0,
-    reviewers: (raw.reviewers || []).map(r => ({
+    number: raw?.number || '',
+    title: raw?.title || '',
+    state: raw?.state === 'merged' ? 'merged' : raw?.state === 'closed' ? 'closed' : 'open',
+    body: raw?.body,
+    isWip: !!raw?.is_wip,
+    isMerged: !!raw?.is_merged,
+    mergeableState: raw?.mergeable_state || '',
+    blockedOn: raw?.blocked_on || undefined,
+    baseRef: stripRefsHeads(raw?.base?.ref),
+    baseRepoPath: raw?.base?.repo?.path || '',
+    headRef: stripRefsHeads(raw?.head?.ref),
+    headRepoPath: raw?.head?.repo?.path || '',
+    authorName: raw?.author?.nickname || raw?.author?.username || '',
+    commentCount: raw?.comment_count ?? 0,
+    reviewers: (raw?.reviewers || []).map(r => ({
       username: r.user?.username || '',
       nickname: r.user?.nickname || r.user?.username || '',
       reviewState: r.review_state || 'pending',
     })).filter(r => r.username),
-    labels: (raw.labels || []).map(l => ({ name: l.name || '', color: l.color || '' }))
+    labels: (raw?.labels || []).map(l => ({ name: l.name || '', color: l.color || '' }))
       .filter(l => l.name),
-    createdAt: raw.created_at || '',
-    updatedAt: raw.updated_at || '',
+    createdAt: raw?.created_at || '',
+    updatedAt: raw?.updated_at || '',
   }
 }
 

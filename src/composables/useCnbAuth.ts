@@ -363,7 +363,28 @@ async function cnbRequest(path: string, options: RequestInit = {}): Promise<Resp
  */
 export async function cnbFetch<T>(path: string, options: RequestInit = {}): Promise<T> {
   const response = await cnbRequest(path, options)
-  return response.json() as Promise<T>
+  // —— 空 body 兜底（2026-11-20 系统性加固，同日 /user、packages DELETE 两例）——
+  //
+  // 部分写端点实际返回 2xx + 空响应体（swagger 也不可靠：既漏标有 body 的
+  // 端点，也可能漏标空 body 的端点）。旧实现 response.json() 解析空 body：
+  // WKWebView 抛 "The string did not match the expected pattern."（Chrome
+  // 报 "Unexpected end of JSON input"），把**成功**误报成失败。
+  //
+  // 策略：先读 text —— 空体返回 undefined（T 含可选字段或调用方已有兜底
+  // 时不炸）；非空体 JSON.parse（解析错误是真信号，照常抛出）。
+  // cnbFetchVoid / cnbFetchText 走各自通道不受影响。
+  const text = await response.text()
+  // trim 覆盖「只有空白/换行」的响应体（JSON.parse 同样会炸）
+  if (!text.trim()) {
+    return undefined as T
+  }
+  try {
+    return JSON.parse(text) as T
+  }
+  catch (err) {
+    console.error(`[cnb] response JSON parse error on ${path}:`, err, `body[:120]=${text.slice(0, 120)}`)
+    throw err
+  }
 }
 
 /**
