@@ -138,7 +138,8 @@ const CHANNEL_CASES: ChannelCase[] = [
   { row: 26, label: 'GET /pulls/{n}/assignees/{a}（canAssignPull，探测）', channel: 'void', method: 'GET', pathSuffix: '/org/repo/-/pulls/7/assignees/bob', run: () => canAssignPull('org/repo', '7', 'bob') },
   { row: 29, label: 'GET /pulls/{n}/commit-statuses（有 body）', channel: 'json', method: 'GET', pathSuffix: '/org/repo/-/pulls/7/commit-statuses', run: () => fetchPullCommitStatuses('org/repo', '7') },
   { row: 30, label: 'GET /build/logs/ai-audit（有 body）', channel: 'json', method: 'GET', pathSuffix: '/org/repo/-/build/logs/ai-audit/sn1/pid1', run: () => fetchBuildAiAudit('org/repo', 'sn1', 'pid1') },
-  { row: 31, label: 'GET /build/logs/ai-request/{page}（有 body）', channel: 'json', method: 'GET', pathSuffix: '/org/repo/-/build/logs/ai-request/sn1/pid1/3', run: () => fetchBuildAiRequests('org/repo', 'sn1', 'pid1', 3) },
+  // 页码口径：UI 传 1-based（3），API 段为 0-based（2）—— swagger「page 从 0 开始」
+  { row: 31, label: 'GET /build/logs/ai-request/{page}（有 body）', channel: 'json', method: 'GET', pathSuffix: '/org/repo/-/build/logs/ai-request/sn1/pid1/2', run: () => fetchBuildAiRequests('org/repo', 'sn1', 'pid1', 3) },
   { row: 32, label: 'GET /build/logs/ai-request-detail/{rid}（有 body）', channel: 'json', method: 'GET', pathSuffix: '/org/repo/-/build/logs/ai-request-detail/sn1/pid1/r1', run: () => fetchBuildAiRequestDetail('org/repo', 'sn1', 'pid1', 'r1') },
 ]
 
@@ -297,10 +298,11 @@ describe('AI 用量归一化边界（code 业务码 / 自由对象 / 缺失字�
     expect(list[0].discount).toBeNull()
   })
 
-  it('page 作为路径末段原样透传（1 / 10 不丢位）', async () => {
+  it('page 作为路径末段：1-based 入参 → 0-based 路径段（不丢位不打偏）', async () => {
     await fetchBuildAiRequests('org/repo', 's', 'p', 10)
     await fetchBuildAiRequests('org/repo', 's', 'p', 1)
-    expect(cnbFetchMock.mock.calls[0][0]).toMatch(/\/ai-request\/s\/p\/10$/)
-    expect(cnbFetchMock.mock.calls[1][0]).toMatch(/\/ai-request\/s\/p\/1$/)
+    // 10 页 → /9，第 1 页 → /0（swagger：page 从 0 开始；此前直传会跳过首页）
+    expect(cnbFetchMock.mock.calls[0][0]).toMatch(/\/ai-request\/s\/p\/9$/)
+    expect(cnbFetchMock.mock.calls[1][0]).toMatch(/\/ai-request\/s\/p\/0$/)
   })
 })

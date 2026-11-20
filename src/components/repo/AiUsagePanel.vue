@@ -27,6 +27,7 @@ import {
   type AiRequestEntry,
   type AiUsageSummary,
 } from '../../composables/useCnbBuildAi'
+import { CnbApiError } from '../../composables/useCnbAuth'
 // 本地化时间 / 耗时格式化工具（纯函数，无副作用）
 import { formatDateTime, formatDuration } from '../../utils'
 import StateAlert from './StateAlert.vue'
@@ -139,6 +140,26 @@ const hasNoUsage = computed(() => {
 })
 
 // ---------------------------------------------------------------------------
+// 404 语义纠正（2026-11-20 用户反馈「显示不准确」，截图回归）
+// ---------------------------------------------------------------------------
+
+/**
+ * 404 判定：AI 用量是**内嵌子区块**，404 通常意味着该构建没有 AI 审计记录
+ * 或 pipelineId 不匹配 —— 不是「仓库/构建不存在」。套用 StateAlert 的页面级
+ * 404 文案（「资源不存在，或当前令牌无权访问该私有资源」+ 返回列表）会
+ * 严重误导用户，且「返回列表」在此处没有监听方（死按钮）。
+ * 因此该错误单独降级为中性提示 + 重试。
+ */
+function isNotFound(err: Error | null): boolean {
+  return err instanceof CnbApiError && err.kind === 'notFound'
+}
+
+/** 汇总 404（渲染中性提示） */
+const auditNotFound = computed(() => isNotFound(auditError.value))
+/** 明细 404（同上） */
+const requestsNotFound = computed(() => isNotFound(requestsError.value))
+
+// ---------------------------------------------------------------------------
 // 分页明细（第 2 级）：ai-request
 // ---------------------------------------------------------------------------
 
@@ -236,11 +257,33 @@ const detailJson = computed(() => {
   <div class="flex flex-col gap-3">
     <!-- 汇总（第 1 级）：按模型分组的结构化统计卡片 -->
     <StateAlert v-if="auditLoading" state="loading" loading-variant="plain" />
+    <!-- 404：内嵌区块不做页面级「资源不存在」语义（见 auditNotFound 注释） -->
+    <UAlert
+      v-else-if="auditNotFound"
+      icon="i-lucide-info"
+      color="neutral"
+      variant="soft"
+      :title="t('repo.build.aiUsage.unavailable')"
+      :description="t('repo.build.aiUsage.unavailableDesc')"
+    >
+      <template #actions>
+        <UButton
+          size="sm"
+          color="neutral"
+          variant="soft"
+          icon="i-lucide-refresh-cw"
+          @click="loadAudit"
+        >
+          {{ t('common.retry') }}
+        </UButton>
+      </template>
+    </UAlert>
     <StateAlert
       v-else-if="auditError"
       state="error"
       :error="auditError"
       :retry="loadAudit"
+      :show-back="false"
     />
     <template v-else-if="audit && !hasNoUsage">
       <div class="flex flex-wrap gap-2">
@@ -279,11 +322,33 @@ const detailJson = computed(() => {
     <!-- 分页明细（第 2 级）：无汇总用量时不再请求表格 -->
     <template v-if="audit && !hasNoUsage">
       <StateAlert v-if="requestsLoading" state="loading" loading-variant="list" />
+      <!-- 明细 404 同样降级为中性提示（与汇总口径一致，不显示「返回列表」） -->
+      <UAlert
+        v-else-if="requestsNotFound"
+        icon="i-lucide-info"
+        color="neutral"
+        variant="soft"
+        :title="t('repo.build.aiUsage.unavailable')"
+        :description="t('repo.build.aiUsage.unavailableDesc')"
+      >
+        <template #actions>
+          <UButton
+            size="sm"
+            color="neutral"
+            variant="soft"
+            icon="i-lucide-refresh-cw"
+            @click="loadRequests"
+          >
+            {{ t('common.retry') }}
+          </UButton>
+        </template>
+      </UAlert>
       <StateAlert
         v-else-if="requestsError"
         state="error"
         :error="requestsError"
         :retry="loadRequests"
+        :show-back="false"
       />
       <StateAlert
         v-else-if="requests.length === 0"

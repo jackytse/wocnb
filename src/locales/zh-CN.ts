@@ -734,6 +734,9 @@ export default {
         durationNone: '-',
         pipeline: '流水线',
         detail: 'AI 请求详情',
+        // 2026-11-20：内嵌区块的 404 降级为中性提示（不再显示「资源不存在」）
+        unavailable: 'AI 用量数据不可用',
+        unavailableDesc: '该构建可能没有 AI 用量记录，或数据尚未生成。可稍后重试。',
       },
     },
     // —— 以下三块原先误挂在顶层 members 下（组件引用的是 repo.*），2026-11-18 归位 ——

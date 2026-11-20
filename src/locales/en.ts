@@ -735,6 +735,9 @@ export default {
         durationNone: '-',
         pipeline: 'Pipeline',
         detail: 'AI request detail',
+        // 2026-11-20: inline block maps 404 to a neutral notice (not "resource not found")
+        unavailable: 'AI usage data unavailable',
+        unavailableDesc: 'This build may have no AI usage records, or the data is not ready yet. Try again later.',
       },
     },
     // —— 以下三块原先误挂在顶层 members 下（组件引用的是 repo.*），2026-11-18 归位 ——

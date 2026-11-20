@@ -242,8 +242,12 @@ export async function fetchBuildAiAudit(
 
 /**
  * AI 请求分页明细（GET ai-request/{page}，scope: repo-cnb-history:r）。
- * **通道选择依据**：200 dto.BuildAiRequestResult（有 body）→ cnbFetch；
- * page 由调用方（AiUsagePanel 内部 ref 或 route.page）传入，从 1 开始。
+ * **通道选择依据**：200 dto.BuildAiRequestResult（有 body）→ cnbFetch。
+ *
+ * ⚠️ 页码口径（2026-11-20 依 swagger 修正）：服务端 `page` **从 0 开始**
+ * （"页码，从 0 开始。Page number, starts from 0."），而 UI 分页统一用
+ * 1-based。两者在数据层收敛：调用方传 1-based，这里 -1 转 0-based，
+ * 避免上游每处调用各自换算（此前直传 1 会跳过首页数据）。
  */
 export async function fetchBuildAiRequests(
   repoPath: string,
@@ -251,8 +255,10 @@ export async function fetchBuildAiRequests(
   pipelineId: string,
   page: number,
 ): Promise<AiRequestEntry[]> {
+  // 1-based（UI 口径）→ 0-based（API 口径）；Math.max 防 0/负数页码
+  const apiPage = Math.max(0, page - 1)
   const raw = await cnbFetch<RawBuildAiRequestResult>(
-    aiLogPath(repoPath, 'ai-request', sn, pipelineId, String(page)),
+    aiLogPath(repoPath, 'ai-request', sn, pipelineId, String(apiPage)),
   )
   return normalizeAiRequests(raw)
 }

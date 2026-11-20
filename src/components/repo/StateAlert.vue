@@ -33,6 +33,12 @@ const props = defineProps<{
   retry?: () => void
   /** 「在浏览器打开」的外跳地址（403/404 态提供兜底出口） */
   siteUrl?: string
+  /**
+   * 404 分支是否显示「返回列表」按钮（默认 true）。
+   * 内嵌子区块（如构建详情内的 AI 用量面板）没有"列表"可回，
+   * 传 false 隐藏，避免出现点了没反应的死按钮。
+   */
+  showBack?: boolean
 }>()
 
 const emit = defineEmits<{
@@ -134,7 +140,20 @@ function openExternal(url: string) {
     :description="t('state.notFoundDesc')"
   >
     <template #actions>
+      <!-- 404 也可能瞬时出现（数据尚未生成/接口抖动），有 retry 时补重试入口 -->
       <UButton
+        v-if="retry"
+        size="sm"
+        color="neutral"
+        variant="soft"
+        icon="i-lucide-refresh-cw"
+        @click="retry()"
+      >
+        {{ t('common.retry') }}
+      </UButton>
+      <!-- showBack=false：内嵌区块隐藏（无列表可回，避免死按钮） -->
+      <UButton
+        v-if="showBack !== false"
         size="sm"
         color="neutral"
         variant="soft"

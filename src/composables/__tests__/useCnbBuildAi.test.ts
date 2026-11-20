@@ -56,15 +56,21 @@ describe('AI 用量三端点：均走 cnbFetch + 路径正确', () => {
     })
   })
 
-  it('fetchBuildAiRequests：GET ai-request/{sn}/{pipelineId}/{page}，page 作为独立段', async () => {
+  it('fetchBuildAiRequests：page 1-based → API 0-based（swagger：page 从 0 开始）', async () => {
     cnbFetchMock.mockResolvedValueOnce({ code: 0, content: [{ request_id: 'r1', success: true }] })
+    // UI 第 2 页 → API page=1（服务端 0 基）
     const list = await fetchBuildAiRequests('org/repo', 'sn1', 'pid', 2)
     expect(cnbFetchMock).toHaveBeenCalledTimes(1)
     expect(cnbFetchVoidMock).not.toHaveBeenCalled()
-    expect(cnbFetchMock.mock.calls[0][0]).toBe('/org/repo/-/build/logs/ai-request/sn1/pid/2')
+    expect(cnbFetchMock.mock.calls[0][0]).toBe('/org/repo/-/build/logs/ai-request/sn1/pid/1')
     expect(list).toHaveLength(1)
     expect(list[0].requestId).toBe('r1')
     expect(list[0].success).toBe(true)
+
+    // UI 第 1 页 → API page=0（此前直传 1 会跳过首页数据）
+    cnbFetchMock.mockResolvedValueOnce({ code: 0, content: [] })
+    await fetchBuildAiRequests('org/repo', 'sn1', 'pid', 1)
+    expect(cnbFetchMock.mock.calls[1][0]).toBe('/org/repo/-/build/logs/ai-request/sn1/pid/0')
   })
 
   it('fetchBuildAiRequestDetail：GET ai-request-detail/.../{requestId}，requestId 编码', async () => {
