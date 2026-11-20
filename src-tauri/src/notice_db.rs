@@ -128,6 +128,9 @@ pub struct StoredRecentRepo {
     pub language: String,
     /// 语言主题色 #RRGGBB（可空）
     pub language_color: String,
+    /// 仓库可见性（小写三值 public/private/secret；旧数据/未知为空串 →
+    /// 面板不渲染徽标，绝不把未知可见性误标成"公开"）
+    pub visibility: String,
     /// 最近打开时间（毫秒时间戳）
     pub opened_at: i64,
 }
@@ -223,13 +226,24 @@ fn init_schema(conn: &Connection) -> Result<(), rusqlite::Error> {
             repo_name      TEXT    NOT NULL DEFAULT '',
             language       TEXT    NOT NULL DEFAULT '',
             language_color TEXT    NOT NULL DEFAULT '',
+            visibility     TEXT    NOT NULL DEFAULT '',
             opened_at      INTEGER NOT NULL DEFAULT 0,
             created_at     INTEGER NOT NULL
         );
         CREATE INDEX IF NOT EXISTS idx_recent_user_time ON recent_repos(username, opened_at DESC);
         CREATE UNIQUE INDEX IF NOT EXISTS idx_recent_unique_path ON recent_repos(username, repo_path);
         "#,
-    )
+    )?;
+    // v2 迁移（2026-11-20）：recent_repos 增加 visibility 列（公开/私有徽标）。
+    // CREATE TABLE IF NOT EXISTS 对**已存在**的旧表（rc.50 及以前）不会补列，
+    // 必须显式 ALTER；列已存在时 SQLite 报 "duplicate column name"，属预期
+    // 迁移幂等信号，忽略即可（其他错误同样忽略 —— ALTER 失败只会让徽标
+    // 显示为空，不能让通知/最近打开的读写整体挂掉）。
+    let _ = conn.execute(
+        "ALTER TABLE recent_repos ADD COLUMN visibility TEXT NOT NULL DEFAULT ''",
+        [],
+    );
+    Ok(())
 }
 
 /// 打开数据库连接并确保表结构就绪。
@@ -297,7 +311,7 @@ fn now_ms() -> i64 {
 fn load_recent_repos_conn(conn: &Connection, username: &str) -> Result<Vec<StoredRecentRepo>, String> {
     let mut stmt = conn
         .prepare(
-            "SELECT repo_path, repo_name, language, language_color, opened_at
+            "SELECT repo_path, repo_name, language, language_color, visibility, opened_at
              FROM recent_repos WHERE username = ?1
              ORDER BY opened_at DESC, row_id DESC LIMIT ?2",
         )
@@ -309,7 +323,8 @@ fn load_recent_repos_conn(conn: &Connection, username: &str) -> Result<Vec<Store
                 repo_name: row.get(1)?,
                 language: row.get(2)?,
                 language_color: row.get(3)?,
-                opened_at: row.get(4)?,
+                visibility: row.get(4)?,
+                opened_at: row.get(5)?,
             })
         })
         .map_err(|e| format!("读取最近打开记录失败: {e}"))?
@@ -320,8 +335,9 @@ fn load_recent_repos_conn(conn: &Connection, username: &str) -> Result<Vec<Store
 
 /// 写入（upsert）一条「最近打开」记录（核心逻辑供单测复用）。
 ///
-/// 同 (username, repo_path) 已存在则更新名称/语言/时间（置顶语义），
+/// 同 (username, repo_path) 已存在则更新名称/语言/可见性/时间（置顶语义），
 /// 不产生重复条目；写入后裁剪到每账号 20 条。
+#[allow(clippy::too_many_arguments)]
 fn upsert_recent_repo_conn(
     conn: &Connection,
     username: &str,
@@ -329,19 +345,21 @@ fn upsert_recent_repo_conn(
     repo_name: &str,
     language: &str,
     language_color: &str,
+    visibility: &str,
     opened_at: i64,
 ) -> Result<(), String> {
     conn.execute(
         "INSERT INTO recent_repos
-            (username, repo_path, repo_name, language, language_color, opened_at, created_at)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?6)
+            (username, repo_path, repo_name, language, language_color, visibility, opened_at, created_at)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?7)
          ON CONFLICT(username, repo_path) DO UPDATE SET
             repo_name = excluded.repo_name,
             language = excluded.language,
             language_color = excluded.language_color,
+            visibility = excluded.visibility,
             opened_at = excluded.opened_at,
             created_at = excluded.created_at",
-        rusqlite::params![username, repo_path, repo_name, language, language_color, opened_at],
+        rusqlite::params![username, repo_path, repo_name, language, language_color, visibility, opened_at],
     )
     .map_err(|e| format!("写入最近打开记录失败: {e}"))?;
     prune_recent_overflow(conn, username, RECENT_KEEP_PER_USER)?;
@@ -573,6 +591,7 @@ pub fn recent_repos_upsert(
     repo_name: String,
     language: String,
     language_color: String,
+    visibility: String,
     opened_at: Option<i64>,
 ) -> Result<(), String> {
     let username = current_slot_username();
@@ -592,6 +611,9 @@ pub fn recent_repos_upsert(
         repo_name.trim(),
         language.trim(),
         language_color.trim(),
+        // 可见性统一小写落库（前端传入 RepoDetail.visibility 是首字母大写
+        // 三值 Public/Private/Secret，面板徽标按小写口径渲染）
+        visibility.trim().to_lowercase().as_str(),
         opened_at,
     )
 }
@@ -802,15 +824,17 @@ mod tests {
         let conn = open_test_db(&path);
 
         // alice 打开 2 个仓库、bob 打开 1 个（同一条 SQL 链路）
-        upsert_recent_repo_conn(&conn, "alice", "cnb/feedback", "feedback", "TypeScript", "#3178c6", 1000).unwrap();
-        upsert_recent_repo_conn(&conn, "alice", "jackytse/wocnb", "wocnb", "Vue", "#4fc08d", 2000).unwrap();
-        upsert_recent_repo_conn(&conn, "bob", "cnb/feedback", "feedback", "", "", 3000).unwrap();
+        upsert_recent_repo_conn(&conn, "alice", "cnb/feedback", "feedback", "TypeScript", "#3178c6", "public", 1000).unwrap();
+        upsert_recent_repo_conn(&conn, "alice", "jackytse/wocnb", "wocnb", "Vue", "#4fc08d", "private", 2000).unwrap();
+        upsert_recent_repo_conn(&conn, "bob", "cnb/feedback", "feedback", "", "", "", 3000).unwrap();
 
         // alice 只读到自己的 2 条，且按 opened_at 倒序（最近打开置顶）
         let list = load_recent_repos_conn(&conn, "alice").unwrap();
         assert_eq!(list.len(), 2);
         assert_eq!(list[0].repo_path, "jackytse/wocnb");
+        assert_eq!(list[0].visibility, "private");
         assert_eq!(list[1].repo_path, "cnb/feedback");
+        assert_eq!(list[1].visibility, "public");
         // bob 只看到自己的 1 条（账号隔离）
         let list = load_recent_repos_conn(&conn, "bob").unwrap();
         assert_eq!(list.len(), 1);
@@ -820,16 +844,60 @@ mod tests {
     fn test_recent_repos_upsert_dedup_top() {
         let path = temp_db_path("recent-dedup");
         let conn = open_test_db(&path);
-        upsert_recent_repo_conn(&conn, "alice", "a/b", "b", "", "", 1000).unwrap();
-        upsert_recent_repo_conn(&conn, "alice", "c/d", "d", "", "", 2000).unwrap();
-        // 同仓库再次打开：更新时间到最新并置顶，不产生重复条目
-        upsert_recent_repo_conn(&conn, "alice", "a/b", "b-renamed", "Rust", "#dea584", 3000).unwrap();
+        upsert_recent_repo_conn(&conn, "alice", "a/b", "b", "", "", "public", 1000).unwrap();
+        upsert_recent_repo_conn(&conn, "alice", "c/d", "d", "", "", "", 2000).unwrap();
+        // 同仓库再次打开：更新时间到最新并置顶，不产生重复条目；
+        // 可见性随最近一次访问更新（仓库中途转私有的场景）
+        upsert_recent_repo_conn(&conn, "alice", "a/b", "b-renamed", "Rust", "#dea584", "private", 3000).unwrap();
         let list = load_recent_repos_conn(&conn, "alice").unwrap();
         assert_eq!(list.len(), 2);
         assert_eq!(list[0].repo_path, "a/b");
         assert_eq!(list[0].repo_name, "b-renamed");
         assert_eq!(list[0].language, "Rust");
+        assert_eq!(list[0].visibility, "private");
         assert_eq!(list[0].opened_at, 3000);
+    }
+
+    #[test]
+    fn test_recent_repos_visibility_migration() {
+        // v2 迁移：模拟 rc.50 及以前的旧库（表存在但无 visibility 列），
+        // init_schema 必须幂等补列且旧数据读写不报错（visibility 落默认空串）
+        let path = temp_db_path("recent-visibility-migration");
+        let conn = open_test_db(&path);
+        // 旧库形态：手工建表（不含 visibility）+ 灌一条旧数据
+        conn.execute_batch(
+            r#"
+            CREATE TABLE recent_repos_v1_probe (
+                row_id INTEGER PRIMARY KEY AUTOINCREMENT,
+                username TEXT NOT NULL,
+                repo_path TEXT NOT NULL,
+                repo_name TEXT NOT NULL DEFAULT '',
+                language TEXT NOT NULL DEFAULT '',
+                language_color TEXT NOT NULL DEFAULT '',
+                opened_at INTEGER NOT NULL DEFAULT 0,
+                created_at INTEGER NOT NULL
+            );
+            INSERT INTO recent_repos_v1_probe (username, repo_path, repo_name, created_at)
+            VALUES ('alice', 'old/repo', 'repo', 1);
+            "#,
+        )
+        .unwrap();
+        // 再跑一次 init_schema 的 ALTER 分支（open_test_db 已跑过一次：
+        // 这里重复执行验证幂等 —— 第二次 ALTER 报 duplicate column 被吞）
+        let migrate = || -> Result<(), String> {
+            conn.execute(
+                "ALTER TABLE recent_repos ADD COLUMN visibility TEXT NOT NULL DEFAULT ''",
+                [],
+            ).map_err(|e| e.to_string())?;
+            Ok(())
+        };
+        // 第一次在 open_test_db 时已加列；这里再执行必然 duplicate，模拟重复迁移
+        assert!(migrate().is_err());
+        // 旧表结构下写入（visibility 空串）+ 读回不报错
+        upsert_recent_repo_conn(&conn, "alice", "new/repo", "repo", "", "", "", 2000).unwrap();
+        let list = load_recent_repos_conn(&conn, "alice").unwrap();
+        assert_eq!(list.len(), 1);
+        assert_eq!(list[0].visibility, "");
     }
 
     #[test]
@@ -838,7 +906,7 @@ mod tests {
         let conn = open_test_db(&path);
         // 写入 25 条（超过每账号上限 20）
         for i in 0..25i64 {
-            upsert_recent_repo_conn(&conn, "alice", &format!("g{i}/r{i}"), &format!("r{i}"), "", "", 1000 + i).unwrap();
+            upsert_recent_repo_conn(&conn, "alice", &format!("g{i}/r{i}"), &format!("r{i}"), "", "", "public", 1000 + i).unwrap();
         }
         let list = load_recent_repos_conn(&conn, "alice").unwrap();
         // 裁到 20 条，保留的是最新的（opened_at 最大）

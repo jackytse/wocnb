@@ -83,12 +83,14 @@ async function loadRepo() {
     head.value = h
     // 记录到「最近打开」（托盘快捷面板数据源）：成功打开才记录，
     // 404/403 的仓库不该出现在最近列表里。带上语言色，面板左侧
-    // 色块用仓库主语言着色（无语言时面板回退中性色）。
+    // 色块用仓库主语言着色（无语言时面板回退中性色）；visibility
+    // 供面板渲染 公开/私有/保密 徽标（内部归一小写，脏值不落盘）。
     recordRecentRepo({
       repoPath: repoPath.value,
       name: d.name,
       language: d.language,
       languageColor: d.languageColor,
+      visibility: d.visibility,
     })
   }
   catch (err) {

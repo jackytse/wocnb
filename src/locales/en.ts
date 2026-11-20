@@ -173,6 +173,10 @@ export default {
     failed: 'Check failed',
     settings: 'Settings',
     quit: 'Quit app',
+    // Visibility badge (Recently Opened list; hidden when visibility is empty/unknown)
+    visPublic: 'Public',
+    visPrivate: 'Private',
+    visSecret: 'Secret',
   },
   // ---------------------------------------------------------------------------
   // App update check (useAppUpdate: new version → system notification + panel record)

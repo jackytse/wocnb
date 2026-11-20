@@ -9,6 +9,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 import {
   clearRecentRepos,
   loadRecentRepos,
+  normalizeRecentRepoVisibility,
   readRecentRepos,
   recentRepos,
   recordRecentRepo,
@@ -93,5 +94,47 @@ describe('recordRecentRepo / readRecentRepos', () => {
     clearRecentRepos()
     expect(recentRepos.value).toHaveLength(0)
     expect(store.has('wocnb.recentRepos')).toBe(false)
+  })
+})
+
+// ---------------------------------------------------------------------------
+// 可见性徽标数据（公开/私有/保密）：归一化 + 记录读回 + 脏值容错
+// ---------------------------------------------------------------------------
+
+describe('仓库可见性（visibility）', () => {
+  it('normalizeRecentRepoVisibility：大小写归一 + 三值白名单', () => {
+    // RepoDetail.visibility 是首字母大写三值，记录时统一转小写
+    expect(normalizeRecentRepoVisibility('Public')).toBe('public')
+    expect(normalizeRecentRepoVisibility('PRIVATE')).toBe('private')
+    expect(normalizeRecentRepoVisibility('secret')).toBe('secret')
+    // 脏值/空值/未知取值（含未来 API 扩展）→ undefined，面板不渲染徽标
+    expect(normalizeRecentRepoVisibility('internal')).toBeUndefined()
+    expect(normalizeRecentRepoVisibility('')).toBeUndefined()
+    expect(normalizeRecentRepoVisibility(undefined)).toBeUndefined()
+    expect(normalizeRecentRepoVisibility(123)).toBeUndefined()
+  })
+
+  it('recordRecentRepo 记录可见性后可读回（大小写归一为小写）', () => {
+    recordRecentRepo({ repoPath: 'a/public-repo', visibility: 'Public' })
+    recordRecentRepo({ repoPath: 'a/private-repo', visibility: 'Private' })
+    const list = readRecentRepos()
+    expect(list[0]?.visibility).toBe('private')
+    expect(list[1]?.visibility).toBe('public')
+  })
+
+  it('未传可见性 / 脏可见性 → undefined（旧记录与未知值不误标成公开）', () => {
+    recordRecentRepo({ repoPath: 'a/legacy' })
+    recordRecentRepo({ repoPath: 'a/dirty', visibility: 'internal' })
+    const list = readRecentRepos()
+    expect(list[0]?.visibility).toBeUndefined()
+    expect(list[1]?.visibility).toBeUndefined()
+  })
+
+  it('同一仓库重复访问会更新可见性（仓库中途转私有的场景）', () => {
+    recordRecentRepo({ repoPath: 'a/b', visibility: 'Public' })
+    recordRecentRepo({ repoPath: 'a/b', visibility: 'Private' })
+    const list = readRecentRepos()
+    expect(list).toHaveLength(1)
+    expect(list[0]?.visibility).toBe('private')
   })
 })

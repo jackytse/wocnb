@@ -43,6 +43,9 @@
 import { ref } from 'vue'
 import { invoke } from '@tauri-apps/api/core'
 
+/** 合法的仓库可见性（小写口径；RepoDetail.visibility 是首字母大写，记录时归一） */
+export type RecentRepoVisibility = 'public' | 'private' | 'secret'
+
 /** 一条最近访问记录（前端展示形态） */
 export interface RecentRepoEntry {
   /** 仓库完整路径（如 cnb/feedback） */
@@ -55,6 +58,18 @@ export interface RecentRepoEntry {
   language?: string
   /** 语言主题色（#RRGGBB，可选） */
   languageColor?: string
+  /** 仓库可见性（可选；旧记录/未知为空 → 面板不渲染徽标，绝不误标） */
+  visibility?: RecentRepoVisibility
+}
+
+/**
+ * 归一化任意输入为合法可见性（脏值/空值/旧数据一律 undefined → 不渲染徽标）。
+ * RepoDetail.visibility 首字母大写（Public/Private/Secret），统一转小写；
+ * 其余取值（未来 API 扩展/手改数据）保守丢弃，不猜默认值。
+ */
+export function normalizeRecentRepoVisibility(value: unknown): RecentRepoVisibility | undefined {
+  const v = typeof value === 'string' ? value.trim().toLowerCase() : ''
+  return v === 'public' || v === 'private' || v === 'secret' ? v : undefined
 }
 
 /** SQLite 行形态（与 Rust StoredRecentRepo 的 serde camelCase 输出对应） */
@@ -63,6 +78,7 @@ interface StoredRecentRepoRow {
   repoName: string
   language: string
   languageColor: string
+  visibility: string
   /** 毫秒时间戳 */
   openedAt: number
 }
@@ -133,6 +149,7 @@ export function readRecentRepos(): RecentRepoEntry[] {
         time: entry.time,
         language: typeof entry.language === 'string' ? entry.language : undefined,
         languageColor: typeof entry.languageColor === 'string' ? entry.languageColor : undefined,
+        visibility: normalizeRecentRepoVisibility(entry.visibility),
       }))
       .sort((a, b) => Date.parse(b.time) - Date.parse(a.time))
       .slice(0, MAX_RECENT_REPOS)
@@ -173,6 +190,8 @@ export function loadRecentRepos(): void {
           time: msToIso(row.openedAt),
           language: row.language || undefined,
           languageColor: row.languageColor || undefined,
+          // Rust 侧已统一小写落库；再过一次归一防脏值渲染徽标
+          visibility: normalizeRecentRepoVisibility(row.visibility),
         }))
         .sort((a, b) => Date.parse(b.time) - Date.parse(a.time))
         .slice(0, MAX_RECENT_REPOS)
@@ -189,18 +208,23 @@ export function loadRecentRepos(): void {
  * Tauri → SQLite upsert（fire-and-forget，失败只 warn，不打断页面）；
  * 非 Tauri → localStorage 写盘。
  *
- * @param entry 至少要有 repoPath；name/language/languageColor 有则更好
+ * @param entry 至少要有 repoPath；name/language/languageColor/visibility
+ *              有则更好（visibility 传入 RepoDetail.visibility 原值即可，
+ *              内部归一为小写三值）
  */
 export function recordRecentRepo(entry: {
   repoPath: string
   name?: string
   language?: string
   languageColor?: string
+  visibility?: string
 }): void {
   const repoPath = entry.repoPath?.trim()
   if (!repoPath) {
     return
   }
+  // 可见性立即归一（大小写混用/脏值不落盘），渲染侧无需再判
+  const visibility = normalizeRecentRepoVisibility(entry.visibility)
   // 先去重同仓库旧记录，再插到头部（最近访问置顶语义）
   const rest = recentRepos.value.filter(item => item.repoPath !== repoPath)
   const next: RecentRepoEntry[] = [
@@ -210,6 +234,7 @@ export function recordRecentRepo(entry: {
       time: new Date().toISOString(),
       language: entry.language,
       languageColor: entry.languageColor,
+      visibility,
     },
     ...rest,
   ].slice(0, MAX_RECENT_REPOS)
@@ -222,6 +247,8 @@ export function recordRecentRepo(entry: {
       repoName: next[0]?.name ?? '',
       language: entry.language?.trim() ?? '',
       languageColor: entry.languageColor?.trim() ?? '',
+      // 归一后的值（undefined → 空串；Rust 侧再统一小写兜底）
+      visibility: visibility ?? '',
     }).catch((err) => {
       console.warn('[wocnb] 最近打开记录落库失败（不影响页面）：', err)
     })
@@ -257,6 +284,8 @@ export function migrateRecentReposToDb(): Promise<void> {
       repoName: entry.name,
       language: entry.language ?? '',
       languageColor: entry.languageColor ?? '',
+      // 旧记录可能没有可见性（undefined → 空串，面板不渲染徽标）
+      visibility: entry.visibility ?? '',
       // 保留原始打开时间（毫秒），迁移不丢时间线。
       // 参数名对应 Rust 命令的 opened_at（Tauri 自动 camelCase↔snake_case）
       openedAt: Date.parse(entry.time),

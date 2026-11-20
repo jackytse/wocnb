@@ -175,6 +175,10 @@ export default {
     failed: '检查失败',
     settings: '设置',
     quit: '退出应用',
+    // 可见性徽标（最近打开列表；visibility 为空/未知时不渲染）
+    visPublic: '公开',
+    visPrivate: '私有',
+    visSecret: '保密',
   },
   // ---------------------------------------------------------------------------
   appUpdate: {

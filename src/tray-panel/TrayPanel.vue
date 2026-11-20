@@ -11,7 +11,7 @@
  * # 视觉与信息结构（对齐参考设计）
  *
  * ┌ 头部：应用图标 + Recently Opened 标题 + 条目数量徽标
- * ├ 列表：彩色语言方块 + 仓库名 + 仓库路径 + 右侧相对时间
+ * ├ 列表：彩色语言方块 + 仓库名 + [可见性徽标] 仓库路径 + 右侧相对时间
  * └ 底部：「Check updates + 结果文案」｜「Settings」「退出」
  *
  * # 交互
@@ -41,6 +41,18 @@ import { encodeRepoPathForRoute, formatRelativeTime } from '../utils'
 import { resolveRepoBadge } from './languageBadge'
 
 const { t } = useI18n()
+
+/**
+ * 可见性徽标的展示配置（小写三值 → 文案键 + 语义色）。
+ *
+ * 色彩约定：公开绿（可见范围最大）、私有琥珀（受限）、保密紫红（最强受限）；
+ * 都走低饱和的彩色前景 + 同色 10% 底，与面板整体的中性灰调不抢戏。
+ */
+const VIS_META: Record<string, { labelKey: string, fg: string, bg: string }> = {
+  public: { labelKey: 'trayPanel.visPublic', fg: '#1a7f37', bg: 'rgba(52,199,89,0.12)' },
+  private: { labelKey: 'trayPanel.visPrivate', fg: '#9a6700', bg: 'rgba(255,159,10,0.14)' },
+  secret: { labelKey: 'trayPanel.visSecret', fg: '#8250df', bg: 'rgba(191,90,242,0.14)' },
+}
 
 /**
  * 检测更新的界面状态机（与数据层 status 解耦）：
@@ -83,9 +95,14 @@ const repoCount = computed(() => recentRepos.value.length)
  */
 const rows = computed(() => recentRepos.value.map((item) => {
   const badge = resolveRepoBadge(item.name, item.language, item.languageColor)
+  // 可见性徽标：仅三值之一才渲染（旧记录/脏数据 visibility 为空 → 不显示，
+  // 绝不把未知可见性默认成"公开"误标）
+  const vis = item.visibility ? VIS_META[item.visibility] : undefined
   return {
     ...item,
     badge,
+    vis,
+    visLabel: vis ? t(vis.labelKey) : '',
     relativeTime: formatRelativeTime(item.time),
   }
 }))
@@ -244,7 +261,17 @@ onBeforeUnmount(() => {
 
         <span class="min-w-0 flex-1 leading-tight">
           <span class="block text-[14px] font-medium text-highlighted truncate">{{ item.name }}</span>
-          <span class="block mt-0.5 text-[11.5px] text-muted truncate">{{ item.repoPath }}</span>
+          <span class="flex items-center gap-1.5 mt-0.5 min-w-0">
+            <!-- 可见性徽标：公开绿 / 私有琥珀 / 保密紫红；旧记录不渲染 -->
+            <span
+              v-if="item.vis"
+              class="shrink-0 text-[10px] leading-[15px] px-1.5 rounded-[5px] font-medium"
+              :style="{ color: item.vis.fg, backgroundColor: item.vis.bg }"
+            >
+              {{ item.visLabel }}
+            </span>
+            <span class="min-w-0 text-[11.5px] text-muted truncate">{{ item.repoPath }}</span>
+          </span>
         </span>
 
         <span class="shrink-0 text-[11.5px] text-muted whitespace-nowrap">
