@@ -410,6 +410,16 @@ export default {
       following: '已關注',
       noStars: '暫無 Star 使用者。',
     },
+    // —— 使用者資料卡（2026-11-20：貢獻者/Star 使用者點擊彈出，GET /users/{username}）——
+    userProfile: {
+      title: '使用者資料',
+      viewProfile: '查看 {name} 的資料',
+      followers: '追隨者',
+      following: '追蹤',
+      followingBadge: '已追蹤',
+      publicRepos: '公開倉庫',
+      joinedAt: '加入於 {time}',
+    },
     // —— 提交 CI 狀態徽標（T10；獨立映射見 commitStatusMeta）——
     commitStatus: {
       success: '成功',

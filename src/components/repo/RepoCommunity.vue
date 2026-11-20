@@ -12,6 +12,9 @@
  *   枚举 all | followed —— 「全部 / 仅关注」切换，PRD v1.1 REQ-C7）
  *
  * Fork 行点击 → 应用内跳转该 Fork 仓库（router.push /repos/{path}?tab=code）。
+ *
+ * 贡献者头像 / Star 用户条目点击 → 用户资料卡弹窗（UserProfileModal，
+ * 2026-11-20 用户需求：仓库内可查看贡献者个人信息并外跳主页）。
  */
 import { ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
@@ -32,6 +35,7 @@ import { cnbAvatarUrl } from '../../composables/useCnbAuth'
 import { formatDateTime } from '../../utils'
 import StateAlert from './StateAlert.vue'
 import ContributorTrendChart from './ContributorTrendChart.vue'
+import UserProfileModal from '../UserProfileModal.vue'
 
 const props = defineProps<{
   repoPath: string
@@ -156,6 +160,20 @@ function contributorAvatar(username: string): string {
   return cnbAvatarUrl(username)
 }
 
+// ---------------------------------------------------------------------------
+// 用户资料卡弹窗（贡献者 / Star 用户共用一个实例）
+// ---------------------------------------------------------------------------
+
+const profileModalOpen = ref(false)
+/** 当前查看资料的目标用户名（点谁填谁；打开期间变化会触发弹窗内重拉） */
+const profileUsername = ref('')
+
+/** 打开某用户的资料卡（头像墙 / Star 列表条目点击入口） */
+function openProfileModal(username: string) {
+  profileUsername.value = username
+  profileModalOpen.value = true
+}
+
 // 仓库切换：四区块全部重拉（watch 一处统一触发）
 watch(
   () => props.repoPath,
@@ -198,7 +216,8 @@ watch(
         state="empty"
         :empty-text="t('repo.community.noContributors')"
       />
-      <!-- 头像墙：tooltip 显示用户名 + 提交数（withNpcCounts 时区分 NPC） -->
+      <!-- 头像墙：tooltip 显示用户名 + 提交数（withNpcCounts 时区分 NPC）；
+           头像可点击 → 用户资料卡（2026-11-20 用户需求） -->
       <div
         v-else
         class="flex flex-wrap gap-2"
@@ -214,11 +233,18 @@ watch(
             })
             : t('repo.community.contributorTip', { name: person.username, commits: person.commitCount })"
         >
-          <UAvatar
-            :src="contributorAvatar(person.username)"
-            :alt="person.username"
-            size="md"
-          />
+          <button
+            type="button"
+            class="rounded-full cursor-pointer outline-none focus-visible:ring-2 ring-primary transition hover:opacity-85"
+            :aria-label="t('repo.userProfile.viewProfile', { name: person.username })"
+            @click="openProfileModal(person.username)"
+          >
+            <UAvatar
+              :src="contributorAvatar(person.username)"
+              :alt="person.username"
+              size="md"
+            />
+          </button>
         </UTooltip>
       </div>
     </UCard>
@@ -363,7 +389,7 @@ watch(
         state="empty"
         :empty-text="t('repo.community.noStars')"
       />
-      <!-- Star 用户列表：头像 + 昵称 + 关注标记 + star 时间 -->
+      <!-- Star 用户列表：头像 + 昵称 + 关注标记 + star 时间（条目可点击 → 资料卡） -->
       <ul
         v-else
         class="flex flex-col divide-y divide-default"
@@ -371,34 +397,50 @@ watch(
         <li
           v-for="person in starResult.users"
           :key="person.username"
-          class="flex items-center gap-3 py-2"
         >
-          <UAvatar
-            :src="starUserAvatar(person)"
-            :alt="person.username"
-            size="sm"
-          />
-          <div class="min-w-0 flex flex-col">
-            <span class="text-sm truncate">{{ starDisplayName(person.username, person.nickname) }}</span>
-            <span class="text-xs text-dimmed truncate">{{ person.username }}</span>
-          </div>
-          <UBadge
-            v-if="person.isFollow"
-            size="sm"
-            color="primary"
-            variant="subtle"
-            class="ml-auto shrink-0"
+          <button
+            type="button"
+            class="flex items-center gap-3 py-2 w-full text-left hover:bg-elevated/50 cursor-pointer rounded-md px-2 -mx-2"
+            :aria-label="t('repo.userProfile.viewProfile', { name: person.username })"
+            @click="openProfileModal(person.username)"
           >
-            {{ t('repo.community.following') }}
-          </UBadge>
-          <span
-            v-else-if="person.staredAt"
-            class="ml-auto text-xs text-dimmed shrink-0"
-          >
-            {{ formatDateTime(person.staredAt) }}
-          </span>
+            <UAvatar
+              :src="starUserAvatar(person)"
+              :alt="person.username"
+              size="sm"
+            />
+            <div class="min-w-0 flex flex-col">
+              <span class="text-sm truncate">{{ starDisplayName(person.username, person.nickname) }}</span>
+              <span class="text-xs text-dimmed truncate">{{ person.username }}</span>
+            </div>
+            <UBadge
+              v-if="person.isFollow"
+              size="sm"
+              color="primary"
+              variant="subtle"
+              class="ml-auto shrink-0"
+            >
+              {{ t('repo.community.following') }}
+            </UBadge>
+            <span
+              v-else-if="person.staredAt"
+              class="ml-auto text-xs text-dimmed shrink-0"
+            >
+              {{ formatDateTime(person.staredAt) }}
+            </span>
+            <UIcon
+              name="i-lucide-external-link"
+              class="size-3.5 text-dimmed shrink-0"
+            />
+          </button>
         </li>
       </ul>
     </UCard>
+
+    <!-- 用户资料卡弹窗：贡献者头像墙 / Star 列表共用一个实例 -->
+    <UserProfileModal
+      v-model:open="profileModalOpen"
+      :username="profileUsername"
+    />
   </div>
 </template>

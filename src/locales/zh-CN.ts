@@ -417,6 +417,16 @@ export default {
       following: '已关注',
       noStars: '暂无 Star 用户。',
     },
+    // —— 用户资料卡（2026-11-20：贡献者/Star 用户点击弹出，GET /users/{username}）——
+    userProfile: {
+      title: '用户资料',
+      viewProfile: '查看 {name} 的资料',
+      followers: '关注者',
+      following: '关注',
+      followingBadge: '已关注',
+      publicRepos: '公开仓库',
+      joinedAt: '加入于 {time}',
+    },
     // —— 提交 CI 状态徽标（T10；独立映射见 commitStatusMeta）——
     commitStatus: {
       success: '成功',

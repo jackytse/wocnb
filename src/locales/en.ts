@@ -418,6 +418,16 @@ export default {
       following: 'Following',
       noStars: 'No starred users.',
     },
+    // —— User profile card (2026-11-20: contributor / star user click, GET /users/{username}) ——
+    userProfile: {
+      title: 'User profile',
+      viewProfile: 'View {name} profile',
+      followers: 'Followers',
+      following: 'Following',
+      followingBadge: 'Following',
+      publicRepos: 'Public repos',
+      joinedAt: 'Joined {time}',
+    },
     // —— Commit CI status badge (T10; standalone mapping, see commitStatusMeta) ——
     commitStatus: {
       success: 'Success',

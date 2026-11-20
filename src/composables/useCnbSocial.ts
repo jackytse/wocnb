@@ -326,6 +326,87 @@ export interface FollowUserItem {
   isFollowing: boolean
 }
 
+// ---------------------------------------------------------------------------
+// 他人用户资料卡（2026-11-20 用户需求：仓库内可查看贡献者个人信息）
+// ---------------------------------------------------------------------------
+
+/** dto.UsersResult 原始结构（仅声明资料卡展示用到的字段） */
+interface RawUserProfile {
+  username?: string
+  nickname?: string
+  avatar?: string
+  bio?: string
+  company?: string
+  location?: string
+  site?: string
+  /** 账号创建时间（展示为「加入于」） */
+  created_at?: string
+  /** 公开仓库数 */
+  public_repo_count?: number
+  /** 粉丝数（别人关注他） */
+  follower_count?: number
+  /** 关注数（他关注别人） */
+  follow_count?: number
+  /** 当前登录用户是否已关注该用户 */
+  is_following?: boolean
+  /** 是否认证用户 */
+  verified?: boolean
+}
+
+/**
+ * 他人用户资料（GET /users/{username}，dto.UsersResult）。
+ * 归一化范式与全库一致：字段全必填、缺省兜底空值。
+ */
+export interface UserProfile {
+  username: string
+  nickname: string
+  /** 服务端头像地址；空串时 UI 层按 cnbAvatarUrl(username) 兜底 */
+  avatar: string
+  bio: string
+  company: string
+  location: string
+  /** 个人网站（展示为可点击外链） */
+  site: string
+  /** 账号创建时间（ISO 字符串，空串表示服务端未返回） */
+  createdAt: string
+  publicRepoCount: number
+  followerCount: number
+  followCount: number
+  isFollowing: boolean
+  verified: boolean
+}
+
+/**
+ * 获取他人用户资料（GET /users/{username}）。
+ *
+ * 用途：仓库页贡献者头像墙 / Star 用户点击后的资料卡数据源。
+ * 展示名口径：nickname 缺省回退 username（与全库 Star/Fork 列表一致）。
+ */
+export async function fetchUserProfile(username: string): Promise<UserProfile> {
+  const raw = await cnbFetch<RawUserProfile>(`/users/${encodeURIComponent(username)}`)
+  return {
+    username: raw.username || username,
+    nickname: raw.nickname || '',
+    // avatar 缺省由 UI 层按 cnbAvatarUrl(username) 兜底（与 Star 用户列表一致）
+    avatar: raw.avatar || '',
+    bio: raw.bio || '',
+    company: raw.company || '',
+    location: raw.location || '',
+    site: raw.site || '',
+    createdAt: raw.created_at || '',
+    publicRepoCount: raw.public_repo_count ?? 0,
+    followerCount: raw.follower_count ?? 0,
+    followCount: raw.follow_count ?? 0,
+    isFollowing: !!raw.is_following,
+    verified: !!raw.verified,
+  }
+}
+
+/** 用户资料头像地址（avatar 空时按 CNB 规则 URL 兜底） */
+export function userProfileAvatar(profile: Pick<UserProfile, 'avatar' | 'username'>): string {
+  return profile.avatar || cnbAvatarUrl(profile.username)
+}
+
 /** 用户主页外跳地址（应用内无用户页路由 —— 红线：别造路由，一律外跳） */
 export function cnbUserProfileUrl(username: string): string {
   return `https://cnb.cool/${username}`
