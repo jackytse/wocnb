@@ -510,6 +510,12 @@ export default {
       downloadDesktopOnly: '原始碼包下載為桌面端專屬功能，已在瀏覽器開啟網頁端下載。',
       downloadSecretDisabled: '加密（Secret）倉庫不支援下載原始碼包。',
     },
+    // 空倉庫（未初始化）引導態：程式碼/提交頁籤共用
+    emptyRepo: {
+      title: '倉庫還沒有程式碼',
+      desc: '倉庫尚未初始化。推送第一個提交後，程式碼就會顯示在這裡。',
+      pushHint: '在本機的專案目錄中執行：',
+    },
     commits: {
       empty: '暫無提交',
       emptyDesc: '該分支還沒有任何提交。',

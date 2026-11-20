@@ -519,6 +519,12 @@ export default {
       downloadDesktopOnly: 'Desktop-only. Opened web download in your browser.',
       downloadSecretDisabled: 'Secret repositories do not support archive download.',
     },
+    // Empty (uninitialized) repository guidance: shared by Code / Commits tabs
+    emptyRepo: {
+      title: 'This repository is empty',
+      desc: 'The repository has not been initialized yet. Push your first commit and your code will show up here.',
+      pushHint: 'Run these commands in your local project directory:',
+    },
     commits: {
       empty: 'No commits',
       emptyDesc: 'This branch has no commits yet.',

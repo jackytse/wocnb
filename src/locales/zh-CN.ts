@@ -518,6 +518,12 @@ export default {
       downloadDesktopOnly: '源码包下载为桌面端专属功能，已在浏览器打开网页端下载。',
       downloadSecretDisabled: '加密（Secret）仓库不支持下载源码包。',
     },
+    // 空仓库（未初始化）引导态：代码/提交页签共用
+    emptyRepo: {
+      title: '仓库还没有代码',
+      desc: '仓库尚未初始化。推送第一个提交后，代码就会显示在这里。',
+      pushHint: '在本地的项目目录中执行：',
+    },
     commits: {
       empty: '暂无提交',
       emptyDesc: '该分支还没有任何提交。',

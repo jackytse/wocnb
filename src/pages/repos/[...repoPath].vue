@@ -29,6 +29,7 @@ import StateAlert from '../../components/repo/StateAlert.vue'
 import RepoHeader from '../../components/repo/RepoHeader.vue'
 import RepoTabs from '../../components/repo/RepoTabs.vue'
 import RepoCodeBrowser from '../../components/repo/RepoCodeBrowser.vue'
+import RepoEmptyRepo from '../../components/repo/RepoEmptyRepo.vue'
 import RepoCommits from '../../components/repo/RepoCommits.vue'
 import RepoIssueList from '../../components/repo/RepoIssueList.vue'
 import RepoIssueDetail from '../../components/repo/RepoIssueDetail.vue'
@@ -59,6 +60,15 @@ const {
 
 const detail = ref<RepoDetail | null>(null)
 const head = ref<GitRefInfo | null>(null)
+/**
+ * 默认分支请求的失败信息（loadRepo 内捕获，不向外抛）。
+ *
+ * 用途：区分两种「没有生效 ref」的情形 ——
+ * - 404（branch main not found）= **空仓库（未初始化）**，属正常状态，
+ *   代码/提交页签渲染引导态而不是永远转圈的骨架屏；
+ * - 其他（网络/鉴权）= 真实错误，渲染错误态并提供重试。
+ */
+const headError = ref<Error | null>(null)
 const loading = ref(false)
 const error = ref<Error | null>(null)
 
@@ -73,11 +83,17 @@ async function loadRepo() {
   }
   loading.value = true
   error.value = null
+  headError.value = null
   try {
     // 详情与默认分支无依赖，并行请求缩短首屏
     const [d, h] = await Promise.all([
       fetchRepoDetail(repoPath.value),
-      fetchGitHead(repoPath.value).catch(() => null),
+      fetchGitHead(repoPath.value).catch((err) => {
+        // head 失败不外抛（详情能显示时用户仍应看到仓库概览）：
+        // 记下原因供空仓库/错误态判定（见 headError 注释）
+        headError.value = err as Error
+        return null
+      }),
     ])
     detail.value = d
     head.value = h
@@ -111,6 +127,22 @@ const siteUrl = computed(() => repoSiteUrl(repoPath.value))
 
 /** tab=code 且 ref 已就绪才渲染代码视图（避免用空 ref 请求） */
 const codeReady = computed(() => tab.value === 'code' && !!effectiveRef.value)
+
+/**
+ * 空仓库（未初始化）判定：详情已加载、没有生效 ref、且 head 请求 404。
+ *
+ * 为什么必须区分 404 与其他错误：空仓库的 GET /-/git/head 返回
+ * 404 "branch main not found"，这是**正常状态**（2026-11-20 用户反馈：
+ * 代码页签永远显示骨架、提交页签误报「资源不存在」）；而网络/鉴权失败
+ * 是真实错误，应走错误态可重试，不能被当成空仓库糊过去。
+ */
+const repoUninitialized = computed(() =>
+  !loading.value
+  && !!detail.value
+  && !effectiveRef.value
+  && headError.value instanceof CnbApiError
+  && headError.value.kind === 'notFound',
+)
 
 // ---------------------------------------------------------------------------
 // 非法编号判定（QA 回归修复项 #1）
@@ -177,10 +209,20 @@ const invalidNumber = computed(() => {
         <RepoTabs v-if="!loading && detail" />
 
         <div class="mt-2">
-          <!-- 代码页签：等 ref 就绪（?ref= 或默认分支）再渲染 -->
+          <!-- 代码页签：空仓库 → 引导态；head 真实失败 → 错误重试；否则等 ref 就绪 -->
           <template v-if="tab === 'code'">
+            <RepoEmptyRepo
+              v-if="repoUninitialized"
+              :repo-path="repoPath"
+            />
             <StateAlert
-              v-if="!codeReady"
+              v-else-if="!codeReady && headError"
+              state="error"
+              :error="headError"
+              :retry="loadRepo"
+            />
+            <StateAlert
+              v-else-if="!codeReady"
               state="loading"
               loading-variant="detail"
             />
@@ -193,9 +235,14 @@ const invalidNumber = computed(() => {
             />
           </template>
 
-          <!-- 提交页签：canManage 下发到分支管理入口（BUG-04） -->
+          <!-- 提交页签：空仓库同样显示引导态（否则会误报「资源不存在」） -->
           <template v-else-if="tab === 'commits'">
+            <RepoEmptyRepo
+              v-if="repoUninitialized"
+              :repo-path="repoPath"
+            />
             <RepoCommits
+              v-else
               :repo-path="repoPath"
               :git-ref="effectiveRef"
               :can-manage="detail?.canManage"
