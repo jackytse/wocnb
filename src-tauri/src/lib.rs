@@ -1803,6 +1803,17 @@ pub fn run() {
             // 本文件「窗口尺寸记忆」模块头注释（物理/逻辑像素踩坑记录）。
             if let Some(window) = app.get_webview_window("main") {
                 restore_window_size(&window);
+                // —— dev 构建标识 ——
+                //
+                // 只在 dev（cargo debug，即 pnpm tauri dev）构建下给主窗口
+                // 标题追加 "dev" 徽标：开发机上经常同时开着 dev 实例与安装
+                // 正式版，仅凭 Dock 图标/窗口外观分不清哪个是哪个，标题栏
+                // 标注后一眼可辨。生产构建（release）不做任何改动。
+                // 注意 tauri.conf.json 的 title 静态值不会覆盖这里的设置
+                //（set_title 发生在 setup，晚于窗口创建）。
+                if cfg!(debug_assertions) {
+                    let _ = window.set_title("WOCNB (dev)");
+                }
             }
 
             // —— 托盘面板窗口：启动时强制保持隐藏 ——
