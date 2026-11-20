@@ -212,3 +212,28 @@ jobs:
             src-tauri/target/*/release/bundle/**
           if-no-files-found: error
           retention-days: 7
+
+  # ─────────────────────────────────────────────────────────────
+  # 第 4 步：标记正式 Release（2026-11-20 用户约定：**每次发版都必须
+  # 创建 Release 并作为 Latest 可见**）。
+  # 背景：tauri-action 的 prerelease 表达式对含 `-` 的 tag（所有 rc 版
+  # 都带 `-`）一律建成 Pre-release，GitHub Releases 页不显示「Latest」
+  # 标识，用户会误以为「没有生成最新版本的 release」。
+  # 此 job 在全部平台打包成功后，把该 Release 转正式 + 标记 Latest。
+  # 仅 tag 推送触发：手动 dry-run 不创建 Release，无需此步。
+  # ─────────────────────────────────────────────────────────────
+  publish-release:
+    name: 标记正式 Release（Latest）
+    needs: [build]
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    if: github.ref_type == 'tag'
+    steps:
+      - name: Pre-release 转正式并标记 Latest
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh release edit "$GITHUB_REF_NAME" \
+            --repo "$GITHUB_REPOSITORY" \
+            --prerelease=false \
+            --latest
