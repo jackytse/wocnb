@@ -3,7 +3,7 @@
  * 粉丝 / 关注列表抽屉（T14 验收 1）。
  *
  * 数据：GET /users/{username}/followers | /following（scope account-engage:r）。
- * 列表项点击 → **外跳** https://cnb.cool/{username}（应用内无用户页路由，
+ * 列表项点击 → **外跳** https://cnb.cool/u/{username}（应用内无用户页路由，
  * 红线：别造路由）。403（缺 account-engage:r）→ StateAlert forbidden
  * 呈现于抽屉内（绝不阻塞 profile 页主体）。
  */

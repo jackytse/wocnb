@@ -318,7 +318,7 @@ interface RawFollowUser {
   is_following?: boolean
 }
 
-/** 粉丝/关注条目（抽屉列表项；点击外跳 https://cnb.cool/{username}） */
+/** 粉丝/关注条目（抽屉列表项；点击外跳 https://cnb.cool/u/{username}） */
 export interface FollowUserItem {
   username: string
   nickname: string
@@ -407,9 +407,14 @@ export function userProfileAvatar(profile: Pick<UserProfile, 'avatar' | 'usernam
   return profile.avatar || cnbAvatarUrl(profile.username)
 }
 
-/** 用户主页外跳地址（应用内无用户页路由 —— 红线：别造路由，一律外跳） */
+/**
+ * 用户主页外跳地址：https://cnb.cool/u/{username}。
+ * （2026-11-20 用户纠错：CNB 个人主页带 /u/ 段，正确示例
+ * https://cnb.cool/u/zero —— 与 profile 页 / UserMenu 的既有口径一致；
+ * 应用内无用户页路由 —— 红线：别造路由，一律外跳）
+ */
 export function cnbUserProfileUrl(username: string): string {
-  return `https://cnb.cool/${username}`
+  return `https://cnb.cool/u/${username}`
 }
 
 /**

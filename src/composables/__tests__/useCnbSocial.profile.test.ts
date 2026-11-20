@@ -96,7 +96,8 @@ describe('userProfileAvatar / cnbUserProfileUrl', () => {
       .toBe('https://cnb.cool/users/jackytse/avatar/s')
   })
 
-  it('主页外跳地址为 https://cnb.cool/{username}（应用内无用户页路由）', () => {
-    expect(cnbUserProfileUrl('jackytse')).toBe('https://cnb.cool/jackytse')
+  it('主页外跳地址为 https://cnb.cool/u/{username}（2026-11-20 纠错：带 /u/ 段）', () => {
+    expect(cnbUserProfileUrl('zero')).toBe('https://cnb.cool/u/zero')
+    expect(cnbUserProfileUrl('jackytse')).toBe('https://cnb.cool/u/jackytse')
   })
 })
