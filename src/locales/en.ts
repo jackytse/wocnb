@@ -519,6 +519,18 @@ export default {
       downloadDesktopOnly: 'Desktop-only. Opened web download in your browser.',
       downloadSecretDisabled: 'Secret repositories do not support archive download.',
     },
+    forkSync: {
+      outdatedTitle: 'Updates available upstream',
+      outdatedDesc: 'This repository is a fork of {upstream}; the upstream branch contains new commits',
+      syncButton: 'Sync now',
+      confirmTitle: 'Sync from upstream',
+      confirmDesc: 'Commits from the upstream {branch} branch of {upstream} will be merged into the {branch} branch of this repository.',
+      confirmHint: 'Local commits are preserved. If conflicts occur, the sync pipeline will fail — resolve conflicts on the web and retry.',
+      startedTitle: 'Sync started',
+      startedDesc: 'Sync pipeline triggered (build {sn}). Refresh the repository once it finishes to see the updates.',
+      viewBuild: 'View build',
+      startFailed: 'Failed to trigger sync. Please try again later.',
+    },
     // Empty (uninitialized) repository guidance: shared by Code / Commits tabs
     emptyRepo: {
       title: 'This repository is empty',

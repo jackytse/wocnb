@@ -124,6 +124,8 @@ export interface RepoDetail {
   visibilityChangeLock: boolean
   /** 仓库主页（dto.Repos4User.site，PATCH 可修改项之一） */
   site: string
+  /** fork 来源仓库完整路径（如 cnb/tutorial/hello-cnb）；非 fork 仓库为空串 */
+  forkedFromPath: string
   /** 主题标签（dto.Repos4User.topics 为字符串，按分隔符拆分为数组） */
   topics: string[]
 }
@@ -211,6 +213,8 @@ interface RawRepoDetail {
   visibility_change_lock?: boolean
   /** 仓库主页（PATCH /{repo} 的可修改项之一） */
   site?: string
+  /** fork 来源仓库（非 fork 仓库为 null；path 为上游仓库完整路径） */
+  forked_from_repo?: { path?: string } | null
   /** 主题标签 —— dto.Repos4User 中是**字符串**（PATCH 时才是数组） */
   topics?: string
 }
@@ -256,6 +260,8 @@ export async function fetchRepoDetail(repoPath: string): Promise<RepoDetail> {
     canManage: canManageRole(accessLevel),
     visibilityChangeLock: !!raw.visibility_change_lock,
     site: raw.site || '',
+    // fork 来源路径：非 fork 仓库 / 异常结构都归一为空串，页面据此隐藏同步入口
+    forkedFromPath: raw.forked_from_repo?.path?.trim() || '',
     topics,
   }
 }

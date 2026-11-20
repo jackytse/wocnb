@@ -510,6 +510,18 @@ export default {
       downloadDesktopOnly: '原始碼包下載為桌面端專屬功能，已在瀏覽器開啟網頁端下載。',
       downloadSecretDisabled: '加密（Secret）倉庫不支援下載原始碼包。',
     },
+    forkSync: {
+      outdatedTitle: '上游倉庫有更新',
+      outdatedDesc: '此倉庫 fork 自 {upstream}，上游分支包含新的提交',
+      syncButton: '同步更新',
+      confirmTitle: '同步上游更新',
+      confirmDesc: '將把上游倉庫 {upstream} 的 {branch} 分支提交合併到當前倉庫的 {branch} 分支。',
+      confirmHint: '合併會保留本倉庫獨有的提交；若存在衝突，同步流水線會失敗，請到網頁端處理衝突後重試。',
+      startedTitle: '同步已開始',
+      startedDesc: '同步流水線已觸發（構建號 {sn}），完成後重新整理倉庫即可看到更新。',
+      viewBuild: '查看構建',
+      startFailed: '同步觸發失敗，請稍後重試',
+    },
     // 空倉庫（未初始化）引導態：程式碼/提交頁籤共用
     emptyRepo: {
       title: '倉庫還沒有程式碼',

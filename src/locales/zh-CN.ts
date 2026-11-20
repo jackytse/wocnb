@@ -518,6 +518,18 @@ export default {
       downloadDesktopOnly: '源码包下载为桌面端专属功能，已在浏览器打开网页端下载。',
       downloadSecretDisabled: '加密（Secret）仓库不支持下载源码包。',
     },
+    forkSync: {
+      outdatedTitle: '上游仓库有更新',
+      outdatedDesc: '此仓库 fork 自 {upstream}，上游分支包含新的提交',
+      syncButton: '同步更新',
+      confirmTitle: '同步上游更新',
+      confirmDesc: '将把上游仓库 {upstream} 的 {branch} 分支提交合并到当前仓库的 {branch} 分支。',
+      confirmHint: '合并会保留本仓库独有的提交；若存在冲突，同步流水线会失败，请到网页端处理冲突后重试。',
+      startedTitle: '同步已开始',
+      startedDesc: '同步流水线已触发（构建号 {sn}），完成后刷新仓库即可看到更新。',
+      viewBuild: '查看构建',
+      startFailed: '同步触发失败，请稍后重试',
+    },
     // 空仓库（未初始化）引导态：代码/提交页签共用
     emptyRepo: {
       title: '仓库还没有代码',

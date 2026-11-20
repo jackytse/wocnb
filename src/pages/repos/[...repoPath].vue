@@ -29,6 +29,7 @@ import StateAlert from '../../components/repo/StateAlert.vue'
 import RepoHeader from '../../components/repo/RepoHeader.vue'
 import RepoTabs from '../../components/repo/RepoTabs.vue'
 import RepoCodeBrowser from '../../components/repo/RepoCodeBrowser.vue'
+import RepoForkSyncBar from '../../components/repo/RepoForkSyncBar.vue'
 import RepoEmptyRepo from '../../components/repo/RepoEmptyRepo.vue'
 import RepoCommits from '../../components/repo/RepoCommits.vue'
 import RepoIssueList from '../../components/repo/RepoIssueList.vue'
@@ -204,6 +205,15 @@ const invalidNumber = computed(() => {
 
       <template v-else>
         <RepoHeader :detail="detail" :loading="loading" @updated="loadRepo" />
+
+        <!-- fork 同步提示条：仅 fork 仓库且上游有更新时渲染（空仓库不检测） -->
+        <RepoForkSyncBar
+          v-if="detail && detail.forkedFromPath && effectiveRef && !repoUninitialized"
+          class="mt-2"
+          :repo-path="repoPath"
+          :upstream-path="detail.forkedFromPath"
+          :branch="effectiveRef"
+        />
 
         <!-- 页签：概览加载中禁点（防用未就绪的 ref 发请求） -->
         <RepoTabs v-if="!loading && detail" />

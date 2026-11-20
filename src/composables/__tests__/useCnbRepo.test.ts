@@ -27,6 +27,8 @@ vi.mock('../useCnbAuth', () => {
   return {
     cnbFetch: (...args: unknown[]) => cnbFetchMock(...args),
     cnbFetchText: (...args: unknown[]) => cnbFetchTextMock(...args),
+    // fetchRepoDetail 依赖 canManageRole 做写入口预判（本文件不测权限口径，固定 Master）
+    canManageRole: (level: string) => level === 'Master' || level === 'Owner',
     CnbApiError: FakeCnbApiError,
   }
 })
@@ -35,6 +37,7 @@ import {
   fetchBuildLogs,
   fetchBuildStatus,
   fetchRepoContents,
+  fetchRepoDetail,
   fetchStageLog,
   normalizeRepoPath,
   repoSiteUrl,
@@ -44,6 +47,30 @@ import {
 beforeEach(() => {
   cnbFetchMock.mockReset()
   cnbFetchTextMock.mockReset()
+})
+
+// ---------------------------------------------------------------------------
+// fetchRepoDetail：fork 来源路径透传（fork 同步入口的数据源）
+// ---------------------------------------------------------------------------
+
+describe('fetchRepoDetail forkedFromPath', () => {
+  it('fork 仓库 → forked_from_repo.path 原样透传', async () => {
+    cnbFetchMock.mockResolvedValue({
+      path: 'jackytse/hello-cnb',
+      forked_from_repo: { path: 'cnb/tutorial/hello-cnb' },
+    })
+    const d = await fetchRepoDetail('jackytse/hello-cnb')
+    expect(d.forkedFromPath).toBe('cnb/tutorial/hello-cnb')
+  })
+
+  it('非 fork 仓库 / 异常结构 → 空串（页面据此隐藏同步入口）', async () => {
+    cnbFetchMock.mockResolvedValue({ path: 'cnb/feedback', forked_from_repo: null })
+    expect((await fetchRepoDetail('cnb/feedback')).forkedFromPath).toBe('')
+    cnbFetchMock.mockResolvedValue({ path: 'cnb/feedback', forked_from_repo: { path: '  ' } })
+    expect((await fetchRepoDetail('cnb/feedback')).forkedFromPath).toBe('')
+    cnbFetchMock.mockResolvedValue({ path: 'cnb/feedback' })
+    expect((await fetchRepoDetail('cnb/feedback')).forkedFromPath).toBe('')
+  })
 })
 
 // ---------------------------------------------------------------------------
