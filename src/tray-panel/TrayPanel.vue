@@ -218,15 +218,12 @@ onBeforeUnmount(() => {
     </header>
 
     <!-- 最近项目列表：整行可点，右侧时间不参与截断。
-         滚动条用 Tailwind 任意变体覆盖全局隐藏规则（面板需要可见细条） -->
+         滚动条：全局 main.css 的 * 规则把滚动条彻底隐藏，唯一例外是
+         本容器（data-tray-scroll）——样式写在 main.css 的未分层规则里，
+         原因见该处注释（Tailwind 工具类在 @layer 里，压不过未分层的 * 规则） -->
     <div
-      class="flex-1 overflow-y-auto
-        [scrollbar-width:thin]
-        [&::-webkit-scrollbar]:block [&::-webkit-scrollbar]:w-2 [&::-webkit-scrollbar]:bg-transparent
-        [&::-webkit-scrollbar-thumb]:rounded-full [&::-webkit-scrollbar-thumb]:border-2
-        [&::-webkit-scrollbar-thumb]:border-solid [&::-webkit-scrollbar-thumb]:border-transparent
-        [&::-webkit-scrollbar-thumb]:bg-black/20 [&::-webkit-scrollbar-thumb]:bg-clip-content
-        dark:[&::-webkit-scrollbar-thumb]:bg-white/20"
+      data-tray-scroll
+      class="flex-1 overflow-y-auto"
     >
       <button
         v-for="item in rows"

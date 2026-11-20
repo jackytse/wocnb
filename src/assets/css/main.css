@@ -43,3 +43,44 @@
   height: 0;
   background: transparent;
 }
+
+/*
+ * 托盘快捷面板的滚动容器（唯一需要可见滚动条的区域）。
+ *
+ * 必须写在这里、且用属性选择器而不是 Tailwind 任意变体：
+ * 上面两条 * 规则是**未分层（unlayered）**的普通 CSS，而 Tailwind 工具类
+ * 位于 @layer utilities —— CSS 层叠规则规定「未分层规则优先于任何
+ * @layer 内的规则，与选择器优先级无关」，因此带 !layered 的
+ * [&::-webkit-scrollbar]:block 之类一律会被 * 规则压掉（实测计算样式
+ * scrollbar-width 恒为 none、滚动条占位 0px）。
+ *
+ * 这里同样用未分层规则，靠属性选择器（class 优先级 0,1,0）盖过 * 的
+ * 0,0,0，且不受分层影响：
+ * - scrollbar-width 显式 auto：WebKit 规定非 auto 值时 ::-webkit-scrollbar
+ *   自定义样式整体失效，会退回 macOS 原生 overlay 滚动条（静止即隐藏，
+ *   视觉上等于"没有滚动条"）；
+ * - ::-webkit-scrollbar 细条 + 透明边框 + background-clip: content-box，
+ *   做出 4px 悬浮细滑块（8px 可点区域），常驻可见。
+ */
+[data-tray-scroll] {
+  scrollbar-width: auto;
+}
+
+[data-tray-scroll]::-webkit-scrollbar {
+  display: block;
+  width: 8px;
+  height: 8px;
+  background: transparent;
+}
+
+[data-tray-scroll]::-webkit-scrollbar-thumb {
+  background-color: rgb(0 0 0 / 0.2);
+  border: 2px solid transparent;
+  border-radius: 9999px;
+  background-clip: content-box;
+}
+
+.dark [data-tray-scroll]::-webkit-scrollbar-thumb {
+  background-color: rgb(255 255 255 / 0.24);
+  background-clip: content-box;
+}
