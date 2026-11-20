@@ -8,6 +8,7 @@
 | 上游依据 | `docs/prd/cnb-api-coverage-prd.md`（v1.1）、`.workbuddy/context/cnb-swagger.json`（201 path / 268 operation）、`.workbuddy/context/cnb-missing-operations.txt` |
 | 事实核对 | 本文所有端点均按 `method + path` 在 swagger 中逐条核对（含 scope / 参数必填性 / 响应 schema）；所有现有代码引用均标注 `文件:行号` |
 | 状态 | **已与 PRD v1.1 对齐**。§1 的 6 处事实修正已由 PM 全部回写；§10 中 Q1/Q2/Q4 已闭，仅剩 Q3（低风险）与 Q5（待真机探测） |
+| 实施状态 | 15 个任务已全部实施，落地 47 端点（B3 附件上传 2 端点延后），随 v0.1.0-rc.25 发布（2026-11-18） |
 
 ---
 

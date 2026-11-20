@@ -7,6 +7,7 @@
 | 文档类型 | 增量 PRD（基于现有仓库详情页 5 页签的功能扩展） |
 | 上游依据 | CNB 官方 swagger（`.workbuddy/context/cnb-swagger.json`）+ 差距分析（`cnb-missing-operations.txt`） |
 | 状态 | 待架构师评审 |
+| 实施状态 | A+B+C 组已全部实施（规划 48 端点，落地 47，B3 附件上传 2 端点延后），随 v0.1.0-rc.25 发布（2026-11-18） |
 
 ---
 

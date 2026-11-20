@@ -9,6 +9,7 @@
 | 不做的范围 | P2（REQ-12~15 / 24 端点）、35 条"明确不做"、41 条 backlog —— 仅标注，不分解任务 |
 | 覆盖率目标 | 97 → **168/268 ≈ 62.7%**（97 + 71） |
 | 事实核对 | 本文所有端点按 `method + path` 逐条核对 `cnb-swagger.json`（201 path / 268 operation），含 **请求体 schema / 响应 schema / 写端点是否空 body / scope 原文**；所有现有代码引用标注 `文件:行号` |
+| 实施状态 | P0（T01~T07）与 P1（T08~T17）已全部实施并通过 QA 两轮验收（2026-11-18），已随 v0.1.0-rc.25 发布 |
 | 上游范式 | 复用 `docs/design/cnb-api-coverage-design.md`（D1~D4 / R1~R14 / 附录 A）与 `docs/design/org-features-design.md`（保护分支 / 成员写范式），**不重复设计** |
 
 ---
