@@ -68,35 +68,14 @@ const status = ref<BuildStatus | null>(null)
 const loading = ref(false)
 const error = ref<Error | null>(null)
 
-async function load() {
-  if (!props.repoPath || !props.sn) {
-    return
-  }
-  loading.value = true
-  error.value = null
-  try {
-    status.value = await fetchBuildStatus(props.repoPath, props.sn)
-    // 首拉成功即重置容错计数；未到终态时启动自动轮询
-    pollErrorCount.value = 0
-    scheduleAutoPoll()
-  }
-  catch (err) {
-    status.value = null
-    error.value = err as Error
-  }
-  finally {
-    loading.value = false
-  }
-}
-
-watch(() => `${props.repoPath}|${props.sn}`, () => {
-  // 构建号切换：先停掉旧 sn 的自动轮询，防止残留定时器把新状态写花
-  stopAutoPoll()
-  void load()
-}, { immediate: true })
-
 // ---------------------------------------------------------------------------
 // 自动刷新（2026-11-20 用户需求）：构建未到终态时每 3s 重拉状态直到终态
+//
+// ⚠️ 声明顺序红线：下面的 watch 是 immediate: true，setup 阶段同步执行，
+// 回调会调用 stopAutoPoll() —— 若 pollTimer 等状态声明在 watch 之后，
+// 会触发 TDZ ReferenceError 导致整个详情组件挂载失败（2026-11-20 回归：
+// 「流水线流程没有正常显示」，typecheck/单测均抓不到）。
+// 因此轮询状态与函数必须全部先于 watch 声明。
 // ---------------------------------------------------------------------------
 
 /** 自动轮询间隔（与停止构建的既有 3s 口径一致） */
@@ -179,6 +158,33 @@ async function pollOnce() {
   // 未到终态：继续下一轮
   scheduleAutoPoll()
 }
+
+async function load() {
+  if (!props.repoPath || !props.sn) {
+    return
+  }
+  loading.value = true
+  error.value = null
+  try {
+    status.value = await fetchBuildStatus(props.repoPath, props.sn)
+    // 首拉成功即重置容错计数；未到终态时启动自动轮询
+    pollErrorCount.value = 0
+    scheduleAutoPoll()
+  }
+  catch (err) {
+    status.value = null
+    error.value = err as Error
+  }
+  finally {
+    loading.value = false
+  }
+}
+
+watch(() => `${props.repoPath}|${props.sn}`, () => {
+  // 构建号切换：先停掉旧 sn 的自动轮询，防止残留定时器把新状态写花
+  stopAutoPoll()
+  void load()
+}, { immediate: true })
 
 // ---------------------------------------------------------------------------
 // 停止构建（T04）：ConfirmDialog → stopBuild → 轮询到终态（最多 30s）
@@ -290,21 +296,15 @@ function openStageLog(pipelineId: string, stageId: string, pipelineName: string,
 // ---------------------------------------------------------------------------
 
 /**
- * AI 用量端点的 pipelineId 来源（Q2）：
- * - **已找到**：fetchBuildStatus 的 pipelinesStatus 被归一为 BuildStatus.pipelines，
- *   每项 id 即 pipelineId（useCnbRepo.ts:buildStatus 解析 `p.id || key`）。
- *   每条流水线各挂一个 AiUsagePanel，互不串数据。
- * - **兜底**：构建状态解析失败（parseOk=false）或无流水线时，用 sn 占位渲染一个
- *   面板；swagger 的 BuildLog / BuildStatusResult 无独立 pipelineId 顶层字段，
- *   该兜底**需在真机验证**（用真实构建 sn 调 ai-audit 端点确认能否路由）。
- *
- * 该区块独立于构建日志主体：AI 权限缺失（repo-cnb-history:r）由 AiUsagePanel
- * 内部 StateAlert 降级，不影响上面的 pipeline→stage 树。
+ * AI 用量端点的 pipelineId 来源：
+ * - pipelineId 必须与构建状态里的流水线 id 一致（即 pipelinesStatus 的 key，
+ *   归一化时写入 `p.id || key`）。每条流水线各挂一个 AiUsagePanel，互不串数据。
+ * - **不再用 sn 占位兜底**（2026-11-20）：占位值必然打不中 AI 用量端点，
+ *   实测表现为详情页出现「资源不存在」误导提示；无流水线时干脆不渲染该区块。
  */
-const aiPipelineIds = computed<string[]>(() => {
-  const ids = (status.value?.pipelines ?? []).map(p => p.id).filter(Boolean)
-  return ids.length > 0 ? ids : (props.sn ? [props.sn] : [])
-})
+const aiPipelineIds = computed<string[]>(() =>
+  (status.value?.pipelines ?? []).map(p => p.id).filter(Boolean),
+)
 </script>
 
 <template>
