@@ -59,6 +59,10 @@
 - `cnbGroups`（useCnbAuth.ts）是组织列表唯一共享状态，增删组织后须重新 fetch。
 - 不做项：Logo 上传、删除组织、贡献者趋势（仓库级端点传组织路径 400）。
 
+## 发版约定（2026-11-20 用户明确要求）
+
+- **每次发版都必须创建 Release 并作为 Latest 可见**（含 rc 版）。GitHub 侧：tag 要单独一次 push 且 ≤3 个（超 3 个 workflow 静默不触发）；tauri-action 对含 `-` 的 tag 建成 Pre-release → release.yml 已加 publish-release job（gh release edit --prerelease=false --latest）自动转正式。
+
 ## 测试基线
 
 - cargo test 109 + vitest 700+；本地 typecheck 口径：`npx vue-tsc -p ./tsconfig.app.json`（CI 用，Array.at 超 ES2020 lib 会报）。
