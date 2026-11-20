@@ -212,26 +212,44 @@ fn rebuild_tray_menu(locale: &str) {
 
 /// 应用菜单栏可翻译文案集合（纯数据，单测锁定三语齐全）。
 ///
-/// 只收录**自定义**条目的文案；系统预定义条目（拷贝/粘贴/最小化等
-/// PredefinedMenuItem）的文案由 macOS 按系统语言渲染，应用不可定制，
-/// 也不应定制（跟随系统是 macOS 平台惯例）。子菜单标题（编辑/窗口）
-/// 是我们自己创建的，需要三语。
+/// 自定义条目（about/quit/子菜单标题）与**系统预定义条目**全部收录。
+/// 预定义条目（PredefinedMenuItem）不传 text 时由 macOS 按系统语言渲染——
+/// 当系统语言与应用语言不一致时，菜单栏会出现"关于 WOCNB（中文）+
+/// Undo/Cut（英文）"的混搭，观感上就是"菜单没有多语言"；因此所有
+/// 预定义条目都显式传应用语言文案（快捷键、行为仍由系统按预定义条目
+/// 自动挂载，只换标签不换功能）。
 #[derive(Debug, PartialEq, Eq)]
 struct AppMenuTexts {
     /// 应用菜单里"关于 WOCNB"条目
     about: &'static str,
     /// 应用菜单里"退出 WOCNB"条目（⌘Q，行为 = 托盘"退出应用"）
     quit: &'static str,
-    /// "编辑"子菜单标题（内含拷贝/粘贴等系统预定义项）
+    /// "编辑"子菜单标题
     edit: &'static str,
-    /// "窗口"子菜单标题（内含最小化/关闭等系统预定义项）
+    /// "窗口"子菜单标题
     window: &'static str,
+    /// 预定义条目：撤销 / 重做
+    undo: &'static str,
+    redo: &'static str,
+    /// 预定义条目：剪切 / 拷贝 / 粘贴 / 全选
+    cut: &'static str,
+    copy: &'static str,
+    paste: &'static str,
+    select_all: &'static str,
+    /// 预定义条目：最小化 / 关闭窗口（窗口子菜单）
+    minimize: &'static str,
+    close_window: &'static str,
+    /// 预定义条目：隐藏 WOCNB / 隐藏其他（应用子菜单）
+    hide: &'static str,
+    hide_others: &'static str,
 }
 
 /// 应用菜单栏文案三语映射（纯函数，单测锁定）。
 ///
 /// 语言口径与 tray_menu_texts 完全一致（en / zh-TW / 其余回落 zh-CN），
 /// 两者共用 set_tray_locale 的同一份归一化结果，切语言时同步重建。
+/// 各语言的条目用词对齐 macOS 系统简体/繁体本地化惯例（如繁体用
+/// 「復原/剪下/貼上/縮小」而非简体直译）。
 fn app_menu_texts(locale: &str) -> AppMenuTexts {
     match locale {
         "en" => AppMenuTexts {
@@ -239,18 +257,48 @@ fn app_menu_texts(locale: &str) -> AppMenuTexts {
             quit: "Quit WOCNB",
             edit: "Edit",
             window: "Window",
+            undo: "Undo",
+            redo: "Redo",
+            cut: "Cut",
+            copy: "Copy",
+            paste: "Paste",
+            select_all: "Select All",
+            minimize: "Minimize",
+            close_window: "Close Window",
+            hide: "Hide WOCNB",
+            hide_others: "Hide Others",
         },
         "zh-TW" => AppMenuTexts {
             about: "關於 WOCNB",
             quit: "退出 WOCNB",
             edit: "編輯",
             window: "視窗",
+            undo: "復原",
+            redo: "重做",
+            cut: "剪下",
+            copy: "拷貝",
+            paste: "貼上",
+            select_all: "全選",
+            minimize: "縮小",
+            close_window: "關閉視窗",
+            hide: "隱藏 WOCNB",
+            hide_others: "隱藏其他",
         },
         _ => AppMenuTexts {
             about: "关于 WOCNB",
             quit: "退出 WOCNB",
             edit: "编辑",
             window: "窗口",
+            undo: "撤销",
+            redo: "重做",
+            cut: "剪切",
+            copy: "拷贝",
+            paste: "粘贴",
+            select_all: "全选",
+            minimize: "最小化",
+            close_window: "关闭窗口",
+            hide: "隐藏 WOCNB",
+            hide_others: "隐藏其他",
         },
     }
 }
@@ -262,10 +310,11 @@ const APP_MENU_QUIT_ID: &str = "app-quit";
 
 /// 按 locale 构建 macOS 应用菜单栏（顶部 menu bar）。
 ///
-/// 结构（自定义条目用应用语言，PredefinedMenuItem 跟随系统语言）：
-///   [WOCNB]  关于 WOCNB ／ ─ ／ 隐藏（系统）／ 退出 WOCNB ⌘Q
-///   [编辑]   撤销/重做/剪切/拷贝/粘贴/全选（系统预定义，自动带快捷键）
-///   [窗口]   最小化/关闭（系统预定义）
+/// 结构（自定义条目与系统预定义条目**全部**使用应用语言文案；预定义
+/// 条目只换标签，快捷键与行为仍由系统自动挂载）：
+///   [WOCNB]  关于 WOCNB ／ ─ ／ 隐藏 WOCNB ／ 隐藏其他 ／ ─ ／ 退出 WOCNB ⌘Q
+///   [编辑]   撤销/重做/─/剪切/拷贝/粘贴/全选（预定义，自动带快捷键）
+///   [窗口]   最小化/─/关闭窗口（预定义）
 ///
 /// 必须在主线程调用（NSMenu 线程约束，同托盘菜单）。
 #[cfg(target_os = "macos")]
@@ -290,39 +339,42 @@ fn build_app_menu(
         &[
             &about_item,
             &PredefinedMenuItem::separator(app)?,
-            // 隐藏/隐藏其他：纯系统行为（NSApp hide），文案跟随系统语言
-            &PredefinedMenuItem::hide(app, None)?,
-            &PredefinedMenuItem::hide_others(app, None)?,
+            // 隐藏/隐藏其他：系统行为（NSApp hide），文案显式传应用语言
+            //（不传 None——None 会按系统语言渲染，系统语言与应用语言
+            // 不一致时菜单栏混搭两种语言）
+            &PredefinedMenuItem::hide(app, Some(texts.hide))?,
+            &PredefinedMenuItem::hide_others(app, Some(texts.hide_others))?,
             &PredefinedMenuItem::separator(app)?,
             &quit_item,
         ],
     )?;
 
-    // —— 编辑子菜单：全部系统预定义项（文本处理快捷键由系统自动挂载）——
+    // —— 编辑子菜单：全部系统预定义项，快捷键由系统自动挂载；
+    // 文案显式传应用语言（同上，避免跟随系统语言的混搭）——
     let edit_submenu = Submenu::with_items(
         app,
         texts.edit,
         true,
         &[
-            &PredefinedMenuItem::undo(app, None)?,
-            &PredefinedMenuItem::redo(app, None)?,
+            &PredefinedMenuItem::undo(app, Some(texts.undo))?,
+            &PredefinedMenuItem::redo(app, Some(texts.redo))?,
             &PredefinedMenuItem::separator(app)?,
-            &PredefinedMenuItem::cut(app, None)?,
-            &PredefinedMenuItem::copy(app, None)?,
-            &PredefinedMenuItem::paste(app, None)?,
-            &PredefinedMenuItem::select_all(app, None)?,
+            &PredefinedMenuItem::cut(app, Some(texts.cut))?,
+            &PredefinedMenuItem::copy(app, Some(texts.copy))?,
+            &PredefinedMenuItem::paste(app, Some(texts.paste))?,
+            &PredefinedMenuItem::select_all(app, Some(texts.select_all))?,
         ],
     )?;
 
-    // —— 窗口子菜单 ——
+    // —— 窗口子菜单：预定义条目 + 应用语言文案 ——
     let window_submenu = Submenu::with_items(
         app,
         texts.window,
         true,
         &[
-            &PredefinedMenuItem::minimize(app, None)?,
+            &PredefinedMenuItem::minimize(app, Some(texts.minimize))?,
             &PredefinedMenuItem::separator(app)?,
-            &PredefinedMenuItem::close_window(app, None)?,
+            &PredefinedMenuItem::close_window(app, Some(texts.close_window))?,
         ],
     )?;
 
@@ -1848,7 +1900,7 @@ mod tests {
 
     /// 应用菜单栏三语文案映射锁定（macOS 顶部 menu bar 多语言）：
     /// 三种显式语言各自命中独立文案；所有字段非空（空串条目渲染异常）；
-    /// about/quit 文案必须包含应用名 WOCNB（macOS 惯例：菜单条目带应用名）。
+    /// about/quit/hide 文案必须包含应用名 WOCNB（macOS 惯例：菜单条目带应用名）。
     #[test]
     fn test_app_menu_texts_locales() {
         for locale in ["en", "zh-CN", "zh-TW"] {
@@ -1856,6 +1908,13 @@ mod tests {
             assert!(!t.about.is_empty() && t.about.contains("WOCNB"), "locale={locale}");
             assert!(!t.quit.is_empty() && t.quit.contains("WOCNB"), "locale={locale}");
             assert!(!t.edit.is_empty() && !t.window.is_empty(), "locale={locale}");
+            // 预定义条目文案（跟随应用语言而非系统语言的改造）全部非空
+            assert!(!t.undo.is_empty() && !t.redo.is_empty(), "locale={locale}");
+            assert!(!t.cut.is_empty() && !t.copy.is_empty(), "locale={locale}");
+            assert!(!t.paste.is_empty() && !t.select_all.is_empty(), "locale={locale}");
+            assert!(!t.minimize.is_empty() && !t.close_window.is_empty(), "locale={locale}");
+            assert!(!t.hide.is_empty() && t.hide.contains("WOCNB"), "locale={locale}");
+            assert!(!t.hide_others.is_empty(), "locale={locale}");
         }
         // 三种语言互不相同（防止复制粘贴漏改某语言）
         assert_ne!(app_menu_texts("en"), app_menu_texts("zh-CN"));
