@@ -107,16 +107,49 @@ const TRAY_LOCALE_FILE: &str = "tray-locale.txt";
 
 /// 托盘菜单文案三语映射（纯函数，单测锁定）。
 ///
-/// 文案与前端 menu.openApp / menu.logout 同语义：跟随设置页可选的三种
-/// 显式语言；'system' 不会出现在这里（前端只传 resolvedLocale 具体值），
-/// 归一化兜底也回落 zh-CN（历史行为就是中文，改默认会让老用户突兀）。
-fn tray_menu_texts(locale: &str) -> (&'static str, &'static str) {
+/// 文案与前端 trayPanel.* 命名空间同语义（检测更新/设置用词与快捷面板
+/// 底部状态栏一致）；'system' 不会出现在这里（前端只传 resolvedLocale
+/// 具体值），归一化兜底也回落 zh-CN（历史行为就是中文，改默认会让老
+/// 用户突兀）。账号条目文案是用户名本身，不参与翻译。
+#[derive(Debug, PartialEq, Eq)]
+struct TrayMenuTexts {
+    /// 打开应用（前置并显示主窗口）
+    open: &'static str,
+    /// 退出应用（app.exit(0) 真正退出）
+    quit: &'static str,
+    /// 登录（未登录态显示，点击打开主窗口登录页）
+    login: &'static str,
+    /// 检测更新（打开主窗口"设置 · 关于"页）
+    check_update: &'static str,
+    /// 设置（打开主窗口设置页）
+    settings: &'static str,
+}
+
+fn tray_menu_texts(locale: &str) -> TrayMenuTexts {
     match locale {
         // 英文文案与中文「打开应用」同义：不把产品名放进入口项，
         // 避免托盘菜单看起来像"打开某个叫 WOCNB 的东西"
-        "en" => ("Open App", "Quit"),
-        "zh-TW" => ("開啟應用", "退出應用"),
-        _ => ("打开应用", "退出应用"),
+        "en" => TrayMenuTexts {
+            open: "Open App",
+            quit: "Quit",
+            login: "Sign in",
+            check_update: "Check updates",
+            settings: "Settings",
+        },
+        "zh-TW" => TrayMenuTexts {
+            open: "開啟應用",
+            quit: "退出應用",
+            login: "登入",
+            check_update: "檢測更新",
+            settings: "設定",
+        },
+        _ => TrayMenuTexts {
+            open: "打开应用",
+            quit: "退出应用",
+            login: "登录",
+            check_update: "检测更新",
+            settings: "设置",
+        },
     }
 }
 
@@ -172,37 +205,144 @@ fn write_tray_locale(app: &tauri::AppHandle, locale: &str) {
     }
 }
 
-/// 按 locale 构建托盘原生菜单（macOS 专属）。
+/// 托盘菜单登录态持久化文件名（存当前登录用户名；空文件/缺失 = 未登录）
+const TRAY_AUTH_FILE: &str = "tray-auth.txt";
+
+/// 托盘登录态内存槽位（进程内全局，"" = 未登录）。
 ///
-/// 条目 id 固定 open/quit：事件分发（on_menu_event）按 id 匹配，
-/// 语言切换只换文案不换 id，回调逻辑零改动。
+/// 线程模型与 tray_locale_slot 一致：命令处理线程写、主线程重建菜单读，
+/// Mutex 字符串足够；OnceLock 免初始化时序问题。
+/// 只存用户名（展示用途，非敏感凭据——令牌仍只在系统钥匙串/localStorage）。
+static TRAY_AUTH: std::sync::OnceLock<std::sync::Mutex<String>> = std::sync::OnceLock::new();
+
+fn tray_auth_slot() -> &'static std::sync::Mutex<String> {
+    TRAY_AUTH.get_or_init(|| std::sync::Mutex::new(String::new()))
+}
+
+/// 登录态持久化文件完整路径（解析失败返回 None，按"无持久化"降级）
+fn tray_auth_file_path(app: &tauri::AppHandle) -> Option<std::path::PathBuf> {
+    app.path().app_data_dir().ok().map(|d| d.join(TRAY_AUTH_FILE))
+}
+
+/// 读取持久化的登录用户名（启动时调用；缺失/空白回落空串 = 未登录）
+fn read_tray_auth(app: &tauri::AppHandle) -> String {
+    if let Some(path) = tray_auth_file_path(app) {
+        if let Ok(raw) = std::fs::read_to_string(path) {
+            let name = raw.trim().to_string();
+            if !name.is_empty() {
+                return name;
+            }
+        }
+    }
+    String::new()
+}
+
+/// 持久化登录态（尽力而为：写失败只影响下次启动的初始条目，不阻断）
+fn write_tray_auth(app: &tauri::AppHandle, username: &str) {
+    if let Some(path) = tray_auth_file_path(app) {
+        if let Some(dir) = path.parent() {
+            let _ = std::fs::create_dir_all(dir);
+        }
+        if let Err(err) = std::fs::write(&path, username) {
+            log::warn!("[tray] 持久化托盘登录态失败: {err}");
+        }
+    }
+}
+
+/// 按 locale 与登录态构建托盘原生菜单（macOS 专属）。
+///
+/// 结构（登录/未登录只影响账号区条目，其余条目恒定）：
+/// ```text
+/// 打开应用
+/// ─────────
+/// 登录            ← 未登录：点击打开主窗口登录页
+/// 用户名（禁态）    ← 已登录：只展示不响应点击
+/// 检测更新
+/// 设置
+/// ─────────
+/// 退出应用
+/// ```
+///
+/// 条目 id 固定（open/login/account/check-update/settings/quit）：事件
+/// 分发（on_menu_event）按 id 匹配，语言切换/登录态切换只换文案与结构、
+/// 不换已有 id，回调逻辑零改动。
 #[cfg(target_os = "macos")]
-fn build_tray_menu(locale: &str) -> muda::Menu {
+fn build_tray_menu(locale: &str, username: &str) -> muda::Menu {
     use muda::{Menu, MenuId, MenuItem, PredefinedMenuItem};
-    let (open_text, quit_text) = tray_menu_texts(locale);
+    let texts = tray_menu_texts(locale);
+    let tray_menu = Menu::new();
+
+    // 打开应用
     let open_item = MenuItem::builder()
         .id(MenuId::new("open"))
-        .text(open_text)
+        .text(texts.open)
         .enabled(true)
         .build();
-    let quit_item = MenuItem::builder()
-        .id(MenuId::new("quit"))
-        .text(quit_text)
-        .enabled(true)
-        .build();
-    let tray_menu = Menu::new();
-    // append 到新建空菜单理论上不会失败（无父节点冲突），忽略错误保持签名简单
     let _ = tray_menu.append(&open_item);
     let _ = tray_menu.append(&PredefinedMenuItem::separator());
+
+    // 账号区：登录/未登录二选一（id 不同，事件分发按 id 走不同分支）
+    if username.is_empty() {
+        let login_item = MenuItem::builder()
+            .id(MenuId::new("login"))
+            .text(texts.login)
+            .enabled(true)
+            .build();
+        let _ = tray_menu.append(&login_item);
+    } else {
+        // 禁态条目：仅展示当前账号，点击无事件（原生菜单惯例，
+        // 如微信/钉钉托盘菜单的账号展示）
+        let account_item = MenuItem::builder()
+            .id(MenuId::new("account"))
+            .text(username)
+            .enabled(false)
+            .build();
+        let _ = tray_menu.append(&account_item);
+    }
+
+    // 功能区：检测更新（打开"设置 · 关于"）、设置
+    let check_item = MenuItem::builder()
+        .id(MenuId::new("check-update"))
+        .text(texts.check_update)
+        .enabled(true)
+        .build();
+    let _ = tray_menu.append(&check_item);
+    let settings_item = MenuItem::builder()
+        .id(MenuId::new("settings"))
+        .text(texts.settings)
+        .enabled(true)
+        .build();
+    let _ = tray_menu.append(&settings_item);
+
+    let _ = tray_menu.append(&PredefinedMenuItem::separator());
+
+    // 退出应用
+    let quit_item = MenuItem::builder()
+        .id(MenuId::new("quit"))
+        .text(texts.quit)
+        .enabled(true)
+        .build();
     let _ = tray_menu.append(&quit_item);
     tray_menu
 }
 
 /// 主线程重建托盘菜单（替换 TRAY_NATIVE_MENU，旧菜单随之释放）。
+///
+/// 无参设计：语言与登录态分别读各自的全局槽位——两条同步链路
+/// （set_tray_locale / set_tray_auth）都可能触发重建，重建时必须
+/// 取两者当前值组合，避免"改了语言丢了登录态"或反之。
 /// 必须在主线程调用（muda/NSMenu 线程约束，调用方保证）。
 #[cfg(target_os = "macos")]
-fn rebuild_tray_menu(locale: &str) {
-    let menu = build_tray_menu(locale);
+fn rebuild_tray_menu() {
+    let locale = tray_locale_slot()
+        .lock()
+        .map(|g| g.clone())
+        .unwrap_or_default();
+    let username = tray_auth_slot()
+        .lock()
+        .map(|g| g.clone())
+        .unwrap_or_default();
+    let menu = build_tray_menu(&locale, &username);
     TRAY_NATIVE_MENU.with(|slot| *slot.borrow_mut() = Some(menu));
 }
 
@@ -423,7 +563,8 @@ fn set_tray_locale(app: tauri::AppHandle, locale: String) -> Result<(), String> 
         let loc = locale.clone();
         let app_handle = app.clone();
         app.run_on_main_thread(move || {
-            rebuild_tray_menu(&loc);
+            // 托盘菜单重建（无参：语言+登录态都从全局槽位取，见函数注释）
+            rebuild_tray_menu();
             // 应用菜单栏重建：set_menu 会替换现有菜单；失败（极端场景，
             // 如菜单条目构建出错）静默降级保留旧语言菜单，不打断切换流程
             if let Ok(menu) = build_app_menu(&app_handle, &loc) {
@@ -433,6 +574,34 @@ fn set_tray_locale(app: tauri::AppHandle, locale: String) -> Result<(), String> 
             }
         })
         .map_err(|e| format!("run_on_main_thread failed: {e}"))?;
+    }
+    Ok(())
+}
+
+/// 前端登录态变化时同步托盘菜单（main.ts watch 登录态 → 本命令）。
+///
+/// 约定：username 空串 = 未登录（菜单显示"登录"条目）；非空 = 已登录
+/// （菜单显示禁态用户名）。处理流程与 set_tray_locale 同构：
+/// 写内存 → 持久化 → 主线程重建托盘菜单（应用菜单栏不含账号信息，无需重建）。
+///
+/// 为什么持久化用户名：应用启动时前端恢复会话（restoreSession，含网络
+/// 请求）完成前用户名未知，持久化值能让启动初期的托盘菜单就显示正确的
+/// 登录态条目；会话恢复完成后前端会再同步一次覆盖为本会话真值。
+#[tauri::command]
+fn set_tray_auth(app: tauri::AppHandle, username: String) -> Result<(), String> {
+    // 归一：去首尾空白；纯空白视为未登录（防脏值）
+    let username = username.trim().to_string();
+    {
+        let slot = tray_auth_slot();
+        let mut guard = slot.lock().map_err(|e| e.to_string())?;
+        *guard = username.clone();
+    }
+    write_tray_auth(&app, &username);
+    // macOS：菜单重建必须回主线程（muda/NSMenu 线程约束，同 set_tray_locale）
+    #[cfg(target_os = "macos")]
+    {
+        app.run_on_main_thread(rebuild_tray_menu)
+            .map_err(|e| format!("run_on_main_thread failed: {e}"))?;
     }
     Ok(())
 }
@@ -1394,6 +1563,8 @@ pub fn run() {
             cnb_download_archive,
             // —— 托盘菜单语言（跟随前端应用语言设置，见托盘 locale 模块注释）——
             set_tray_locale,
+            // —— 托盘菜单登录态（登录/未登录渲染不同条目）——
+            set_tray_auth,
             // —— 托盘左键快捷面板（活跃项目 + 检测更新 + 退出）——
             hide_tray_panel,
             tray_panel_open_target,
@@ -1486,10 +1657,27 @@ pub fn run() {
         .on_menu_event(|app, event| {
             // 菜单事件分发：
             // - open：显示应用首页（主窗口）
+            // - login：打开主窗口并跳登录页（未登录态菜单条目）
+            // - check-update：打开主窗口"设置 · 关于"页（含检测更新入口）
+            // - settings：打开主窗口设置页
             // - quit：app.exit 触发进程完全退出
+            // 说明：login/check-update/settings 复用快捷面板的下钻通道
+            // cnb://panel-navigate（main.ts 已监听该事件做 router.push），
+            // 与 tray_panel_open_target 同一链路，前端零新增代码。
             match event.id().0.as_str() {
                 "open" => show_main_window(app),
                 "quit" => app.exit(0),
+                "login" | "check-update" | "settings" => {
+                    let path = match event.id().0.as_str() {
+                        "login" => "/login",
+                        "check-update" => "/settings/about",
+                        _ => "/settings",
+                    };
+                    show_main_window(app);
+                    if let Err(err) = app.emit_to("main", "cnb://panel-navigate", path) {
+                        log::warn!("[tray] 菜单跳转事件发送失败: {err}");
+                    }
+                }
                 _ => {}
             }
         })
@@ -1606,7 +1794,13 @@ pub fn run() {
                 if let Ok(mut guard) = tray_locale_slot().lock() {
                     *guard = tray_locale.clone();
                 }
-                let tray_menu = build_tray_menu(&tray_locale);
+                // 登录态同理：读持久化用户名灌入槽位（前端会话恢复完成后
+                // 会经 set_tray_auth 覆盖为本会话真值）
+                let tray_username = read_tray_auth(app.handle());
+                if let Ok(mut guard) = tray_auth_slot().lock() {
+                    *guard = tray_username.clone();
+                }
+                let tray_menu = build_tray_menu(&tray_locale, &tray_username);
                 // 存入主线程 thread_local：保持菜单存活（弹出时引用 NSMenu），
                 // 供托盘事件回调读取（见 TRAY_NATIVE_MENU 注释）
                 TRAY_NATIVE_MENU.with(|slot| *slot.borrow_mut() = Some(tray_menu));
@@ -1886,16 +2080,22 @@ mod tests {
     /// 且 open/quit 两条都不能为空（muda 空文本条目渲染异常）
     #[test]
     fn test_tray_menu_texts_locales() {
-        let (open_en, quit_en) = tray_menu_texts("en");
-        assert!(!open_en.is_empty() && !quit_en.is_empty());
-        assert_ne!(open_en, quit_en);
-        let (open_tw, quit_tw) = tray_menu_texts("zh-TW");
-        assert!(!open_tw.is_empty() && !quit_tw.is_empty());
-        let (open_cn, quit_cn) = tray_menu_texts("zh-CN");
-        assert!(!open_cn.is_empty() && !quit_cn.is_empty());
+        let en = tray_menu_texts("en");
+        assert!(!en.open.is_empty() && !en.quit.is_empty());
+        assert_ne!(en.open, en.quit);
+        let tw = tray_menu_texts("zh-TW");
+        assert!(!tw.open.is_empty() && !tw.quit.is_empty());
+        let cn = tray_menu_texts("zh-CN");
+        assert!(!cn.open.is_empty() && !cn.quit.is_empty());
         // 三种语言的文案互不相同（同一语言不可两种显示）
-        assert_ne!((open_en, quit_en), (open_tw, quit_tw));
-        assert_ne!((open_cn, quit_cn), (open_en, quit_en));
+        assert_ne!(en, tw);
+        assert_ne!(cn, en);
+        // 新增功能条目（登录/检测更新/设置）三语齐全非空
+        for t in [en, tw, cn] {
+            assert!(!t.login.is_empty(), "login empty");
+            assert!(!t.check_update.is_empty(), "check_update empty");
+            assert!(!t.settings.is_empty(), "settings empty");
+        }
     }
 
     /// 应用菜单栏三语文案映射锁定（macOS 顶部 menu bar 多语言）：

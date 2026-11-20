@@ -8,7 +8,7 @@ import { setupLayouts } from 'virtual:generated-layouts'
 import { createHead } from '@unhead/vue/client'
 import { invoke } from '@tauri-apps/api/core'
 import { openUrl } from '@tauri-apps/plugin-opener'
-import { restoreSession, cnbToken, setUnauthorizedHandler } from './composables/useCnbAuth'
+import { restoreSession, cnbToken, cnbUser, setUnauthorizedHandler } from './composables/useCnbAuth'
 import { refreshCliTokenIfNeeded } from './composables/useCnbCliAuth'
 import { initBuildWatcher } from './composables/useCnbBuildWatch'
 import { initBuildNotificationActionHandler } from './composables/useBuildNotificationAction'
@@ -280,6 +280,46 @@ function syncTrayLocale(loc: string): void {
   })
 }
 syncTrayLocale(resolvedLocale.value)
+
+/**
+ * 同步登录态到托盘菜单（Rust 按 登录/未登录 渲染不同条目）。
+ *
+ * 约定：username 空串 = 未登录（菜单显示"登录"条目，点击直达登录页）；
+ * 非空 = 已登录（菜单显示禁态用户名）。Rust 侧会持久化到 tray-auth.txt，
+ * 让应用下次启动时、前端会话恢复完成之前就能渲染正确的登录态条目。
+ *
+ * 同步三态（避免误报）：
+ * - 无令牌 → 明确传空串（登出后菜单切回"登录"条目）；
+ * - 有令牌且用户名已知 → 传用户名；
+ * - 有令牌但用户信息尚未恢复完成（restoreSession 网络请求进行中）→
+ *   跳过本次同步，保留 Rust 侧上次会话的持久化值，避免菜单短暂闪回
+ *   "登录"条目；恢复完成后 watch 触发再同步真值。
+ *
+ * 调用时机：启动一次 + 令牌/用户名任一变化（watch）。浏览器 dev 无
+ * Tauri runtime 时跳过；失败只 console.warn（低价值 UI，不打扰用户）。
+ */
+function syncTrayAuth(): void {
+  if (!('__TAURI_INTERNALS__' in window)) {
+    return
+  }
+  if (!cnbToken.value) {
+    invoke('set_tray_auth', { username: '' }).catch((err) => {
+      console.warn('[wocnb] 同步托盘登录态失败:', err)
+    })
+    return
+  }
+  const username = cnbUser.value?.username
+  if (!username) {
+    return
+  }
+  invoke('set_tray_auth', { username }).catch((err) => {
+    console.warn('[wocnb] 同步托盘登录态失败:', err)
+  })
+}
+syncTrayAuth()
+watch([cnbToken, () => cnbUser.value?.username], () => {
+  syncTrayAuth()
+})
 
 watch(resolvedLocale, (loc) => {
   i18n.global.locale.value = loc
