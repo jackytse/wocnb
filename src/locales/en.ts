@@ -1370,8 +1370,11 @@ export default {
       installDoneToast: 'Update installed. Restart the app to apply.',
       installMismatchToast: 'Manifest does not match this channel. Installation stopped.',
       checkFailed: 'Update check failed',
-      autoCheckHint: 'Checked automatically every 24 hours on startup',
+      autoCheckHint: 'Checked automatically once per hour',
       autoCheckDesc: 'Current version {current}. Visit the Releases page to download.',
+      // Auto check toggle (on by default; silent hourly check when enabled)
+      autoCheckToggle: 'Check for updates automatically',
+      autoCheckToggleDesc: 'Checks for new versions once per hour when enabled',
       // Update channel (release / prerelease) + manual check
       updateChannel: 'Update channel',
       channel_prerelease: 'Pre-release',

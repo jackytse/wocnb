@@ -1360,8 +1360,11 @@ export default {
       installDoneToast: '更新已下載安裝完成，重啟應用後生效',
       installMismatchToast: '更新來源與所選更新通道不一致，已停止安裝',
       checkFailed: '檢測更新失敗',
-      autoCheckHint: '啟動時每 24 小時自動檢查一次',
+      autoCheckHint: '每小時會自動檢測一次新版本',
       autoCheckDesc: '當前版本 {current}，請前往 Releases 頁下載',
+      // 自動檢測更新開關（默認開；開啟後每小時靜默檢測一次）
+      autoCheckToggle: '自動檢測更新',
+      autoCheckToggleDesc: '開啟後每小時自動檢測一次新版本',
       // 更新通道（release / prerelease）與手動檢查
       updateChannel: '更新通道',
       channel_prerelease: '預發行版',

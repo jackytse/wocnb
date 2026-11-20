@@ -10,7 +10,8 @@
  *   数值比较、rc.1 < rc.1.1 逐段比较）；
  * - 检查流程：有新版本 → available；无 Release（404 归一 null）→ upToDate；
  *   请求失败 → error 且不抛异常；
- * - 自动检查节流口径（从未检查 → 到期；24h 内 → 跳过）。
+ * - 自动检查节流口径（从未检查 → 到期；1h 内 → 跳过）；
+ * - 自动检测更新开关：默认开；关闭后自动检查完全静默；重新打开立即补查。
  */
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
@@ -61,8 +62,10 @@ import {
   parseVersion,
   pickLatestRelease,
   relaunchApp,
+  resetUpdateAutoCheckStateForTest,
   resetUpdateInstallStateForTest,
   resetUpdateNotifyStateForTest,
+  setAutoCheckEnabled,
   setUpdateChannel,
   useAppUpdate,
 } from '../useAppUpdate'
@@ -75,6 +78,8 @@ beforeEach(() => {
   pushAppNoticeMock.mockClear()
   // 复位「已通知版本」去重状态：通知编排用例之间互不串扰
   resetUpdateNotifyStateForTest()
+  // 复位自动检测更新开关：开关用例之间互不串扰（默认开）
+  resetUpdateAutoCheckStateForTest()
   // 复位热更新安装状态 + window stub（installUpdate 用例会 stub Tauri 环境）
   resetUpdateInstallStateForTest()
   vi.unstubAllGlobals()
@@ -254,10 +259,10 @@ describe('isAutoCheckDue', () => {
     expect(isAutoCheckDue(0, NOW)).toBe(true)
   })
 
-  it('距上次 < 24h → 未到期；≥ 24h → 到期', () => {
-    expect(isAutoCheckDue(NOW - 3600_000, NOW)).toBe(false)
-    expect(isAutoCheckDue(NOW - 24 * 3600_000, NOW)).toBe(true)
-    expect(isAutoCheckDue(NOW - 25 * 3600_000, NOW)).toBe(true)
+  it('距上次 < 1h → 未到期；≥ 1h → 到期（每小时自动检测一次）', () => {
+    expect(isAutoCheckDue(NOW - 30 * 60_000, NOW)).toBe(false)
+    expect(isAutoCheckDue(NOW - 3600_000, NOW)).toBe(true)
+    expect(isAutoCheckDue(NOW - 2 * 3600_000, NOW)).toBe(true)
   })
 })
 
@@ -273,6 +278,34 @@ describe('maybeAutoCheckOnStartup', () => {
     const result = await maybeAutoCheckOnStartup({ currentVersion: '0.1.0-rc.25' })
     expect(result).toBeNull()
     expect(fetchReleasesMock).not.toHaveBeenCalled()
+  })
+})
+
+// ---------------------------------------------------------------------------
+// 自动检测更新开关：默认开 / 关闭静默 / 重新打开立即补查
+// ---------------------------------------------------------------------------
+
+describe('自动检测更新开关', () => {
+  it('默认开（用户要求：不落盘过 → 自动检测处于打开状态）', () => {
+    expect(useAppUpdate().autoCheckEnabled.value).toBe(true)
+  })
+
+  it('关闭后自动检查直接跳过，不发请求（手动「立即检查」不受影响，此处只锁自动路径）', async () => {
+    // stub 出 Tauri 环境标志：让守卫链走到开关判定（node 下 window 不存在会先被拦）
+    vi.stubGlobal('window', { __TAURI_INTERNALS__: {} })
+    setAutoCheckEnabled(false)
+    const result = await maybeAutoCheckOnStartup({ currentVersion: '0.1.0-rc.25' })
+    expect(result).toBeNull()
+    expect(fetchReleasesMock).not.toHaveBeenCalled()
+  })
+
+  it('重新打开开关 → 节流到期时立即静默补查一次', async () => {
+    vi.stubGlobal('window', { __TAURI_INTERNALS__: {} })
+    setAutoCheckEnabled(false)
+    fetchReleasesMock.mockResolvedValue([])
+    // 打开动作内部 fire-and-forget 调 maybeAutoCheckOnStartup（从未检查过 → 到期）
+    setAutoCheckEnabled(true)
+    await vi.waitFor(() => expect(fetchReleasesMock).toHaveBeenCalledTimes(1))
   })
 })
 

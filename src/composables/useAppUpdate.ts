@@ -34,8 +34,9 @@
  * 发现的功能性缺陷，详见 pickLatestRelease 注释）。
  *
  * 两个使用入口：
- * - maybeAutoCheckOnStartup()：登录后启动 4 秒静默检查（24h 节流，由
- *   layouts/default.vue 触发），发现新版本由调用方弹 toast；
+ * - maybeAutoCheckOnStartup()：登录后启动延迟静默检查 + 每小时循环 tick
+ *   （1h 节流 + 自动检测开关守卫，由 layouts/default.vue 触发与启动循环），
+ *   发现新版本在首页弹 toast；
  * - checkForUpdate()：设置 · 关于页「立即检查」按钮与侧边栏用户菜单
  *   「检查更新」动作，全量状态落单例 state。
  *
@@ -64,8 +65,8 @@
  * 通知双通道（本应用的通知约定：推送本地系统通知的同时在通知面板落记录）：
  * 发现新版本时经 sendAppSystemNotification 推一条系统通知（点击直达
  * 「设置 · 关于」），并向 useAppNotices 的应用通知列表 push 一条记录；
- * 同一版本只通知一次（localStorage 记 lastNotifiedVersion，避免 24h 节流
- * 到期后每次启动都重复打扰）。
+ * 同一版本只通知一次（localStorage 记 lastNotifiedVersion，避免每小时
+ * 节流到期后每次循环都重复打扰）。
  *
  * 文案 i18n：系统通知/面板记录的标题正文在本模块组装（复用全局 i18n 单例，
  * 与 useCnbBuildWatch 同范式）；toast 仍由调用方负责。
@@ -92,11 +93,79 @@ export const APP_SOURCE_REPO = 'jackytse/wocnb'
  *  形态已有 ReleaseAssetList.vue 在用，稳妥。 */
 export const APP_RELEASES_PAGE_URL = `https://cnb.cool/${APP_SOURCE_REPO}/-/releases`
 
-/** 自动检查节流间隔：24 小时（启动检查一天最多打一次 API） */
-export const UPDATE_CHECK_INTERVAL_MS = 24 * 60 * 60 * 1000
+/** 自动检查节流间隔：1 小时（2026-11-20 用户要求改为每小时自动检测一次） */
+export const UPDATE_CHECK_INTERVAL_MS = 60 * 60 * 1000
 
 /** localStorage 键：上次成功检查的毫秒时间戳 */
 const LAST_CHECK_STORAGE_KEY = 'wocnb.update.lastCheckAt'
+
+/**
+ * localStorage 键：自动检测更新开关。
+ *
+ * 用户可在「设置 · 关于」开/关自动检测（默认**开**，用户要求）；关闭后
+ * 启动静默检查与每小时循环都会跳过（手动「立即检查」不受影响）。
+ */
+export const AUTO_CHECK_ENABLED_STORAGE_KEY = 'wocnb.update.autoCheckEnabled'
+
+/** 自动检测更新默认状态：开（用户要求，2026-11-20） */
+export const DEFAULT_AUTO_CHECK_ENABLED = true
+
+/**
+ * 自动检测更新开关（模块级单例，关于页开关直接绑它）。
+ *
+ * 初值取默认开而不是先读 localStorage：模块加载时机可能早于 WebView 存储
+ * 就绪，落盘值由 ensureAutoCheckLoaded() 在首次 useAppUpdate()/检查时补齐，
+ * 与 updateChannel 的加载范式完全一致。
+ */
+const autoCheckEnabled = ref(DEFAULT_AUTO_CHECK_ENABLED)
+/** 落盘开关是否已读入内存（避免每次读 localStorage） */
+let autoCheckLoaded = false
+
+/** 首次访问时从 localStorage 读一次用户选择（脏值一律回落默认"开"） */
+function ensureAutoCheckLoaded(): void {
+  if (autoCheckLoaded) {
+    return
+  }
+  autoCheckLoaded = true
+  try {
+    const raw = typeof localStorage !== 'undefined'
+      ? localStorage.getItem(AUTO_CHECK_ENABLED_STORAGE_KEY)
+      : null
+    if (raw !== null) {
+      // 落盘值只可能是 '1'/'0'，其余脏值（旧版本残留/手改）按默认开处理
+      autoCheckEnabled.value = raw === '1'
+    }
+  }
+  catch {
+    // 容器无 localStorage / 隐私模式禁读：保持默认开，功能照常
+  }
+}
+
+/**
+ * 切换自动检测更新开关（设置 · 关于页调用）。
+ *
+ * - 落盘 '1'/'0'（不落 JSON 布尔，读侧按字符串严格比对，脏值自然回落默认）；
+ * - 打开时若节流已到期会立即补查一次（maybeAutoCheckOnStartup 内部判定
+ *   Tauri/登录/节流，不满足就静默跳过）——用户刚打开开关就想要结果；
+ * - 关闭不终止每小时循环的定时器（循环 tick 会因开关关闭而 no-op，
+ *   停启定时器的生命周期交给调用方，避免开关抖动反复创建/销毁 timer）。
+ */
+export function setAutoCheckEnabled(value: boolean): void {
+  autoCheckEnabled.value = value
+  autoCheckLoaded = true
+  try {
+    if (typeof localStorage !== 'undefined') {
+      localStorage.setItem(AUTO_CHECK_ENABLED_STORAGE_KEY, value ? '1' : '0')
+    }
+  }
+  catch {
+    // 写失败只影响下次启动能否记住选择，本次会话内已生效
+  }
+  if (value) {
+    // 打开开关：若距上次检查已超过 1h，立刻静默补查（非 Tauri/未登录内部跳过）
+    void maybeAutoCheckOnStartup()
+  }
+}
 
 // ---------------------------------------------------------------------------
 // 更新通道（release / prerelease）
@@ -462,7 +531,7 @@ async function resolveCurrentVersion(): Promise<string> {
 
 /**
  * 自动检查是否到期（纯函数，单测锁定节流口径）。
- * lastCheckAt=0（从未检查）→ 到期；距上次 < 24h → 未到期。
+ * lastCheckAt=0（从未检查）→ 到期；距上次 < 1h → 未到期。
  */
 export function isAutoCheckDue(lastCheckAt: number, now: number): boolean {
   if (!lastCheckAt) {
@@ -549,6 +618,12 @@ function writeLastNotifiedVersion(channel: UpdateChannel, version: string): void
   catch {
     // 容器无 localStorage / 隐私模式禁写：静默降级（本次会话内 memo 仍生效）
   }
+}
+
+/** 供单测复位自动检测开关状态（生产代码不应调用）：开关回默认开、落盘标记复位 */
+export function resetUpdateAutoCheckStateForTest(): void {
+  autoCheckEnabled.value = DEFAULT_AUTO_CHECK_ENABLED
+  autoCheckLoaded = false
 }
 
 /**
@@ -694,17 +769,63 @@ export async function checkForUpdate(opts: { currentVersion?: string } = {}): Pr
 }
 
 /**
- * 启动静默检查入口（layouts/default.vue 挂载后延迟调用）。
+ * 自动检测更新循环（模块级定时器句柄；null = 未启动）。
+ *
+ * 为什么不随开关关闭而清掉：循环 tick 里 maybeAutoCheckOnStartup 会先看
+ * 开关，关闭时直接 no-op——定时器空转一次的成本可以忽略，换来的是开关
+ * 反复切换不需要管理 timer 生命周期（启停只归布局的挂载/卸载管）。
+ */
+let autoCheckTimer: ReturnType<typeof setInterval> | null = null
+
+/**
+ * 启动每小时自动检测循环（主窗口布局挂载时调用一次，幂等）。
+ *
+ * - 每 UPDATE_CHECK_INTERVAL_MS（1h）tick 一次，实际是否发请求由
+ *   maybeAutoCheckOnStartup 判定（Tauri 环境 + 已登录 + 开关打开 +
+ *   距上次成功检查 ≥ 1h）——所以 tick 频率与节流间隔取同一常量，
+ *   「每小时检测一次」的语义由两者共同保证；
+ * - 首次 tick 在 1h 之后，启动时的即时检查由 maybeAutoCheckOnStartup
+ *   的启动调用（layouts/default.vue）承担；
+ * - 幂等：重复调用不会叠加重叠的定时器（热更新场景下布局重挂载安全）。
+ */
+export function startUpdateAutoCheckLoop(): void {
+  if (autoCheckTimer !== null) {
+    return
+  }
+  // 启动前先把落盘开关读进内存：避免「关着开关启动 → 第一次 tick 才读到」
+  // 造成的语义错位（虽然 tick 内也会读，提前加载无副作用）
+  ensureAutoCheckLoaded()
+  autoCheckTimer = setInterval(() => {
+    void maybeAutoCheckOnStartup()
+  }, UPDATE_CHECK_INTERVAL_MS)
+}
+
+/** 停止每小时自动检测循环（预留：当前布局不卸载，仅测试/极端场景使用） */
+export function stopUpdateAutoCheckLoop(): void {
+  if (autoCheckTimer !== null) {
+    clearInterval(autoCheckTimer)
+    autoCheckTimer = null
+  }
+}
+
+/**
+ * 启动/每小时静默检查入口（layouts/default.vue 挂载后延迟调用 + 每小时
+ * 循环 tick 调用，同一份守卫逻辑）。
  *
  * 前置条件（任一不满足直接返回 null，不发请求）：
  * - Tauri 环境（浏览器 dev 里 CNB API 无 CORS 头，检查必失败，跳过）；
+ * - 自动检测开关已打开（用户在设置 · 关于关闭后完全静默）；
  * - 已登录（repo-release:r 需要 Bearer 令牌）；
- * - 距上次成功检查 ≥ 24h（节流，避免每次启动都打 API）。
+ * - 距上次成功检查 ≥ 1h（节流，避免循环 tick 与启动检查打重了 API）。
  *
  * 返回 null = 本次没检查；调用方只在 result.available 时弹 toast。
  */
 export async function maybeAutoCheckOnStartup(opts: { currentVersion?: string, now?: number } = {}): Promise<UpdateCheckResult | null> {
   if (typeof window === 'undefined' || !('__TAURI_INTERNALS__' in window)) {
+    return null
+  }
+  ensureAutoCheckLoaded()
+  if (!autoCheckEnabled.value) {
     return null
   }
   if (!isLoggedIn()) {
@@ -869,8 +990,10 @@ export function resetUpdateInstallStateForTest(): void {
  * 关于页与启动链路共用，保证两处看到同一份检查结果。
  */
 export function useAppUpdate() {
-  // 首次拿到 composable 时把落盘通道读进内存（同步，界面首帧即显示正确值）
+  // 首次拿到 composable 时把落盘通道/自动检测开关读进内存（同步，
+  // 界面首帧即显示正确值）
   ensureChannelLoaded()
+  ensureAutoCheckLoaded()
   return {
     /** 本地当前版本号（检查后回填） */
     currentVersion,
@@ -886,6 +1009,10 @@ export function useAppUpdate() {
     updateChannel,
     /** 切换更新通道（写 localStorage + 重置检查状态，见函数注释） */
     setUpdateChannel,
+    /** 自动检测更新开关（只读展示用，写入请走 setAutoCheckEnabled） */
+    autoCheckEnabled,
+    /** 切换自动检测更新开关（写 localStorage；打开时到期则立即补查） */
+    setAutoCheckEnabled,
     /** 是否有新版本（derived：status === 'available'） */
     updateAvailable: computed(() => status.value === 'available'),
     /** 热更新安装状态机（downloading/installing/ready/failed） */

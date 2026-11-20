@@ -6,8 +6,9 @@
  * 检查更新链路（useAppUpdate）：
  * - 手动：本页「立即检查」按钮 → checkForUpdate()，结果按状态机渲染在
  *   版本行下方（available 时给「一键更新」热更新入口 + 「前往下载」兜底）；
- * - 自动：启动后由 layouts/default.vue 延迟静默检查（24h 节流），发现
- *   新版本在首页弹 toast —— 两处共享 useAppUpdate 的模块级单例 state。
+ * - 自动：启动后由 layouts/default.vue 延迟静默检查，之后每小时循环检测
+ *   一次（1h 节流），可在本页开关控制（默认开），发现新版本在首页弹
+ *   toast —— 两处共享 useAppUpdate 的模块级单例 state。
  *
  * 热更新链路（macOS）：发现新版本 → installUpdate()（updater 清单校验 +
  * 下载进度 + 验签安装）→ 用户点「重启完成更新」→ relaunchApp()。
@@ -45,6 +46,8 @@ const {
   checkedAt,
   updateChannel,
   setUpdateChannel,
+  autoCheckEnabled,
+  setAutoCheckEnabled,
   checkForUpdate,
 } = useAppUpdate()
 
@@ -122,6 +125,17 @@ const channelModel = computed<UpdateChannel>({
 
 /** 当前通道下的最新版本是否落后（available 状态） —— 供状态区展示 */
 const updateAvailable = computed(() => status.value === 'available')
+
+/**
+ * 自动检测更新开关双向绑定。
+ *
+ * setter 统一走 setAutoCheckEnabled（落盘 + 打开时到期立即补查）；
+ * getter 直接读单例 ref，语言/通道等其他写入点不会与本开关互相干扰。
+ */
+const autoCheckModel = computed<boolean>({
+  get: () => autoCheckEnabled.value,
+  set: (value: boolean) => setAutoCheckEnabled(value),
+})
 
 /**
  * 「上次检查」文案：从未检查 → 提示语；有记录 → 本地化时间。
@@ -223,6 +237,20 @@ async function onInstallUpdate() {
         :items="channelItems"
         class="w-44"
       />
+    </div>
+    <USeparator />
+
+    <!-- 自动检测更新开关：默认开，开启后每小时静默检测一次（手动按钮不受影响） -->
+    <div class="flex items-center gap-4 py-1 flex-wrap">
+      <div class="min-w-0 flex-1">
+        <p class="text-sm text-muted">
+          {{ t('settings.about.autoCheckToggle') }}
+        </p>
+        <p class="text-xs text-dimmed mt-0.5">
+          {{ t('settings.about.autoCheckToggleDesc') }}
+        </p>
+      </div>
+      <USwitch v-model="autoCheckModel" />
     </div>
     <USeparator />
 
