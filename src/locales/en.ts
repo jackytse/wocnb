@@ -736,8 +736,8 @@ export default {
         pipeline: 'Pipeline',
         detail: 'AI request detail',
         // 2026-11-20: inline block maps 404 to a neutral notice (not "resource not found")
-        unavailable: 'AI usage data unavailable',
-        unavailableDesc: 'This build may have no AI usage records, or the data is not ready yet. Try again later.',
+        // 404 = no AI usage records (normal for plain CI builds); show as empty state with reason
+        emptyDesc: 'AI usage only counts tokens consumed by NPC / AI capabilities in pipelines (e.g. {\'@\'}npc tasks, AI code review). Plain CI builds produce none.',
       },
     },
     // —— 以下三块原先误挂在顶层 members 下（组件引用的是 repo.*），2026-11-18 归位 ——
@@ -1052,7 +1052,7 @@ export default {
       site: 'Website',
       sitePlaceholder: 'https://example.com',
       email: 'Contact email',
-      // '@' 是 vue-i18n 的 linked-message 语法字符，字面量必须写成 {'@'}
+      // '@' 是 vue-i18n 的 linked-message 语法字符，字面量必须写成 {\'@\'}
       emailPlaceholder: 'name{\'@\'}example.com',
       domain: 'Bound domain',
       domainPlaceholder: 'example.com',

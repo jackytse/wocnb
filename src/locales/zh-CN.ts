@@ -734,9 +734,8 @@ export default {
         durationNone: '-',
         pipeline: '流水线',
         detail: 'AI 请求详情',
-        // 2026-11-20：内嵌区块的 404 降级为中性提示（不再显示「资源不存在」）
-        unavailable: 'AI 用量数据不可用',
-        unavailableDesc: '该构建可能没有 AI 用量记录，或数据尚未生成。可稍后重试。',
+        // 404 = 无 AI 用量记录（普通构建的常态），按空态语义展示并说明原因
+        emptyDesc: 'AI 用量仅统计流水线中 NPC / AI 能力（如 {\'@\'}npc 派活、AI 代码评审）的 Token 消耗，普通构建不会产生。',
       },
     },
     // —— 以下三块原先误挂在顶层 members 下（组件引用的是 repo.*），2026-11-18 归位 ——
@@ -1066,7 +1065,7 @@ export default {
       site: '组织主页',
       sitePlaceholder: 'https://example.com',
       email: '联系邮箱',
-      // '@' 是 vue-i18n 的 linked-message 语法字符，字面量必须写成 {'@'}
+      // '@' 是 vue-i18n 的 linked-message 语法字符，字面量必须写成 {\'@\'}
       // （否则渲染时编译器抛 Invalid linked format）
       emailPlaceholder: 'name{\'@\'}example.com',
       domain: '绑定域名',

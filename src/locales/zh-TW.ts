@@ -727,8 +727,8 @@ export default {
         pipeline: '管線',
         detail: 'AI 請求詳情',
         // 2026-11-20：內嵌區塊的 404 降級為中性提示（不再顯示「資源不存在」）
-        unavailable: 'AI 用量資料不可用',
-        unavailableDesc: '該構建可能沒有 AI 用量記錄，或資料尚未生成。可稍後重試。',
+        // 404 = 無 AI 用量記錄（普通構建的常態），按空態語義展示並說明原因
+        emptyDesc: 'AI 用量僅統計流水線中 NPC / AI 能力（如 {\'@\'}npc 派活、AI 代碼評審）的 Token 消耗，普通構建不會產生。',
       },
     },
     // —— 以下三块原先误挂在顶层 members 下（组件引用的是 repo.*），2026-11-18 归位 ——
@@ -1042,7 +1042,7 @@ export default {
       site: '組織主頁',
       sitePlaceholder: 'https://example.com',
       email: '聯絡信箱',
-      // '@' 是 vue-i18n 的 linked-message 語法字元，字面量必須寫成 {'@'}
+      // '@' 是 vue-i18n 的 linked-message 語法字元，字面量必須寫成 {\'@\'}
       emailPlaceholder: 'name{\'@\'}example.com',
       domain: '綁定網域',
       domainPlaceholder: 'example.com',
