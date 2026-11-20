@@ -934,6 +934,9 @@ export default {
     stopConfirm: '確認停止構建 {sn}？其下所有流水線將被取消。',
     stopSuccess: '已請求停止構建',
     stopFailed: '停止構建失敗',
+    // —— 狀態自動刷新（2026-11-20：詳情打開時未到終態每 3s 重拉）——
+    autoRefreshing: '狀態自動刷新中，構建結束後自動停止',
+    finishedTitle: '構建 {sn} 已結束',
     deleteLogs: '刪除日誌',
     deleteLogsConfirm: '確認刪除構建 {sn} 的日誌？構建記錄本身保留，但日誌刪除後不可復原。',
     deleteLogsSuccess: '構建日誌已刪除',

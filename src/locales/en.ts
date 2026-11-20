@@ -944,6 +944,9 @@ export default {
     stopConfirm: 'Stop build {sn}? The pipelines will be cancelled.',
     stopSuccess: 'Build stop requested',
     stopFailed: 'Failed to stop build',
+    // —— Auto status refresh (2026-11-20: poll every 3s while non-terminal) ——
+    autoRefreshing: 'Auto refreshing status; stops when the build finishes',
+    finishedTitle: 'Build {sn} finished',
     deleteLogs: 'Delete logs',
     deleteLogsConfirm: 'Delete logs of build {sn}? The build record is kept, logs cannot be recovered.',
     deleteLogsSuccess: 'Build logs deleted',

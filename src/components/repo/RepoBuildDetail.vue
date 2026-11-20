@@ -12,6 +12,10 @@
  * 本次增量（T04）：运行中构建（pending / start）显示「停止」按钮
  * （ConfirmDialog 确认 → stopBuild → 轮询状态直到终态，最多 30s）。
  * 归档仓库（archived）时停止入口禁用。
+ *
+ * 自动刷新（2026-11-20 用户需求）：详情打开且构建未到终态时，
+ * 每 3s 自动重拉状态直到终态（success / error / cancel），到终态
+ * 自动停止并 toast 提醒；连续 3 次拉取失败停止自动轮询（保留手动刷新）。
  */
 import { computed, onBeforeUnmount, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
@@ -72,6 +76,9 @@ async function load() {
   error.value = null
   try {
     status.value = await fetchBuildStatus(props.repoPath, props.sn)
+    // 首拉成功即重置容错计数；未到终态时启动自动轮询
+    pollErrorCount.value = 0
+    scheduleAutoPoll()
   }
   catch (err) {
     status.value = null
@@ -82,7 +89,96 @@ async function load() {
   }
 }
 
-watch(() => `${props.repoPath}|${props.sn}`, () => void load(), { immediate: true })
+watch(() => `${props.repoPath}|${props.sn}`, () => {
+  // 构建号切换：先停掉旧 sn 的自动轮询，防止残留定时器把新状态写花
+  stopAutoPoll()
+  void load()
+}, { immediate: true })
+
+// ---------------------------------------------------------------------------
+// 自动刷新（2026-11-20 用户需求）：构建未到终态时每 3s 重拉状态直到终态
+// ---------------------------------------------------------------------------
+
+/** 自动轮询间隔（与停止构建的既有 3s 口径一致） */
+const AUTO_POLL_INTERVAL_MS = 3000
+/** 连续拉取失败上限：网络抖动容忍 2 次，超过即停（保留手动刷新入口） */
+const AUTO_POLL_MAX_ERRORS = 3
+
+/** 终态集合（useCnbBuildWatch 的既有口径：pending / success / error / cancel） */
+const TERMINAL_STATUSES = new Set(['success', 'error', 'cancel'])
+
+/** 轮询定时器句柄（组件卸载 / sn 切换时清理，防泄漏） */
+let pollTimer: ReturnType<typeof setTimeout> | null = null
+
+/** 连续轮询失败计数（成功即归零） */
+const pollErrorCount = ref(0)
+
+/** 是否处于自动轮询中（UI 显示刷新动效的依据：运行中 + 轮询存活） */
+const autoPolling = ref(false)
+
+onBeforeUnmount(() => {
+  stopAutoPoll()
+})
+
+/** 停止自动轮询（清定时器 + 熄灭动效标记） */
+function stopAutoPoll() {
+  if (pollTimer) {
+    clearTimeout(pollTimer)
+    pollTimer = null
+  }
+  autoPolling.value = false
+}
+
+/** 调度下一次自动轮询（3s 后；setTimeout 链式避免请求重叠） */
+function scheduleAutoPoll() {
+  if (!status.value || TERMINAL_STATUSES.has(status.value.status)) {
+    autoPolling.value = false
+    return
+  }
+  autoPolling.value = true
+  if (pollTimer) {
+    clearTimeout(pollTimer)
+  }
+  pollTimer = setTimeout(() => void pollOnce(), AUTO_POLL_INTERVAL_MS)
+}
+
+/**
+ * 单次自动轮询：重拉状态；失败不置整页 error（已有内容优先展示），
+ * 连续超限即停；终态迁移时 toast 提醒用户。
+ */
+async function pollOnce() {
+  pollTimer = null
+  if (!props.repoPath || !props.sn) {
+    return
+  }
+  const prevStatus = status.value?.status
+  try {
+    status.value = await fetchBuildStatus(props.repoPath, props.sn)
+    pollErrorCount.value = 0
+  }
+  catch {
+    // 轮询失败：静默累计，超限停止自动轮询（详情内容仍在，用户可手动刷新）
+    pollErrorCount.value++
+    if (pollErrorCount.value >= AUTO_POLL_MAX_ERRORS) {
+      autoPolling.value = false
+      return
+    }
+  }
+  const nextStatus = status.value?.status
+  // pending → 终态迁移：toast 提醒（仅自动轮询路径，停止构建路径有自己的提示）
+  if (prevStatus === 'pending' && nextStatus && TERMINAL_STATUSES.has(nextStatus)) {
+    autoPolling.value = false
+    toast.add({
+      title: t('builds.finishedTitle', { sn: props.sn }),
+      description: t(`builds.status.${nextStatus}`),
+      color: nextStatus === 'success' ? 'success' : 'warning',
+      duration: 6000,
+    })
+    return
+  }
+  // 未到终态：继续下一轮
+  scheduleAutoPoll()
+}
 
 // ---------------------------------------------------------------------------
 // 停止构建（T04）：ConfirmDialog → stopBuild → 轮询到终态（最多 30s）
@@ -94,18 +190,6 @@ const stopping = ref(false)
 /** 构建是否处于可停止状态：pending（排队/运行中）视作运行中 */
 const isRunning = computed(() => status.value?.status === 'pending')
 
-/** 终态集合（useCnbBuildWatch 的既有口径：pending / success / error / cancel） */
-const TERMINAL_STATUSES = new Set(['success', 'error', 'cancel'])
-
-/** 轮询定时器句柄（组件卸载时清理，防泄漏） */
-let pollTimer: ReturnType<typeof setTimeout> | null = null
-
-onBeforeUnmount(() => {
-  if (pollTimer) {
-    clearTimeout(pollTimer)
-  }
-})
-
 /** 停止确认后执行：调用 stopBuild → 每 3s 重拉状态，终态即停（最多 10 次 ≈ 30s） */
 async function doStop() {
   if (stopping.value) {
@@ -113,6 +197,8 @@ async function doStop() {
   }
   stopping.value = true
   try {
+    // 停止轮询有自己的 3s 循环：先停掉自动轮询，避免两路并发写 status
+    stopAutoPoll()
     await stopBuild(props.repoPath, props.sn)
     toast.add({ title: t('builds.stopSuccess'), color: 'success', duration: 2500 })
     stopDialogOpen.value = false
@@ -126,7 +212,8 @@ async function doStop() {
         return
       }
     }
-    // 30s 内未到终态：不再轮询（用户可手动刷新），不报错
+    // 30s 内未到终态：恢复自动轮询接管（用户无需手动刷新），不报错
+    scheduleAutoPoll()
   }
   catch (err) {
     // 403（缺 repo-cnb-trigger:rw）等：透出 message，绝不登出
@@ -139,6 +226,10 @@ async function doStop() {
   }
   finally {
     stopping.value = false
+    // 停止失败/中断时若构建仍在运行，恢复自动轮询（否则详情会停格在旧状态）
+    if (status.value?.status === 'pending') {
+      scheduleAutoPoll()
+    }
   }
 }
 
@@ -242,6 +333,18 @@ const aiPipelineIds = computed<string[]>(() => {
         size="sm"
         :label="t(`builds.status.${status.status}`)"
       />
+      <!-- 自动刷新动效：自动轮询存活时显示（构建运行中即常驻，
+           到终态或连续失败停止后熄灭） -->
+      <UTooltip
+        v-if="autoPolling"
+        :text="t('builds.autoRefreshing')"
+      >
+        <UIcon
+          name="i-lucide-refresh-cw"
+          class="size-3.5 text-dimmed animate-spin"
+          :aria-label="t('builds.autoRefreshing')"
+        />
+      </UTooltip>
       <!-- 停止按钮：仅运行中显示；归档仓库禁用；canManage（角色）+ scope 闸
            （令牌缺 repo-cnb-trigger:rw 时隐藏，写入口统一方案）双预判 -->
       <UButton

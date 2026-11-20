@@ -955,6 +955,9 @@ export default {
     stopConfirm: '确认停止构建 {sn}？其下所有流水线将被取消。',
     stopSuccess: '已请求停止构建',
     stopFailed: '停止构建失败',
+    // —— 状态自动刷新（2026-11-20：详情打开时未到终态每 3s 重拉）——
+    autoRefreshing: '状态自动刷新中，构建结束后自动停止',
+    finishedTitle: '构建 {sn} 已结束',
     deleteLogs: '删除日志',
     deleteLogsConfirm: '确认删除构建 {sn} 的日志？构建记录本身保留，但日志删除后不可恢复。',
     deleteLogsSuccess: '构建日志已删除',
