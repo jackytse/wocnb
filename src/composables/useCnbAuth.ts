@@ -968,7 +968,12 @@ export async function fetchCnbUserProfile(): Promise<CnbProfilePayload> {
 export type CnbProfileUpdatePayload = Omit<CnbProfilePayload, 'followerCount' | 'followingCount' | 'starsCount'>
 
 export async function updateCnbProfile(payload: CnbProfileUpdatePayload): Promise<void> {
-  await cnbFetch('/user', {
+  // 必须走 cnbFetchVoid（空 body 写端点红线）：POST /user 成功返回 200 +
+  // **空响应体**，走 cnbFetch 会在 response.json() 处抛异常 —— WKWebView
+  // 下报 "The string did not match the expected pattern."（Chrome 报
+  // "Unexpected end of JSON input"），资料实际已保存成功却被误报失败，
+  // 用户会反复重试。cnbFetchVoid 只判定 2xx，body 一律丢弃。
+  await cnbFetchVoid('/user', {
     method: 'POST',
     // 注意：不带 nickname —— CNB 拒绝通过 API 修改昵称（见函数注释），
     // payload.nickname 仅用于界面回显
