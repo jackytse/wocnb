@@ -11,7 +11,7 @@
  * # 视觉与信息结构（对齐参考设计）
  *
  * ┌ 头部：应用图标 + Recently Opened 标题 + 条目数量徽标
- * ├ 列表：彩色语言方块 + 仓库名 + [可见性徽标] 仓库路径 + 右侧相对时间
+ * ├ 列表：彩色语言方块 + 仓库名 + [可见性徽标]（名称右侧） + 仓库路径 + 右侧相对时间
  * └ 底部：「Check updates + 结果文案」｜「Settings」「退出」
  *
  * # 交互
@@ -260,8 +260,10 @@ onBeforeUnmount(() => {
         </span>
 
         <span class="min-w-0 flex-1 leading-tight">
-          <span class="block text-[14px] font-medium text-highlighted truncate">{{ item.name }}</span>
-          <span class="flex items-center gap-1.5 mt-0.5 min-w-0">
+          <!-- 名称行：仓库名 + 可见性徽标（紧跟名称右侧，用户指定位置）；
+               名称 min-w-0 truncate 保证长名截断时徽标不被挤掉 -->
+          <span class="flex items-center gap-1.5 min-w-0">
+            <span class="min-w-0 text-[14px] font-medium text-highlighted truncate">{{ item.name }}</span>
             <!-- 可见性徽标：公开绿 / 私有琥珀 / 保密紫红；旧记录不渲染 -->
             <span
               v-if="item.vis"
@@ -270,8 +272,8 @@ onBeforeUnmount(() => {
             >
               {{ item.visLabel }}
             </span>
-            <span class="min-w-0 text-[11.5px] text-muted truncate">{{ item.repoPath }}</span>
           </span>
+          <span class="block mt-0.5 min-w-0 text-[11.5px] text-muted truncate">{{ item.repoPath }}</span>
         </span>
 
         <span class="shrink-0 text-[11.5px] text-muted whitespace-nowrap">
