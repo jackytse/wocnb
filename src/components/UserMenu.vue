@@ -9,19 +9,15 @@
  * 菜单能力：查看主页（cnb.cool 个人页）、退出登录（清空本地凭证并回登录页）。
  */
 import { computed, onMounted, ref, watch } from 'vue'
-import { useRouter } from 'vue-router'
 import { useI18n } from 'vue-i18n'
 import type { DropdownMenuItem } from '@nuxt/ui'
 import { useColorMode } from '@vueuse/core'
 import { openUrl } from '@tauri-apps/plugin-opener'
-import { cnbUser, logout } from '../composables/useCnbAuth'
-// 登出可选清空持久化通知（SQLite）：勾选时在 logout() 之前物理删除
-// 当前账号的本地通知数据（依赖 username，logout 之后拿不到）
-import { clearNoticesInDb } from '../composables/useNoticeDb'
-// OAuth 登录方式下的退出需要同步清理 CLI 侧令牌与登录方式标记（缺陷 D1：
-// 残留 oauth 标记会让重启时的临期刷新分支把 CLI 旧 OAuth 令牌静默覆盖
-// 用户重登的 PAT —— 两处退出逻辑必须与 settings/token.vue 完全对齐）
-import { cnbAuthMethod, cnbTokenExpiresAt, logoutCliSide } from '../composables/useCnbCliAuth'
+import { cnbUser } from '../composables/useCnbAuth'
+// 退出登录确认弹窗（已抽为全局共享 LogoutConfirmDialog，挂在 App 根部）：
+// 弹窗状态与登出执行逻辑都在 useLogoutConfirm 模块级单例里，
+// 托盘右键菜单「退出登录」也走同一弹窗，这里只负责打开
+import { openLogoutConfirm } from '../composables/useLogoutConfirm'
 import { localePref, type LocalePref } from '../composables/useAppLocale'
 // 图片内存缓存：用户头像转 data URL 后绘制，菜单重新挂载不再闪动
 import { cachedImageSrc, ensureCnbImage } from '../composables/useCnbImages'
@@ -35,7 +31,6 @@ defineProps<{
   collapsed?: boolean
 }>()
 
-const router = useRouter()
 const colorMode = useColorMode()
 const toast = useAppToast()
 
@@ -56,20 +51,6 @@ const updateChecking = ref(false)
  * 条目不能加 —— 它会阻止勾选状态翻转，见语言子菜单处的注释。）
  */
 const menuOpen = ref(false)
-
-/**
- * 退出登录确认弹窗开关。
- * 为什么需要二次确认：退出会清空本机访问令牌与账号信息，误触代价是
- * "全部重新登录"；菜单条目紧挨常用操作且动作不可撤销，加一道确认弹窗。
- */
-const logoutConfirmOpen = ref(false)
-
-/**
- * 退出时是否同时清空本地通知数据（SQLite 持久化的历史通知）。
- * 默认 false —— 数据保留是默认策略，用户显式勾选才物理删除；
- * 弹窗每次打开时重置为 false（ onCancel/再次打开不残留上次勾选）。
- */
-const logoutClearData = ref(false)
 
 // 组件内翻译函数：t 在 computed 中调用，语言切换时依赖响应式 locale 自动重算
 const { t } = useI18n()
@@ -243,48 +224,6 @@ function goDownloadPage() {
 }
 
 /**
- * 退出登录：清空本地令牌与用户信息，回登录页并给出操作反馈（文案随语言切换）。
- *
- * 可选清空数据：用户在确认弹窗勾选「同时清空本地通知数据」时，先物理删除
- * 当前账号的 SQLite 通知（必须在 logout() 之前 —— clearNoticesInDb 依赖
- * cnbUser.username），删除失败用 toast 告知但**不阻塞登出**（凭证清理
- * 不能因通知删除失败而中断；用户知道数据还在即可，下次可再清）。
- */
-async function confirmLogout() {
-  // 勾选了清空数据：删除该账号的持久化通知（构建 + 应用两个分区）
-  if (logoutClearData.value) {
-    try {
-      await clearNoticesInDb()
-    }
-    catch (err) {
-      // 删除失败：明确告知"数据未删除"，避免用户误以为已清空
-      toast.add({
-        title: t('menu.logoutClearFailed'),
-        description: String(err),
-        color: 'warning',
-        duration: 5000,
-      })
-    }
-  }
-  // OAuth 登录方式：同步清理 CLI 侧令牌（cnb logout --host），保证应用与
-  // CLI 两端一致；失败不阻塞本地登出（与 settings/token.vue 同策略）
-  if (cnbAuthMethod.value === 'oauth') {
-    await logoutCliSide().catch(() => {})
-  }
-  logout()
-  // 清理登录方式与过期时间标记：防止残留 oauth 标记误触发重启续期分支
-  cnbAuthMethod.value = ''
-  cnbTokenExpiresAt.value = 0
-  toast.add({
-    title: t('menu.loggedOut'),
-    description: t('menu.loggedOutDesc'),
-    color: 'neutral',
-    duration: 3000,
-  })
-  await router.replace('/login')
-}
-
-/**
  * 语言切换子菜单的选项定义。
  *
  * 文案规则：语言名称始终以「母语自称」展示（English / 简体中文 / 繁體中文），
@@ -409,13 +348,13 @@ const items = computed<DropdownMenuItem[][]>(() => ([[{
   icon: 'i-lucide-languages',
   children: languageItems.value,
 }], [{
-  // 退出登录：先弹二次确认窗（清空凭证不可撤销，防误触），确认才执行；
-  // 「清空数据」勾选每次打开都重置为默认的不勾选（默认保留数据）
+  // 退出登录：先弹二次确认窗（清空凭证不可撤销，防误触），确认才执行。
+  // 弹窗是全局共享单例（openLogoutConfirm 会重置「清空数据」勾选），
+  // 与托盘右键菜单「退出登录」共用同一个 LogoutConfirmDialog
   label: t('menu.logout'),
   icon: 'i-lucide-log-out',
   onSelect: () => {
-    logoutClearData.value = false
-    logoutConfirmOpen.value = true
+    openLogoutConfirm()
   }
 }]]))
 </script>
@@ -556,45 +495,7 @@ const items = computed<DropdownMenuItem[][]>(() => ([[{
   </UModal>
 
   <!--
-    退出登录二次确认弹窗：
-    退出动作会清空本机令牌与账号信息且不可撤销，菜单条目一次点击就执行
-    代价太高 —— 用 UModal 拦一道：「取消」仅关闭弹窗，「退出登录」先关
-    弹窗再执行 confirmLogout（原 handleLogout 逻辑原样保留）。
-    勾选项「清空本地通知数据」：默认不勾选（登出默认保留 SQLite 通知，
-    同一账号下次登录仍可见），用户显式勾选才物理删除当前账号的通知。
+    退出登录二次确认弹窗已抽为全局组件 LogoutConfirmDialog（挂 App.vue）：
+    用户菜单与托盘右键菜单共用同一弹窗实例，此处不再内嵌。
   -->
-  <UModal v-model:open="logoutConfirmOpen" :ui="{ content: 'max-w-sm' }">
-    <template #content>
-      <div class="p-6">
-        <h2 class="text-base font-semibold text-highlighted leading-6">
-          {{ t('menu.logoutConfirmTitle') }}
-        </h2>
-        <p class="mt-2 text-sm text-muted">
-          {{ t('menu.logoutConfirmDesc') }}
-        </p>
-        <!-- 清空数据勾选（默认不勾选）：勾选后 confirmLogout 会先删库再登出 -->
-        <UCheckbox
-          v-model="logoutClearData"
-          class="mt-3"
-          :label="t('menu.logoutClearData')"
-        />
-        <div class="mt-6 flex justify-end gap-2">
-          <UButton
-            size="sm"
-            color="neutral"
-            variant="ghost"
-            :label="t('common.cancel')"
-            @click="logoutConfirmOpen = false"
-          />
-          <UButton
-            size="sm"
-            color="error"
-            icon="i-lucide-log-out"
-            :label="t('menu.logout')"
-            @click="logoutConfirmOpen = false; void confirmLogout()"
-          />
-        </div>
-      </div>
-    </template>
-  </UModal>
 </template>

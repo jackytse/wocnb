@@ -7,6 +7,10 @@ import { useColorMode } from '@vueuse/core'
 // 这里按应用语言动态注入对应语言包，让 Nuxt UI 内置文案跟随语言设置。
 import { en, zh_cn, zh_tw } from '@nuxt/ui/locale'
 import { resolvedLocale } from './composables/useAppLocale'
+// 退出登录确认弹窗（全局唯一实例）：用户菜单与托盘右键菜单的
+// 「退出登录」都通过 useLogoutConfirm 模块级单例打开这同一个弹窗，
+// 挂在应用根部常驻渲染，保证托盘事件触发时（任何页面下）都可用
+import LogoutConfirmDialog from './components/LogoutConfirmDialog.vue'
 
 const colorMode = useColorMode()
 const themeColor = computed(() => colorMode.value === 'dark' ? '#18181b' : '#ffffff')
@@ -54,6 +58,8 @@ useHead({
     -->
     <UApp :toaster="{ progress: false, position: 'top-center' }" :locale="uiLocale">
       <RouterView />
+      <!-- 全局退出登录确认弹窗：不随页面卸载，托盘菜单触发时始终可用 -->
+      <LogoutConfirmDialog />
     </UApp>
   </Suspense>
 </template>

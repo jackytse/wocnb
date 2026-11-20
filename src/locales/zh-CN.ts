@@ -110,6 +110,10 @@ export default {
     create: '创建组织',
     manage: '管理组织',
     refresh: '刷新组织',
+    // 刷新组织完成后的 toast 反馈：成功带数量、失败提示重试
+    refreshed: '组织列表已刷新',
+    refreshedDesc: '当前共 {count} 个组织',
+    refreshFailed: '刷新组织失败',
     // 切换选中组织成功后的 toast 提示（仅实际变更时弹出）
     switched: '已切换到组织：{name}',
   },

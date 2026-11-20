@@ -119,6 +119,10 @@ struct TrayMenuTexts {
     quit: &'static str,
     /// 登录（未登录态显示，点击打开主窗口登录页）
     login: &'static str,
+    /// 退出登录（已登录态显示，点击前置主窗口并弹出退出确认弹窗）
+    logout: &'static str,
+    /// 个人资料（已登录态显示，跳转应用内个人资料页 /profile）
+    profile: &'static str,
     /// 检测更新（打开主窗口"设置 · 关于"页）
     check_update: &'static str,
     /// 设置（打开主窗口设置页）
@@ -133,6 +137,8 @@ fn tray_menu_texts(locale: &str) -> TrayMenuTexts {
             open: "Open App",
             quit: "Quit",
             login: "Sign in",
+            logout: "Sign out",
+            profile: "Profile",
             check_update: "Check updates",
             settings: "Settings",
         },
@@ -140,6 +146,9 @@ fn tray_menu_texts(locale: &str) -> TrayMenuTexts {
             open: "開啟應用",
             quit: "退出應用",
             login: "登入",
+            // 繁体用词与前端 locale（zh-TW menu.logout = 登出）保持一致
+            logout: "登出",
+            profile: "個人資料",
             check_update: "檢測更新",
             settings: "設定",
         },
@@ -147,6 +156,8 @@ fn tray_menu_texts(locale: &str) -> TrayMenuTexts {
             open: "打开应用",
             quit: "退出应用",
             login: "登录",
+            logout: "退出登录",
+            profile: "个人资料",
             check_update: "检测更新",
             settings: "设置",
         },
@@ -251,37 +262,41 @@ fn write_tray_auth(app: &tauri::AppHandle, username: &str) {
 
 /// 按 locale 与登录态构建托盘原生菜单（macOS 专属）。
 ///
-/// 结构（登录/未登录只影响账号区条目，其余条目恒定）：
+/// 结构（登录/未登录只影响账号区分组条目，其余条目恒定）：
 /// ```text
 /// 打开应用
-/// ─────────
+/// ─────────      ← 用户相关条目单独分组
 /// 登录            ← 未登录：点击打开主窗口登录页
 /// 用户名（禁态）    ← 已登录：只展示不响应点击
-/// 检测更新
+/// 个人资料         ← 已登录：跳转应用内个人资料页（/profile）
+/// 退出登录         ← 已登录：前置主窗口 + 弹出退出确认弹窗（可勾选清空数据）
+/// ─────────
 /// 设置
+/// 检测更新
 /// ─────────
 /// 退出应用
 /// ```
 ///
-/// 条目 id 固定（open/login/account/check-update/settings/quit）：事件
-/// 分发（on_menu_event）按 id 匹配，语言切换/登录态切换只换文案与结构、
-/// 不换已有 id，回调逻辑零改动。
+/// 条目 id 固定（open/settings/check-update/login/account/profile/logout/
+/// quit）：事件分发（on_menu_event）按 id 匹配，语言切换/登录态切换只换
+/// 文案与结构、不换已有 id，回调逻辑零改动。
 #[cfg(target_os = "macos")]
 fn build_tray_menu(locale: &str, username: &str) -> muda::Menu {
     use muda::{Menu, MenuId, MenuItem, PredefinedMenuItem};
     let texts = tray_menu_texts(locale);
     let tray_menu = Menu::new();
 
-    // 打开应用
+    // —— 常用动作 ——
+    // 打开应用（最高频入口置顶）
     let open_item = MenuItem::builder()
         .id(MenuId::new("open"))
         .text(texts.open)
         .enabled(true)
         .build();
     let _ = tray_menu.append(&open_item);
-    let _ = tray_menu.append(&PredefinedMenuItem::separator());
 
-    // 账号区：登录/未登录二选一（id 不同，事件分发按 id 走不同分支）
+    // —— 用户相关分组（登录/账号展示/个人资料/退出登录）——
+    let _ = tray_menu.append(&PredefinedMenuItem::separator());
     if username.is_empty() {
         let login_item = MenuItem::builder()
             .id(MenuId::new("login"))
@@ -298,21 +313,40 @@ fn build_tray_menu(locale: &str, username: &str) -> muda::Menu {
             .enabled(false)
             .build();
         let _ = tray_menu.append(&account_item);
+        // 个人资料：跳转应用内个人资料页（/profile）。走与 login/settings
+        // 相同的 cnb://panel-navigate 下钻通道，复用主窗口既有监听
+        let profile_item = MenuItem::builder()
+            .id(MenuId::new("profile"))
+            .text(texts.profile)
+            .enabled(true)
+            .build();
+        let _ = tray_menu.append(&profile_item);
+        // 退出登录：动作条目（区别于上面的展示条目）。实际登出逻辑在
+        // 前端（含可选清空通知数据/CLI 登出），Rust 只负责前置主窗口
+        // 并 emit cnb://tray-logout 事件，由 main.ts 打开确认弹窗
+        let logout_item = MenuItem::builder()
+            .id(MenuId::new("logout"))
+            .text(texts.logout)
+            .enabled(true)
+            .build();
+        let _ = tray_menu.append(&logout_item);
     }
 
-    // 功能区：检测更新（打开"设置 · 关于"）、设置
-    let check_item = MenuItem::builder()
-        .id(MenuId::new("check-update"))
-        .text(texts.check_update)
-        .enabled(true)
-        .build();
-    let _ = tray_menu.append(&check_item);
+    // —— 次级功能区：设置、检测更新（紧挨退出应用上方）——
+    let _ = tray_menu.append(&PredefinedMenuItem::separator());
     let settings_item = MenuItem::builder()
         .id(MenuId::new("settings"))
         .text(texts.settings)
         .enabled(true)
         .build();
     let _ = tray_menu.append(&settings_item);
+    // 检测更新：打开"设置 · 关于"页（与设置相邻符合直觉）
+    let check_item = MenuItem::builder()
+        .id(MenuId::new("check-update"))
+        .text(texts.check_update)
+        .enabled(true)
+        .build();
+    let _ = tray_menu.append(&check_item);
 
     let _ = tray_menu.append(&PredefinedMenuItem::separator());
 
@@ -1664,18 +1698,31 @@ pub fn run() {
             // 说明：login/check-update/settings 复用快捷面板的下钻通道
             // cnb://panel-navigate（main.ts 已监听该事件做 router.push），
             // 与 tray_panel_open_target 同一链路，前端零新增代码。
+            // logout 单独走 cnb://tray-logout 事件（不走路由跳转）：
+            // 退出登录需要弹出确认弹窗（含可选清空数据勾选），由前端
+            // 全局确认弹窗（LogoutConfirmDialog）响应，不能直接 push 路由。
             match event.id().0.as_str() {
                 "open" => show_main_window(app),
                 "quit" => app.exit(0),
-                "login" | "check-update" | "settings" => {
+                "login" | "check-update" | "settings" | "profile" => {
                     let path = match event.id().0.as_str() {
                         "login" => "/login",
                         "check-update" => "/settings/about",
+                        // 个人资料：应用内个人页（/profile），非外部浏览器
+                        "profile" => "/profile",
                         _ => "/settings",
                     };
                     show_main_window(app);
                     if let Err(err) = app.emit_to("main", "cnb://panel-navigate", path) {
                         log::warn!("[tray] 菜单跳转事件发送失败: {err}");
+                    }
+                }
+                "logout" => {
+                    // 前置主窗口（确认弹窗挂载在主窗口 SPA 中）+ 通知前端
+                    // 打开退出登录确认弹窗；payload 无内容，传空串占位
+                    show_main_window(app);
+                    if let Err(err) = app.emit_to("main", "cnb://tray-logout", "") {
+                        log::warn!("[tray] 退出登录事件发送失败: {err}");
                     }
                 }
                 _ => {}
@@ -2077,16 +2124,24 @@ mod tests {
     }
 
     /// 托盘菜单三语文案映射锁定：三种显式语言各自命中独立文案，
-    /// 且 open/quit 两条都不能为空（muda 空文本条目渲染异常）
+    /// 且所有动作条目（open/quit/login/logout/profile）都不能为空
+    /// （muda 空文本条目渲染异常）；account 条目文案是用户名不在此列。
     #[test]
     fn test_tray_menu_texts_locales() {
         let en = tray_menu_texts("en");
         assert!(!en.open.is_empty() && !en.quit.is_empty());
+        assert!(!en.login.is_empty() && !en.logout.is_empty());
+        assert!(!en.profile.is_empty());
+        assert_ne!(en.login, en.logout);
         assert_ne!(en.open, en.quit);
         let tw = tray_menu_texts("zh-TW");
         assert!(!tw.open.is_empty() && !tw.quit.is_empty());
+        assert!(!tw.login.is_empty() && !tw.logout.is_empty());
+        assert!(!tw.profile.is_empty());
         let cn = tray_menu_texts("zh-CN");
         assert!(!cn.open.is_empty() && !cn.quit.is_empty());
+        assert!(!cn.login.is_empty() && !cn.logout.is_empty());
+        assert!(!cn.profile.is_empty());
         // 三种语言的文案互不相同（同一语言不可两种显示）
         assert_ne!(en, tw);
         assert_ne!(cn, en);

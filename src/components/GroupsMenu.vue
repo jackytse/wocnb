@@ -83,8 +83,14 @@ const createOpen = ref(false)
 // 当前选中组织使用共享状态 selectedGroup（来自 useCnbAuth）：
 // 首页等组织维度的页面需要读取同一份选中状态，不再声明本地 ref
 
-/** 拉取组织列表：仅在已登录（有令牌）时发起 */
-async function loadGroups() {
+/**
+ * 拉取组织列表：仅在已登录（有令牌）时发起。
+ *
+ * @param manual 是否为用户手动触发（点击侧边栏刷新按钮）。
+ * toast 反馈只出现在手动刷新：挂载时自动加载、失败后菜单内重试都是
+ * 应用自驱行为，每次都弹 toast 会造成打扰（自动加载时用户无预期）。
+ */
+async function loadGroups(manual = false) {
   const { cnbToken } = await import('../composables/useCnbAuth')
   if (!cnbToken.value) {
     return
@@ -109,9 +115,28 @@ async function loadGroups() {
     // 预热组织图标到内存缓存（data URL）：图标就绪后，菜单每次打开
     // 重新挂载的 <img> 都同步绘制，彻底消除"打开菜单头像闪动"
     void ensureCnbImages(list.map(g => cnbGroupLogoUrl(g.path)))
+    // 刷新成功反馈（仅手动点击刷新按钮时）：带组织数量，给用户明确的
+    // 完成信号（静默完成会让用户不确定有没有生效）
+    if (manual) {
+      toast.add({
+        title: t('groups.refreshed'),
+        description: t('groups.refreshedDesc', { count: list.length }),
+        color: 'neutral',
+        duration: 3000,
+      })
+    }
   }
   catch {
     loadError.value = true
+    // 刷新失败反馈（同样仅手动触发时）：错误 toast，菜单内仍有重试入口；
+    // 自动加载失败用菜单内的「加载失败，点击重试」条目呈现即可
+    if (manual) {
+      toast.add({
+        title: t('groups.refreshFailed'),
+        color: 'error',
+        duration: 5000,
+      })
+    }
   }
   finally {
     loading.value = false
@@ -279,7 +304,7 @@ const items = computed<DropdownMenuItem[][]>(() => {
         :loading="loading"
         :aria-label="t('groups.refresh')"
         class="shrink-0"
-        @click="loadGroups"
+        @click="loadGroups(true)"
       />
     </UTooltip>
 

@@ -108,6 +108,10 @@ export default {
     create: '建立組織',
     manage: '管理組織',
     refresh: '重新整理組織',
+    // 重新整理組織完成後的 toast 回饋：成功帶數量、失敗提示重試
+    refreshed: '組織列表已重新整理',
+    refreshedDesc: '目前共 {count} 個組織',
+    refreshFailed: '重新整理組織失敗',
     // 切換選中組織成功後的 toast 提示（僅實際變更時彈出）
     switched: '已切換到組織：{name}',
   },

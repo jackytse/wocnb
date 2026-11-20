@@ -9,6 +9,8 @@ import { createHead } from '@unhead/vue/client'
 import { invoke } from '@tauri-apps/api/core'
 import { openUrl } from '@tauri-apps/plugin-opener'
 import { restoreSession, cnbToken, cnbUser, setUnauthorizedHandler } from './composables/useCnbAuth'
+// 托盘菜单「退出登录」事件回调：只置模块级弹窗开关 ref（无组件上下文依赖）
+import { openLogoutConfirm } from './composables/useLogoutConfirm'
 import { refreshCliTokenIfNeeded } from './composables/useCnbCliAuth'
 import { initBuildWatcher } from './composables/useCnbBuildWatch'
 import { initBuildNotificationActionHandler } from './composables/useBuildNotificationAction'
@@ -480,6 +482,16 @@ if ('__TAURI_INTERNALS__' in window) {
     .catch((err) => {
       // 注册失败只影响"面板直达"这一个入口，不阻断启动
       console.warn('[wocnb] 注册托盘面板跳转失败：', err)
+    })
+  // 托盘右键菜单「退出登录」：Rust 侧前置主窗口后 emit 本事件，打开
+  // 全局退出确认弹窗（LogoutConfirmDialog，与用户菜单共用同一实例——
+  // 含「清空本地通知数据」勾选，不能在 Rust 侧直接执行登出）。
+  // openLogoutConfirm 只置模块级 ref，无需组件上下文。
+  import('@tauri-apps/api/event')
+    .then(({ listen }) => listen('cnb://tray-logout', () => openLogoutConfirm()))
+    .catch((err) => {
+      // 注册失败只影响"托盘菜单登出"这一个入口，不阻断启动
+      console.warn('[wocnb] 注册托盘退出登录失败：', err)
     })
 }
 

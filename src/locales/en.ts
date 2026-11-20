@@ -111,6 +111,10 @@ export default {
     create: 'Create group',
     manage: 'Manage groups',
     refresh: 'Refresh groups',
+    // Toast feedback after refreshing groups: success carries count, failure suggests retry
+    refreshed: 'Groups refreshed',
+    refreshedDesc: '{count} groups in total',
+    refreshFailed: 'Failed to refresh groups',
     // Toast shown after switching the selected group (only when it actually changes)
     switched: 'Switched to group: {name}',
   },
