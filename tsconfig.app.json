@@ -15,6 +15,13 @@
     "noEmit": true,
     "jsx": "preserve",
 
+    /* 增量检查（2026-11-20）：tsbuildinfo 缓存上次检查状态，热跑只复查
+       变更文件（本地实测 5.5s → ~1s）。产物放 node_modules/.tmp —— 天然
+       被 git 忽略、随 node_modules 重建自动失效（重新冷跑即可）。
+       tsc 对过期缓存是自安全的：文件内容变了会重查，不会漏报。 */
+    "incremental": true,
+    "tsBuildInfoFile": "./node_modules/.tmp/tsconfig.app.tsbuildinfo",
+
     /* Linting */
     "strict": true,
     "noUnusedLocals": true,
