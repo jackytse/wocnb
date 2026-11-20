@@ -18,9 +18,13 @@ import { ref } from 'vue'
 import { useRouter } from 'vue-router'
 import { useI18n } from 'vue-i18n'
 import { logout } from './useCnbAuth'
-// 登出可选清空持久化通知（SQLite）：勾选时在 logout() 之前物理删除
-// 当前账号的本地通知数据（依赖 username，logout 之后拿不到）
+// 登出可选清空持久化数据（SQLite）：勾选时在 logout() 之前物理删除
+// 当前账号的本地数据（依赖 username，logout 之后拿不到）——
+// 含历史通知与「最近打开」记录（notice_db_clear 一并删除）
 import { clearNoticesInDb } from './useNoticeDb'
+// 「最近打开」的内存/localStorage 残留清空（SQLite 行由 clearNoticesInDb
+// 内的 notice_db_clear 删除，本函数只负责前端侧状态）
+import { clearRecentRepos } from './useRecentRepos'
 // OAuth 登录方式下的退出需要同步清理 CLI 侧令牌与登录方式标记（缺陷 D1：
 // 残留 oauth 标记会让重启时的临期刷新分支把 CLI 旧 OAuth 令牌静默覆盖
 // 用户重登的 PAT —— 与 settings/token.vue 的退出逻辑保持对齐）
@@ -76,10 +80,12 @@ export function useLogoutConfirm() {
     }
     logoutBusy.value = true
     try {
-      // 勾选了清空数据：删除该账号的持久化通知（构建 + 应用两个分区）
+      // 勾选了清空数据：删除该账号的持久化数据（通知两个分区 + 最近打开记录，
+      // 同一条 notice_db_clear 命令内完成）+ 前端侧「最近打开」内存/降级存储
       if (logoutClearData.value) {
         try {
           await clearNoticesInDb()
+          clearRecentRepos()
         }
         catch (err) {
           // 删除失败：明确告知“数据未删除”，避免用户误以为已清空

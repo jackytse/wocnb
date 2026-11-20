@@ -45,6 +45,8 @@ use tauri::Manager;
 const BUILD_KEEP_PER_USER: i64 = 200;
 /// 每账号最多保留的应用通知条数
 const APP_KEEP_PER_USER: i64 = 100;
+/// 每账号最多保留的「最近打开」仓库记录条数（与前端 MAX_RECENT_REPOS 一致）
+const RECENT_KEEP_PER_USER: i64 = 20;
 /// 单次加载返回的构建通知条数（与前端内存 feed 上限 MAX_FEED_SIZE 一致）
 const BUILD_LOAD_LIMIT: i64 = 50;
 /// 单次加载返回的应用通知条数（与前端 MAX_APP_NOTICE_SIZE 一致）
@@ -109,6 +111,25 @@ pub struct StoredAppNotice {
     pub time: i64,
     /// 已读标记
     pub read: bool,
+}
+
+/// 「最近打开」仓库记录（数据库存储形态）
+///
+/// 托盘快捷面板的数据源（此前存 localStorage，应用更新后 WebView
+/// 分区数据可能被清导致列表丢失，改落 SQLite 与通知同库同生命周期）。
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct StoredRecentRepo {
+    /// 仓库完整路径（唯一键，同仓库重复打开=更新时间置顶）
+    pub repo_path: String,
+    /// 仓库展示名（路径末段）
+    pub repo_name: String,
+    /// 主语言（面板色块，可空）
+    pub language: String,
+    /// 语言主题色 #RRGGBB（可空）
+    pub language_color: String,
+    /// 最近打开时间（毫秒时间戳）
+    pub opened_at: i64,
 }
 
 /// 加载结果（一次命令同时取回两个分区，前端回灌只需一次 IPC）
@@ -194,6 +215,19 @@ fn init_schema(conn: &Connection) -> Result<(), rusqlite::Error> {
         );
         CREATE INDEX IF NOT EXISTS idx_app_user_time ON app_notices(username, time DESC);
         CREATE UNIQUE INDEX IF NOT EXISTS idx_app_unique_id ON app_notices(username, notice_id);
+
+        CREATE TABLE IF NOT EXISTS recent_repos (
+            row_id         INTEGER PRIMARY KEY AUTOINCREMENT,
+            username       TEXT    NOT NULL,
+            repo_path      TEXT    NOT NULL,
+            repo_name      TEXT    NOT NULL DEFAULT '',
+            language       TEXT    NOT NULL DEFAULT '',
+            language_color TEXT    NOT NULL DEFAULT '',
+            opened_at      INTEGER NOT NULL DEFAULT 0,
+            created_at     INTEGER NOT NULL
+        );
+        CREATE INDEX IF NOT EXISTS idx_recent_user_time ON recent_repos(username, opened_at DESC);
+        CREATE UNIQUE INDEX IF NOT EXISTS idx_recent_unique_path ON recent_repos(username, repo_path);
         "#,
     )
 }
@@ -223,6 +257,94 @@ fn prune_overflow(conn: &Connection, table: &str, username: &str, keep: i64) -> 
     );
     conn.execute(&sql, rusqlite::params![username])
         .map_err(|e| format!("裁剪 {table} 历史通知失败: {e}"))?;
+    Ok(())
+}
+
+/// 「最近打开」记录的容量裁剪（时间列名与通知表不同：opened_at）。
+fn prune_recent_overflow(conn: &Connection, username: &str, keep: i64) -> Result<(), String> {
+    conn.execute(
+        "DELETE FROM recent_repos WHERE username = ?1 AND row_id NOT IN \
+         (SELECT row_id FROM recent_repos WHERE username = ?1 \
+          ORDER BY opened_at DESC, row_id DESC LIMIT ?2)",
+        rusqlite::params![username, keep],
+    )
+    .map_err(|e| format!("裁剪最近打开记录失败: {e}"))?;
+    Ok(())
+}
+
+/// 当前登录用户名（从 lib.rs 的托盘登录态槽位读取）。
+///
+/// 为什么不从前端传参：托盘面板是独立 WebView（tray-panel.html 单独
+/// 引导的 Vue 应用），没有主应用的 cnbUser 状态；而主窗口在登录态变化
+/// 时已经通过 set_tray_auth 把用户名同步进了 Rust 槽位（且启动时有
+/// tray-auth.txt 持久化兜底）。所有窗口统一从槽位取值，一条数据链路。
+fn current_slot_username() -> String {
+    crate::tray_auth_slot()
+        .lock()
+        .map(|g| g.clone())
+        .unwrap_or_default()
+}
+
+/// 毫秒级当前时间戳（三个写入命令共用）
+fn now_ms() -> i64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_millis() as i64
+}
+
+/// 加载指定账号的「最近打开」记录（最新在前，最多 20 条，核心逻辑供单测复用）。
+fn load_recent_repos_conn(conn: &Connection, username: &str) -> Result<Vec<StoredRecentRepo>, String> {
+    let mut stmt = conn
+        .prepare(
+            "SELECT repo_path, repo_name, language, language_color, opened_at
+             FROM recent_repos WHERE username = ?1
+             ORDER BY opened_at DESC, row_id DESC LIMIT ?2",
+        )
+        .map_err(|e| format!("查询最近打开记录失败: {e}"))?;
+    let rows = stmt
+        .query_map(rusqlite::params![username, RECENT_KEEP_PER_USER], |row| {
+            Ok(StoredRecentRepo {
+                repo_path: row.get(0)?,
+                repo_name: row.get(1)?,
+                language: row.get(2)?,
+                language_color: row.get(3)?,
+                opened_at: row.get(4)?,
+            })
+        })
+        .map_err(|e| format!("读取最近打开记录失败: {e}"))?
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|e| format!("遍历最近打开记录失败: {e}"))?;
+    Ok(rows)
+}
+
+/// 写入（upsert）一条「最近打开」记录（核心逻辑供单测复用）。
+///
+/// 同 (username, repo_path) 已存在则更新名称/语言/时间（置顶语义），
+/// 不产生重复条目；写入后裁剪到每账号 20 条。
+fn upsert_recent_repo_conn(
+    conn: &Connection,
+    username: &str,
+    repo_path: &str,
+    repo_name: &str,
+    language: &str,
+    language_color: &str,
+    opened_at: i64,
+) -> Result<(), String> {
+    conn.execute(
+        "INSERT INTO recent_repos
+            (username, repo_path, repo_name, language, language_color, opened_at, created_at)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?6)
+         ON CONFLICT(username, repo_path) DO UPDATE SET
+            repo_name = excluded.repo_name,
+            language = excluded.language,
+            language_color = excluded.language_color,
+            opened_at = excluded.opened_at,
+            created_at = excluded.created_at",
+        rusqlite::params![username, repo_path, repo_name, language, language_color, opened_at],
+    )
+    .map_err(|e| format!("写入最近打开记录失败: {e}"))?;
+    prune_recent_overflow(conn, username, RECENT_KEEP_PER_USER)?;
     Ok(())
 }
 
@@ -402,8 +524,9 @@ pub fn notice_db_mark_all_read(app: tauri::AppHandle, username: String) -> Resul
 
 /// 清空指定账号的全部通知（退出登录且用户勾选「清空本地数据」时调用）。
 ///
-/// 物理删除两个分区该账号的所有行；其他账号数据不受影响（隔离前提下的
-/// 定向清除）。默认登出路径**不会**调用本命令（数据保留）。
+/// 物理删除两个通知分区与「最近打开」记录中该账号的所有行；其他账号
+/// 数据不受影响（隔离前提下的定向清除）。默认登出路径**不会**调用本
+/// 命令（数据保留）。
 #[tauri::command]
 pub fn notice_db_clear(app: tauri::AppHandle, username: String) -> Result<(), String> {
     validate_username(&username)?;
@@ -413,7 +536,64 @@ pub fn notice_db_clear(app: tauri::AppHandle, username: String) -> Result<(), St
         .map_err(|e| format!("清空构建通知失败: {e}"))?;
     conn.execute("DELETE FROM app_notices WHERE username = ?1", rusqlite::params![username])
         .map_err(|e| format!("清空应用通知失败: {e}"))?;
+    conn.execute("DELETE FROM recent_repos WHERE username = ?1", rusqlite::params![username])
+        .map_err(|e| format!("清空最近打开记录失败: {e}"))?;
     Ok(())
+}
+
+// ---------------------------------------------------------------------------
+// 「最近打开」记录（托盘快捷面板数据源，SQLite 持久化）
+// ---------------------------------------------------------------------------
+
+/// 加载当前登录账号的「最近打开」仓库记录（最新在前，最多 20 条）。
+///
+/// 用户名从托盘登录态槽位读取（主窗口 set_tray_auth 同步 + tray-auth.txt
+/// 启动兜底）；未登录返回空列表（面板展示空态）。
+#[tauri::command]
+pub fn recent_repos_load(app: tauri::AppHandle) -> Result<Vec<StoredRecentRepo>, String> {
+    let username = current_slot_username();
+    if username.is_empty() {
+        return Ok(Vec::new());
+    }
+    let path = resolve_db_path(&app)?;
+    let conn = open_db(&path)?;
+    load_recent_repos_conn(&conn, &username)
+}
+
+/// 记录一次仓库打开（upsert，同仓库更新时间置顶；每账号上限 20 条）。
+///
+/// 未登录（槽位用户名为空）直接忽略 —— 「最近打开」绑定账号隔离，
+/// 未登录态不产生持久化数据。opened_at 由调用方可选传入（localStorage
+/// 一次性迁移场景需要保留原始时间），缺省取当前时间。
+#[tauri::command]
+#[allow(clippy::too_many_arguments)]
+pub fn recent_repos_upsert(
+    app: tauri::AppHandle,
+    repo_path: String,
+    repo_name: String,
+    language: String,
+    language_color: String,
+    opened_at: Option<i64>,
+) -> Result<(), String> {
+    let username = current_slot_username();
+    if username.is_empty() {
+        return Ok(());
+    }
+    if repo_path.trim().is_empty() {
+        return Err("repo_path 不能为空".to_string());
+    }
+    let path = resolve_db_path(&app)?;
+    let conn = open_db(&path)?;
+    let opened_at = opened_at.unwrap_or_else(now_ms);
+    upsert_recent_repo_conn(
+        &conn,
+        &username,
+        repo_path.trim(),
+        repo_name.trim(),
+        language.trim(),
+        language_color.trim(),
+        opened_at,
+    )
 }
 
 // ---------------------------------------------------------------------------
@@ -614,5 +794,57 @@ mod tests {
         // 回灌数量与内存上限漂移
         assert_eq!(BUILD_LOAD_LIMIT, 50);
         assert_eq!(APP_LOAD_LIMIT, 20);
+    }
+
+    #[test]
+    fn test_recent_repos_upsert_load_isolation() {
+        let path = temp_db_path("recent-basic");
+        let conn = open_test_db(&path);
+
+        // alice 打开 2 个仓库、bob 打开 1 个（同一条 SQL 链路）
+        upsert_recent_repo_conn(&conn, "alice", "cnb/feedback", "feedback", "TypeScript", "#3178c6", 1000).unwrap();
+        upsert_recent_repo_conn(&conn, "alice", "jackytse/wocnb", "wocnb", "Vue", "#4fc08d", 2000).unwrap();
+        upsert_recent_repo_conn(&conn, "bob", "cnb/feedback", "feedback", "", "", 3000).unwrap();
+
+        // alice 只读到自己的 2 条，且按 opened_at 倒序（最近打开置顶）
+        let list = load_recent_repos_conn(&conn, "alice").unwrap();
+        assert_eq!(list.len(), 2);
+        assert_eq!(list[0].repo_path, "jackytse/wocnb");
+        assert_eq!(list[1].repo_path, "cnb/feedback");
+        // bob 只看到自己的 1 条（账号隔离）
+        let list = load_recent_repos_conn(&conn, "bob").unwrap();
+        assert_eq!(list.len(), 1);
+    }
+
+    #[test]
+    fn test_recent_repos_upsert_dedup_top() {
+        let path = temp_db_path("recent-dedup");
+        let conn = open_test_db(&path);
+        upsert_recent_repo_conn(&conn, "alice", "a/b", "b", "", "", 1000).unwrap();
+        upsert_recent_repo_conn(&conn, "alice", "c/d", "d", "", "", 2000).unwrap();
+        // 同仓库再次打开：更新时间到最新并置顶，不产生重复条目
+        upsert_recent_repo_conn(&conn, "alice", "a/b", "b-renamed", "Rust", "#dea584", 3000).unwrap();
+        let list = load_recent_repos_conn(&conn, "alice").unwrap();
+        assert_eq!(list.len(), 2);
+        assert_eq!(list[0].repo_path, "a/b");
+        assert_eq!(list[0].repo_name, "b-renamed");
+        assert_eq!(list[0].language, "Rust");
+        assert_eq!(list[0].opened_at, 3000);
+    }
+
+    #[test]
+    fn test_recent_repos_prune() {
+        let path = temp_db_path("recent-prune");
+        let conn = open_test_db(&path);
+        // 写入 25 条（超过每账号上限 20）
+        for i in 0..25i64 {
+            upsert_recent_repo_conn(&conn, "alice", &format!("g{i}/r{i}"), &format!("r{i}"), "", "", 1000 + i).unwrap();
+        }
+        let list = load_recent_repos_conn(&conn, "alice").unwrap();
+        // 裁到 20 条，保留的是最新的（opened_at 最大）
+        assert_eq!(list.len(), 20);
+        assert_eq!(list[0].repo_path, "g24/r24");
+        assert!(list.iter().all(|r| r.repo_path != "g0/r0"));
+        assert_eq!(RECENT_KEEP_PER_USER, 20);
     }
 }

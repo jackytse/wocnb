@@ -224,9 +224,11 @@ const TRAY_AUTH_FILE: &str = "tray-auth.txt";
 /// 线程模型与 tray_locale_slot 一致：命令处理线程写、主线程重建菜单读，
 /// Mutex 字符串足够；OnceLock 免初始化时序问题。
 /// 只存用户名（展示用途，非敏感凭据——令牌仍只在系统钥匙串/localStorage）。
+/// pub(crate)：notice_db 的「最近打开」命令也从此槽位取当前账号
+/// （托盘面板独立 WebView 没有 cnbUser 状态，统一从 Rust 侧取值）。
 static TRAY_AUTH: std::sync::OnceLock<std::sync::Mutex<String>> = std::sync::OnceLock::new();
 
-fn tray_auth_slot() -> &'static std::sync::Mutex<String> {
+pub(crate) fn tray_auth_slot() -> &'static std::sync::Mutex<String> {
     TRAY_AUTH.get_or_init(|| std::sync::Mutex::new(String::new()))
 }
 
@@ -1597,6 +1599,9 @@ pub fn run() {
             cnb_download_archive,
             // —— 托盘菜单语言（跟随前端应用语言设置，见托盘 locale 模块注释）——
             set_tray_locale,
+            // —— 「最近打开」SQLite 持久化（托盘面板数据源，账号隔离）——
+            notice_db::recent_repos_load,
+            notice_db::recent_repos_upsert,
             // —— 托盘菜单登录态（登录/未登录渲染不同条目）——
             set_tray_auth,
             // —— 托盘左键快捷面板（活跃项目 + 检测更新 + 退出）——

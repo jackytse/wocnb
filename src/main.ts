@@ -11,6 +11,8 @@ import { openUrl } from '@tauri-apps/plugin-opener'
 import { restoreSession, cnbToken, cnbUser, setUnauthorizedHandler } from './composables/useCnbAuth'
 // 托盘菜单「退出登录」事件回调：只置模块级弹窗开关 ref（无组件上下文依赖）
 import { openLogoutConfirm } from './composables/useLogoutConfirm'
+// 旧版「最近打开」数据（localStorage）一次性迁移进 SQLite
+import { migrateRecentReposToDb } from './composables/useRecentRepos'
 import { refreshCliTokenIfNeeded } from './composables/useCnbCliAuth'
 import { initBuildWatcher } from './composables/useCnbBuildWatch'
 import { initBuildNotificationActionHandler } from './composables/useBuildNotificationAction'
@@ -397,7 +399,13 @@ app.mount('#app')
 // OAuth 登录（cnb-cli 设备授权）先做临期续期（<10min 时用 refresh_token
 // 刷新，Rust 侧同步写回 ~/.cnb/token），再恢复用户信息；刷新失败会清
 // 登录态，由路由守卫引导到登录页重新授权。
-refreshCliTokenIfNeeded().then(() => restoreSession())
+refreshCliTokenIfNeeded().then(async () => {
+  await restoreSession()
+  // 会话恢复完成后再迁移旧版「最近打开」数据：restoreSession 会确定
+  // 登录用户（set_tray_auth 同步进 Rust 槽位），迁移命令依赖它做账号
+  // 归属；迁移幂等（upsert），失败保留 localStorage 下次重试
+  void migrateRecentReposToDb()
+})
 
 /**
  * 构建结果通知轮询：登录态恢复之后再启动（轮询首轮会用到 selectedGroup

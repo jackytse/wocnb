@@ -26,9 +26,10 @@
  *
  * # 数据刷新
  *
- * 最近访问记录存在 localStorage（useRecentRepos）。面板是常驻窗口，
- * 每次弹出都必须重新读盘：主刷新信号是 Rust 在显示面板后 emit 的
- * `cnb://tray-panel-shown`，window focus 作为兜底。
+ * 最近访问记录存 SQLite（useRecentRepos → recent_repos 表，按登录
+ * 账号隔离）。面板是常驻窗口，每次弹出都必须重新查询：主刷新信号是
+ * Rust 在显示面板后 emit 的 `cnb://tray-panel-shown`，window focus
+ * 作为兜底。
  */
 import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
 import { useI18n } from 'vue-i18n'
