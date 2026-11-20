@@ -1468,6 +1468,17 @@ fn tray_panel_toggle_debounced() -> bool {    let now = std::time::Instant::now(
 /// 原点，y 向下）；窗口 set_position/outer_size 也吃物理坐标，全程同一
 /// 口径最不易错。水平方向让面板中心对齐图标中心，垂直方向贴图标底边
 /// 留 6px 间距；最后夹取到光标所在显示器范围内（防面板一半飘出屏幕）。
+///
+/// # 多显示器坐标回归（2026-11-20 用户实测：面板弹到另一块屏上）
+///
+/// Tauri 的 `set_position(PhysicalPosition)` 在 macOS（tao）内部是
+/// **除以窗口当前所在显示器的缩放系数**换回逻辑坐标再落 frame —— 物理坐标
+/// 只在「窗口当前所在的屏」上语义正确。面板上次停在内建 Retina 屏（2.0x）、
+/// 用户点外接屏（1.0x）托盘图标时，为外接屏算好的物理坐标被错误除以 2.0，
+/// 落点直接跑进另一块屏。修法：跨屏唯一无歧义的全局空间是**逻辑坐标**，
+/// macOS 上把目标点按**目标屏**的缩放系数转成逻辑坐标后走
+/// `set_position(LogicalPosition)`；Windows 的物理全局空间是原生 DPI
+/// 感知坐标（无此换算），保持 Physical 直传不引入额外误差。
 fn position_tray_panel(
     app: &tauri::AppHandle,
     panel: &tauri::WebviewWindow,
@@ -1478,21 +1489,44 @@ fn position_tray_panel(
     icon_w: f64,
     icon_h: f64,
 ) {
-    // 面板自身物理尺寸（配置 360x440 逻辑单位 × 该屏缩放系数）
-    let panel_size = panel.outer_size().unwrap_or(tauri::PhysicalSize::new(360, 440));
-    let panel_w = panel_size.width as f64;
-    let panel_h = panel_size.height as f64;
+    // 面板自身物理尺寸（配置 380x500 逻辑单位 × 所在屏缩放系数；outer_size
+    // 失败时兜底按未缩放的配置值处理，仅影响夹取精度不改变弹出行语义）
+    let panel_size = panel.outer_size().unwrap_or(tauri::PhysicalSize::new(380, 500));
+
+    // 光标所在显示器（monitor_from_point 吃物理坐标，与事件坐标同口径）
+    let monitor = app.monitor_from_point(cursor_x, cursor_y).ok().flatten();
+
+    // 面板在**目标屏**像素口径下的宽高：面板停过的屏与目标屏 DPI 可能不同
+    // （macOS 混插 Retina 2.0 + 非 Retina 1.0），先用面板当前所在屏的缩放
+    // 系数转回逻辑尺寸，再乘目标屏缩放系数 —— 否则夹取用的面板宽高是错的，
+    // 边缘图标处会残留"面板飘出屏幕"的残缺感
+    let (panel_w, panel_h) = monitor
+        .as_ref()
+        .map(|m| {
+            let target_scale = m.scale_factor();
+            let current_scale = panel
+                .current_monitor()
+                .ok()
+                .flatten()
+                .map(|cm| cm.scale_factor())
+                .unwrap_or(target_scale);
+            let logical_w = panel_size.width as f64 / current_scale;
+            let logical_h = panel_size.height as f64 / current_scale;
+            (logical_w * target_scale, logical_h * target_scale)
+        })
+        .unwrap_or((panel_size.width as f64, panel_size.height as f64));
 
     let mut px = icon_x + icon_w / 2.0 - panel_w / 2.0;
     let mut py = icon_y + icon_h + 6.0;
 
     // 夹取到光标所在显示器（monitor_from_point 吃物理坐标）：
     // 状态栏图标可能贴着屏幕边缘，不夹取面板会飘出可视区域
-    if let Ok(Some(monitor)) = app.monitor_from_point(cursor_x, cursor_y) {
-        let m = monitor.position();
-        let ms = monitor.size();
-        let m_x = m.x as f64;
-        let m_y = m.y as f64;
+    if let Some(m) = monitor {
+        let target_scale = m.scale_factor();
+        let mo = m.position();
+        let ms = m.size();
+        let m_x = mo.x as f64;
+        let m_y = mo.y as f64;
         let m_w = ms.width as f64;
         let m_h = ms.height as f64;
         if m_w > panel_w + 16.0 {
@@ -1501,8 +1535,18 @@ fn position_tray_panel(
         if m_h > panel_h + 16.0 {
             py = py.clamp(m_y + 8.0, m_y + m_h - panel_h - 8.0);
         }
+        // macOS：物理 → 目标屏逻辑坐标（见函数头「多显示器坐标回归」）。
+        // LogicalPosition 不经过窗口当前屏的缩放换算，跨屏落点始终正确
+        #[cfg(target_os = "macos")]
+        let _ = panel.set_position(tauri::LogicalPosition::new(px / target_scale, py / target_scale));
+        // 其他平台：物理全局空间原生无歧义，保持物理直传
+        #[cfg(not(target_os = "macos"))]
+        let _ = panel.set_position(tauri::PhysicalPosition::new(px.round() as i32, py.round() as i32));
+        return;
     }
 
+    // monitor_from_point 失败（极端环境）：按未夹取的原始物理坐标兜底，
+    // 单屏场景与修复前行为一致（多屏场景可能漂移，但不会比原来更差）
     let _ = panel.set_position(tauri::PhysicalPosition::new(px.round() as i32, py.round() as i32));
 }
 
