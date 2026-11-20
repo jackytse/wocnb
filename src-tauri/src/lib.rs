@@ -2046,6 +2046,21 @@ pub fn run() {
             // 绝不应该自己弹出来。
             if let Some(panel) = app.get_webview_window(TRAY_PANEL_LABEL) {
                 let _ = panel.hide();
+
+                // —— Windows：强制 WebView2 底色全透明（修圆角外白角）——
+                //
+                // 面板窗口 transparent:true + 页面 html/body 透明，在 macOS
+                // （WKWebView）上圆角外能直接透出桌面；但 Windows 的 WebView2
+                // 在控制器层有一层**默认白色底色**，配置声明的 transparent
+                // 没有把控制器底色清掉时，圆角外侧 12px 的四个小角会露出纯白
+                // （用户截图实测）。这里显式调 SetDefaultBackgroundColor(0,0,0,0)
+                // （wry 的 set_background_color），与 tray-panel.html 的
+                // html/body 透明形成双保险，不依赖 transparent 配置的传递链路。
+                // 仅 Windows 需要：macOS 调它无意义且可能影响窗口阴影合成。
+                #[cfg(target_os = "windows")]
+                if let Err(err) = panel.set_background_color(Some(tauri::window::Color(0, 0, 0, 0))) {
+                    eprintln!("[wocnb] 托盘面板透明底色设置失败（圆角外可能露白）: {err}");
+                }
             }
 
             // —— 系统通知点击上报（通知点击直达构建详情）——

@@ -1,5 +1,8 @@
 <!doctype html>
-<html lang="en">
+<!-- html 元素自身也要显式透明：Chromium 的"根画布底色"默认是白色，
+     只给 body 设 transparent 时，圆角裁切外的四个角仍会由根画布画成白色
+     （Windows WebView2 实测）。内联样式优先级最高，不受 Nuxt UI 基础样式影响。 -->
+<html lang="en" style="background: transparent">
   <head>
     <meta charset="UTF-8" />
     <link rel="icon" type="image/png" href="/app-icon.png" />
@@ -10,7 +13,7 @@
     <!-- 托盘快捷面板的独立入口：与主应用 index.html 完全分离，
          不加载 SPA 的路由 / 布局 / 全局启动副作用。
          背景必须透明（配合窗口 transparent: true）：圆角外的四个角
-         露出的才是"桌面"而不是黑块；内联样式优先级高于样式表，
+         露出的才是"桌面"而不是黑块/白块；内联样式优先级高于样式表，
          能压住 Nuxt UI 基础样式给 body 设置的 bg-default。 -->
     <div id="tray-panel"></div>
     <script type="module" src="/src/tray-panel/main.ts"></script>
