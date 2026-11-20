@@ -11,12 +11,12 @@ import { localePref, type LocalePref } from '../../composables/useAppLocale'
 
 const { t } = useI18n()
 
-/** 四选项：system 为跟随系统；其余为显式语言 */
+/** 四选项：system 为跟随系统；其余为显式语言（顺序与 UserMenu 一致） */
 const options: { label: string, value: LocalePref }[] = [
   { label: t('settings.language.system'), value: 'system' },
-  { label: 'English', value: 'en' },
   { label: '简体中文', value: 'zh-CN' },
   { label: '繁體中文', value: 'zh-TW' },
+  { label: 'English', value: 'en' },
 ]
 </script>
 

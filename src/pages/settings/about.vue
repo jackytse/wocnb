@@ -19,7 +19,8 @@
  * 用户点「立即检查」即可用新通道拿到结果；通道同时约束热更新（清单版本
  * 与通道检测出的版本不一致时拒绝安装，防止 rc 被塞给正式版通道用户）。
  */
-import { computed, onMounted, ref } from 'vue'
+import { computed, onMounted, ref, watch } from 'vue'
+import { useRoute } from 'vue-router'
 import { useI18n } from 'vue-i18n'
 import { openUrl } from '@tauri-apps/plugin-opener'
 import { useAppToast } from '../../composables/useAppToast'
@@ -49,7 +50,24 @@ const {
 
 /** 应用版本号（Tauri API，非 Tauri 环境显示 '-'） */
 const version = ref('-')
+
+const route = useRoute()
+
+/**
+ * 托盘菜单「检测更新」的自动检查触发：
+ * Rust 侧跳转 payload 是 /settings/about?autoCheck=1，本页挂载或已挂载时
+ * 检测到该参数就自动调一次 checkForUpdate（结果由状态机渲染在本页——
+ * 检测中转圈/发现新版本/已是最新）。onMounted 与 route watch 双覆盖：
+ * 首次进入走 mounted；主窗口已开着关于页时再次点菜单走 watch。
+ */
+function maybeAutoCheck() {
+  if (route.path === '/settings/about' && route.query.autoCheck === '1') {
+    void checkForUpdate()
+  }
+}
+
 onMounted(async () => {
+  maybeAutoCheck()
   if ('__TAURI_INTERNALS__' in window) {
     try {
       const { getVersion } = await import('@tauri-apps/api/app')
@@ -60,6 +78,11 @@ onMounted(async () => {
     }
   }
 })
+
+// 已在本页时再次点托盘「检测更新」：fullPath 变化（带 autoCheck=1）触发；
+// 注意 query 完全相同的重复导航会被 vue-router 去重（no-op），此时用户
+// 再点一次菜单不会重复检查——属可接受边缘（页面本就有「立即检查」按钮）
+watch(() => route.fullPath, maybeAutoCheck)
 
 /** 最新 Release 的 tag（供"发现新版本 vX"展示；无 Release 时显示 '-'） */
 const latestTag = computed(() => latestRelease.value?.tagName || '-')

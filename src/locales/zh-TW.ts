@@ -1343,9 +1343,9 @@ export default {
       version: '版本',
       license: '授權條款',
       licenseValue: 'MIT License',
-      // 檢查更新（useAppUpdate：手動檢查入口 + 啟動靜默檢查 toast 文案）
-      checkUpdate: '檢查更新',
-      checking: '正在檢查…',
+      // 檢測更新（useAppUpdate：手動檢測入口 + 啟動靜默檢查 toast 文案）
+      checkUpdate: '檢測更新',
+      checking: '正在檢測…',
       upToDate: '已是最新版本',
       newVersionFound: '發現新版本 {version}',
       goDownload: '前往下載',
@@ -1359,7 +1359,7 @@ export default {
       installMismatch: '更新來源版本與目前通道不一致，請前往下載頁手動更新',
       installDoneToast: '更新已下載安裝完成，重啟應用後生效',
       installMismatchToast: '更新來源與所選更新通道不一致，已停止安裝',
-      checkFailed: '檢查更新失敗',
+      checkFailed: '檢測更新失敗',
       autoCheckHint: '啟動時每 24 小時自動檢查一次',
       autoCheckDesc: '當前版本 {current}，請前往 Releases 頁下載',
       // 更新通道（release / prerelease）與手動檢查

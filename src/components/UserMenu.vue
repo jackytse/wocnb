@@ -233,9 +233,9 @@ function goDownloadPage() {
  */
 const languageOptions: { value: LocalePref; label: string }[] = [
   { value: 'system', label: t('menu.systemLanguage') },
-  { value: 'en', label: 'English' },
   { value: 'zh-CN', label: '简体中文' },
   { value: 'zh-TW', label: '繁體中文' },
+  { value: 'en', label: 'English' },
 ]
 
 /**

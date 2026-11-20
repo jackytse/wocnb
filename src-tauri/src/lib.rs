@@ -1702,12 +1702,29 @@ pub fn run() {
             // 退出登录需要弹出确认弹窗（含可选清空数据勾选），由前端
             // 全局确认弹窗（LogoutConfirmDialog）响应，不能直接 push 路由。
             match event.id().0.as_str() {
-                "open" => show_main_window(app),
+                "open" => {
+                    show_main_window(app);
+                    // 已登录：跳应用首页（「打开应用」的预期是回到首页，
+                    // 而不是停留在上次浏览的深层页面）；未登录保持现状
+                    // （路由守卫会把未登录访问引导到登录页，无需干预）
+                    let logged_in = tray_auth_slot()
+                        .lock()
+                        .map(|g| !g.is_empty())
+                        .unwrap_or(false);
+                    if logged_in {
+                        if let Err(err) = app.emit_to("main", "cnb://panel-navigate", "/") {
+                            log::warn!("[tray] 打开应用跳首页事件发送失败: {err}");
+                        }
+                    }
+                }
                 "quit" => app.exit(0),
                 "login" | "check-update" | "settings" | "profile" => {
                     let path = match event.id().0.as_str() {
                         "login" => "/login",
-                        "check-update" => "/settings/about",
+                        // 检测更新：跳关于页并带 autoCheck=1 —— 仅跳转不会触发
+                        // 检查（页面只渲染上次检查结果），关于页检测到该参数
+                        // 会自动调一次 checkForUpdate
+                        "check-update" => "/settings/about?autoCheck=1",
                         // 个人资料：应用内个人页（/profile），非外部浏览器
                         "profile" => "/profile",
                         _ => "/settings",
