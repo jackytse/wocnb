@@ -1,5 +1,5 @@
 /**
- * useRecentRepos 单测（托盘面板「最近的项目」数据源）。
+ * useRecentRepos 单测（托盘面板「最近打开」数据源）。
  *
  * 覆盖：记录置顶与同仓库去重 / 容量裁剪 / 脏数据容错 / 展示名兜底 /
  * 相对时间排序。node 环境无 localStorage —— 用内存 Map 桩替代（只实现
@@ -50,7 +50,7 @@ describe('recordRecentRepo / readRecentRepos', () => {
     expect(list[0]?.name).toBe('Feedback 仓库')
   })
 
-  it('超过 20 条时裁掉最旧的（面板只关心最近的项目）', () => {
+  it('超过 20 条时裁掉最旧的（面板只关心最近打开的）', () => {
     for (let i = 0; i < 25; i++) {
       recordRecentRepo({ repoPath: `group${i}/repo${i}` })
     }

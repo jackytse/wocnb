@@ -164,7 +164,7 @@ export default {
   // Tray quick panel (tray left-click popup: recent projects + status bar)
   // ---------------------------------------------------------------------------
   trayPanel: {
-    title: 'Recent Projects',
+    title: 'Recently Opened',
     empty: 'No projects yet. Open one in the main window.',
     checkUpdate: 'Check updates',
     checking: 'Checking…',
