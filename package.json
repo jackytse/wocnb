@@ -4,7 +4,7 @@
   "type": "module",
   "scripts": {
     "dev": "vite",
-    "prepare": "husky",
+    "prepare": "command -v vp >/dev/null 2>&1 && vp config --hooks --no-agent </dev/null || echo '[prepare] 未检测到 vp（vite-plus），跳过 Git 钩子安装 —— 提交前请手动跑 pnpm typecheck / pnpm lint'",
     "tauri": "tauri",
     "build": "vite build",
     "preview": "vite preview",
@@ -42,7 +42,6 @@
     "eslint": "^10.13.0",
     "eslint-plugin-better-tailwindcss": "^4.9.1",
     "eslint-plugin-vue": "^10.11.1",
-    "husky": "^9.1.7",
     "typescript": "^6.0.3",
     "typescript-eslint": "^8.71.2",
     "vite": "^8.3.4",

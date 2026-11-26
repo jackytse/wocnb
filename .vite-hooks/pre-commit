@@ -1,5 +1,8 @@
 # =============================================================================
-# pre-commit · 本地提交前质量门禁（husky v9）
+# pre-commit · 本地提交前质量门禁（vite-plus 钩子分发器）
+#
+# 迁移背景（2026-11-26）：husky → vite-plus（vp config），钩子脚本迁至
+# .vite-hooks/，core.hooksPath 由 vp 管理；检查内容不变（typecheck + lint）。
 #
 # 背景：rc.46 发版时 CI 的 typecheck 才发现两处类型错误（本地 vue-tsc
 # 用的 tsconfig 口径与 CI 不同 + 未跑同口径检查）——问题本应在提交前拦住。
